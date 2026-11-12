@@ -26,5 +26,5 @@ module.exports = {
     "@typescript-eslint/no-misused-promises": "warn",
     "@typescript-eslint/require-await": "warn"
   },
-  ignorePatterns: ["node_modules/", "dist/", "build/", "*.config.js", "*.config.ts", "*.d.ts"],
+  ignorePatterns: ["node_modules/", "dist/", "build/", "*.config.js", "*.config.ts", "*.d.ts", "*.test.ts", "*.spec.ts"],
 };
