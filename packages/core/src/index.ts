@@ -7,5 +7,5 @@ export interface AgentConfig {
 
 export const defaultConfig: AgentConfig = {
   name: 'nexipi',
-  version: '0.0.1'
+  version: '0.0.1',
 };

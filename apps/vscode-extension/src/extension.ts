@@ -5,7 +5,7 @@ export function activate(context: vscode.ExtensionContext): void {
   console.log(`[${defaultConfig.name}] Extension activated v${defaultConfig.version}`);
 
   const disposable = vscode.commands.registerCommand('nexipi.hello', () => {
-    vscode.window.showInformationMessage(`Hello from ${defaultConfig.name}!`);
+    void vscode.window.showInformationMessage(`Hello from ${defaultConfig.name}!`);
   });
 
   context.subscriptions.push(disposable);
