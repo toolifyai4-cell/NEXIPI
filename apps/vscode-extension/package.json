@@ -19,7 +19,9 @@
   "engines": {
     "vscode": "^1.85.0"
   },
-  "categories": ["Other"],
+  "categories": [
+    "Other"
+  ],
   "activationEvents": [
     "onCommand:nexipi.start",
     "onCommand:nexipi.showOutput",
@@ -54,7 +56,12 @@
         },
         "nexipi.logLevel": {
           "type": "string",
-          "enum": ["debug", "info", "warn", "error"],
+          "enum": [
+            "debug",
+            "info",
+            "warn",
+            "error"
+          ],
           "default": "info",
           "description": "Log level for NexiPi output channel"
         }

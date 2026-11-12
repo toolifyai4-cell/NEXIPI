@@ -1,6 +1,6 @@
 import * as vscode from 'vscode';
 import { defaultConfig } from '@nexipi/core';
-import { Logger, LogLevel } from '@nexipi/shared';
+import type { Logger, LogLevel } from '@nexipi/shared';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -17,7 +17,9 @@ function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Log
     if (levels[messageLevel] >= currentLevel) {
       const timestamp = new Date().toISOString();
       const metaStr = meta ? ` ${JSON.stringify(meta)}` : '';
-      outputChannel.appendLine(`[${timestamp}] [${messageLevel.toUpperCase()}] ${message}${metaStr}`);
+      outputChannel.appendLine(
+        `[${timestamp}] [${messageLevel.toUpperCase()}] ${message}${metaStr}`
+      );
     }
   };
 
@@ -29,7 +31,7 @@ function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Log
   };
 }
 
-function createStatusBarItem(outputChannel: vscode.OutputChannel): vscode.StatusBarItem {
+function createStatusBarItem(): vscode.StatusBarItem {
   const item = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   item.command = 'nexipi.showOutput';
   item.tooltip = 'Click to open NexiPi output channel';
@@ -38,9 +40,17 @@ function createStatusBarItem(outputChannel: vscode.OutputChannel): vscode.Status
   return item;
 }
 
-function updateStatusBar(statusBarItem: vscode.StatusBarItem, status: 'initializing' | 'active' | 'error', message?: string): void {
+function updateStatusBar(
+  statusBarItem: vscode.StatusBarItem,
+  status: 'initializing' | 'active' | 'error',
+  message?: string
+): void {
   const icons = { initializing: '$(loading~spin)', active: '$(plug)', error: '$(error)' };
-  const texts = { initializing: 'NexiPi: Initializing...', active: 'NexiPi: Active', error: 'NexiPi: Error' };
+  const texts = {
+    initializing: 'NexiPi: Initializing...',
+    active: 'NexiPi: Active',
+    error: 'NexiPi: Error',
+  };
   statusBarItem.text = `${icons[status]} ${texts[status]}${message ? ` - ${message}` : ''}`;
 }
 
@@ -55,27 +65,29 @@ function registerCommands(
   const startDisposable = vscode.commands.registerCommand('nexipi.start', async () => {
     logger.info('Command executed: nexipi.start');
     updateStatusBar(statusBarItem, 'initializing');
-    
+
     try {
       const enabled = config.get<boolean>('nexipi.enabled', true);
       if (!enabled) {
         logger.warn('NexiPi is disabled via configuration');
-        vscode.window.showWarningMessage('NexiPi is disabled. Enable it in settings to start.');
+        void vscode.window.showWarningMessage(
+          'NexiPi is disabled. Enable it in settings to start.'
+        );
         updateStatusBar(statusBarItem, 'error', 'Disabled');
         return;
       }
 
       logger.info('Starting NexiPi...');
       await new Promise(resolve => setTimeout(resolve, 100));
-      
+
       logger.info('NexiPi started successfully');
       updateStatusBar(statusBarItem, 'active');
-      vscode.window.showInformationMessage('NexiPi started successfully');
+      void vscode.window.showInformationMessage('NexiPi started successfully');
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
       logger.error('Failed to start NexiPi', { error: err.message });
       updateStatusBar(statusBarItem, 'error', err.message);
-      vscode.window.showErrorMessage(`Failed to start NexiPi: ${err.message}`);
+      void vscode.window.showErrorMessage(`Failed to start NexiPi: ${err.message}`);
     }
   });
 
@@ -84,19 +96,22 @@ function registerCommands(
     outputChannel.show();
   });
 
-  const showInformationDisposable = vscode.commands.registerCommand('nexipi.showInformation', () => {
-    logger.info('Command executed: nexipi.showInformation');
-    const info = [
-      `NexiPi v${defaultConfig.version}`,
-      'Extensible AI coding agent for VS Code',
-      '',
-      'Commands:',
-      '  nexipi.start - Initialize and start NexiPi',
-      '  nexipi.showOutput - Show the output channel',
-      '  nexipi.showInformation - Show this information',
-    ].join('\n');
-    vscode.window.showInformationMessage(info, { modal: true });
-  });
+  const showInformationDisposable = vscode.commands.registerCommand(
+    'nexipi.showInformation',
+    () => {
+      logger.info('Command executed: nexipi.showInformation');
+      const info = [
+        `NexiPi v${defaultConfig.version}`,
+        'Extensible AI coding agent for VS Code',
+        '',
+        'Commands:',
+        '  nexipi.start - Initialize and start NexiPi',
+        '  nexipi.showOutput - Show the output channel',
+        '  nexipi.showInformation - Show this information',
+      ].join('\n');
+      void vscode.window.showInformationMessage(info, { modal: true });
+    }
+  );
 
   disposables.push(startDisposable, showOutputDisposable, showInformationDisposable);
   return disposables;
@@ -108,10 +123,12 @@ export function activate(context: vscode.ExtensionContext): void {
 
   const outputChannel = vscode.window.createOutputChannel('NexiPi');
   const logger = createLogger(outputChannel, logLevel);
-  const statusBarItem = createStatusBarItem(outputChannel);
+  const statusBarItem = createStatusBarItem();
 
   logger.info(`Extension activating v${defaultConfig.version}`);
-  outputChannel.appendLine(`[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`);
+  outputChannel.appendLine(
+    `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
+  );
 
   const nexipiContext: NexiPiContext = {
     outputChannel,
@@ -132,11 +149,7 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   nexipiContext.disposables.push(configChangeDisposable);
 
-  nexipiContext.disposables.push(
-    outputChannel,
-    statusBarItem,
-    ...commandDisposables
-  );
+  nexipiContext.disposables.push(outputChannel, statusBarItem, ...commandDisposables);
 
   context.subscriptions.push(...nexipiContext.disposables);
 

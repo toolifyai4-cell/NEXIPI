@@ -78,9 +78,9 @@ describe('vscode-extension', () => {
     mockContext = createMockContext(subscriptions);
     mockOutputChannel = createMockOutputChannel();
     mockStatusBarItem = createMockStatusBarItem();
-    
+
     vi.clearAllMocks();
-    
+
     (vscode.window.createOutputChannel as vi.Mock).mockReturnValue(mockOutputChannel);
     (vscode.window.createStatusBarItem as vi.Mock).mockReturnValue(mockStatusBarItem);
   });
@@ -128,28 +128,32 @@ describe('vscode-extension', () => {
   describe('nexipi.start command', () => {
     it('should update status bar to active when successful', () => {
       activate(mockContext);
-      const startCall = (vscode.commands.registerCommand as vi.Mock).mock.calls
-        .find((call: unknown[]) => call[0] === 'nexipi.start');
+      const startCall = (vscode.commands.registerCommand as vi.Mock).mock.calls.find(
+        (call: unknown[]) => call[0] === 'nexipi.start'
+      );
       expect(startCall).toBeDefined();
-      
+
       const callback = startCall![1] as Function;
       callback();
-      
+
       expect(mockStatusBarItem.text).toContain('NexiPi: Active');
-      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith('NexiPi started successfully');
+      expect(vscode.window.showInformationMessage).toHaveBeenCalledWith(
+        'NexiPi started successfully'
+      );
     });
   });
 
   describe('nexipi.showOutput command', () => {
     it('should show output channel', () => {
       activate(mockContext);
-      const showOutputCall = (vscode.commands.registerCommand as vi.Mock).mock.calls
-        .find((call: unknown[]) => call[0] === 'nexipi.showOutput');
+      const showOutputCall = (vscode.commands.registerCommand as vi.Mock).mock.calls.find(
+        (call: unknown[]) => call[0] === 'nexipi.showOutput'
+      );
       expect(showOutputCall).toBeDefined();
-      
+
       const callback = showOutputCall![1] as Function;
       callback();
-      
+
       expect(mockOutputChannel.show).toHaveBeenCalled();
     });
   });
@@ -157,13 +161,14 @@ describe('vscode-extension', () => {
   describe('nexipi.showInformation command', () => {
     it('should show information message', () => {
       activate(mockContext);
-      const showInfoCall = (vscode.commands.registerCommand as vi.Mock).mock.calls
-        .find((call: unknown[]) => call[0] === 'nexipi.showInformation');
+      const showInfoCall = (vscode.commands.registerCommand as vi.Mock).mock.calls.find(
+        (call: unknown[]) => call[0] === 'nexipi.showInformation'
+      );
       expect(showInfoCall).toBeDefined();
-      
+
       const callback = showInfoCall![1] as Function;
       callback();
-      
+
       expect(vscode.window.showInformationMessage).toHaveBeenCalled();
     });
   });
