@@ -7,8 +7,17 @@
     "module": "NodeNext",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "types": ["vscode", "node"]
+    "types": ["vscode", "node"],
+    "baseUrl": ".",
+    "paths": {
+      "@nexipi/core": ["../../packages/core/dist"],
+      "@nexipi/shared": ["../../packages/shared/dist"]
+    }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"],
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/shared" }
+  ]
 }
