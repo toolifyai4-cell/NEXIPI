@@ -27,7 +27,6 @@
     "onCommand:nexipi.showOutput",
     "onCommand:nexipi.showInformation"
   ],
-  "main": "./dist/extension.js",
   "contributes": {
     "commands": [
       {
