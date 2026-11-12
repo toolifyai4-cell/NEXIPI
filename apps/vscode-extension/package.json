@@ -1,6 +1,9 @@
 {
-  "name": "vscode-extension",
+  "name": "nexipi",
+  "displayName": "NexiPi",
+  "description": "Extensible AI coding agent for Visual Studio Code",
   "version": "0.0.1",
+  "publisher": "nexipi",
   "private": true,
   "main": "./dist/extension.js",
   "scripts": {
@@ -13,6 +16,67 @@
     "package": "vsce package",
     "vscode:prepublish": "pnpm run build"
   },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["Other"],
+  "activationEvents": [
+    "onCommand:nexipi.start",
+    "onCommand:nexipi.showOutput",
+    "onCommand:nexipi.showInformation"
+  ],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "nexipi.start",
+        "title": "NexiPi: Start",
+        "category": "NexiPi"
+      },
+      {
+        "command": "nexipi.showOutput",
+        "title": "NexiPi: Show Output",
+        "category": "NexiPi"
+      },
+      {
+        "command": "nexipi.showInformation",
+        "title": "NexiPi: Show Information",
+        "category": "NexiPi"
+      }
+    ],
+    "configuration": {
+      "title": "NexiPi",
+      "properties": {
+        "nexipi.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable or disable NexiPi extension"
+        },
+        "nexipi.logLevel": {
+          "type": "string",
+          "enum": ["debug", "info", "warn", "error"],
+          "default": "info",
+          "description": "Log level for NexiPi output channel"
+        }
+      }
+    },
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "nexipi.start",
+          "when": "nexipi.enabled"
+        },
+        {
+          "command": "nexipi.showOutput",
+          "when": "nexipi.enabled"
+        },
+        {
+          "command": "nexipi.showInformation",
+          "when": "nexipi.enabled"
+        }
+      ]
+    }
+  },
   "devDependencies": {
     "@nexipi/core": "workspace:*",
     "@nexipi/shared": "workspace:*",
@@ -21,8 +85,5 @@
     "typescript": "^5.3.0",
     "vitest": "^1.0.0",
     "vsce": "^2.15.0"
-  },
-  "engines": {
-    "vscode": "^1.85.0"
   }
 }
