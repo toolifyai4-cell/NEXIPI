@@ -48,7 +48,7 @@ export function useChat() {
     return message;
   }, []);
 
-  const sendMessage = useCallback(async () => {
+  const sendMessage = useCallback(() => {
     if (!currentInput.trim() || isLoading) return;
 
     const userMessage = currentInput.trim();

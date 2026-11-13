@@ -142,7 +142,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public postMessage(message: unknown): void {
-    this._view?.webview.postMessage(message);
+    void this._view?.webview.postMessage(message);
   }
 }
 

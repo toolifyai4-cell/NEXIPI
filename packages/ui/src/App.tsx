@@ -16,9 +16,13 @@ export function App() {
     welcomePrompts,
   } = useChat();
 
+  const handleSettings = () => {
+    // Settings functionality not yet implemented
+  };
+
   return (
     <div className="nexipi-app">
-      <Header onNewChat={handleNewChat} onSettings={() => {}} />
+      <Header onNewChat={handleNewChat} onSettings={handleSettings} />
       <main className="nexipi-main" role="main">
         {viewMode === 'welcome' ? (
           <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
