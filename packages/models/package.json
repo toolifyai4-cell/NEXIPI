@@ -21,6 +21,7 @@
     "format": "prettier --write \"src/**/*.ts\""
   },
   "dependencies": {
+    "@nexipi/core": "workspace:*",
     "zod": "^3.22.0"
   },
   "devDependencies": {

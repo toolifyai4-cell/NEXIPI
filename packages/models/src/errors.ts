@@ -46,9 +46,9 @@ const PROVIDER_ERROR_CODE_MAP: Record<string, ModelProviderErrorCode> = {
 
 export class ModelProviderError extends EngineError {
   public readonly providerId: string;
-  public readonly modelId?: string;
+  public readonly modelId: string | undefined;
   public readonly retryable: boolean;
-  public readonly providerErrorCode?: string;
+  public readonly providerErrorCode: string | undefined;
 
   constructor(
     code: ModelProviderErrorCode,
@@ -63,7 +63,6 @@ export class ModelProviderError extends EngineError {
     }
   ) {
     super(code, message, { cause: options.cause, context: options.context } as EngineErrorOptions);
-    this.name = 'ModelProviderError';
     this.providerId = options.providerId;
     this.modelId = options.modelId;
     this.retryable = options.retryable ?? this.isRetryableByDefault(code);
@@ -82,6 +81,10 @@ export class ModelProviderError extends EngineError {
       default:
         return false;
     }
+  }
+
+  override get name(): string {
+    return 'ModelProviderError';
   }
 
   static fromError(
@@ -134,22 +137,25 @@ export class ModelProviderError extends EngineError {
   }
 
   private static extractProviderErrorCode(error: unknown): string | undefined {
-    if (error && typeof error === 'object' && 'code' in error) {
-      const code = (error as Record<string, unknown>).code;
-      if (typeof code === 'string') {
-        return code;
+    if (error && typeof error === 'object') {
+      const err = error as Record<string, unknown>;
+      if ('code' in err) {
+        const code = err['code'];
+        if (typeof code === 'string') {
+          return code;
+        }
       }
-    }
-    if (error && typeof error === 'object' && 'status' in error) {
-      const status = (error as Record<string, unknown>).status;
-      if (typeof status === 'number') {
-        return `HTTP_${status}`;
+      if ('status' in err) {
+        const status = err['status'];
+        if (typeof status === 'number') {
+          return `HTTP_${status}`;
+        }
       }
     }
     return undefined;
   }
 
-  toJSON(): Record<string, unknown> {
+  override toJSON(): Record<string, unknown> {
     const base = super.toJSON();
     return {
       ...base,

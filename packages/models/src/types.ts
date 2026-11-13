@@ -258,8 +258,8 @@ export interface ModelProvider {
   initialize(credentials: ProviderCredentials): Promise<void>;
   dispose(): Promise<void>;
 
-  listModels(): Promise<readonly ModelMetadata[]>;
-  getModel(modelId: ModelId): Promise<ModelMetadata | undefined>;
+  listModels(): readonly ModelMetadata[];
+  getModel(modelId: ModelId): ModelMetadata | undefined;
   validateRequest(request: ModelRequest): Promise<ValidationResult>;
 
   execute(request: ModelRequest): Promise<ModelResponse>;
