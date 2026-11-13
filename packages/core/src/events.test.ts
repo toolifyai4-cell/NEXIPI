@@ -131,7 +131,7 @@ describe('events', () => {
       expect(emitter.listenerCount('test:other')).toBe(0);
     });
 
-it('should remove all listeners when no event specified', () => {
+    it('should remove all listeners when no event specified', () => {
       const emitter = new EventEmitter<TestEvents>();
       emitter.on('test:event', vi.fn());
       emitter.on('test:other', vi.fn());
@@ -221,7 +221,7 @@ it('should remove all listeners when no event specified', () => {
       expect(onListenerError).toHaveBeenCalledOnce();
     });
 
-it('should not leak listeners after emitAsync', async () => {
+    it('should not leak listeners after emitAsync', async () => {
       const emitter = new EventEmitter<TestEvents>();
       const listener = vi.fn();
       emitter.on('test:event', listener);

@@ -36,10 +36,10 @@ function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> |
     if (typeof value !== 'object') {
       return value;
     }
-    if (seen.has(value as object)) {
+    if (seen.has(value)) {
       return '[CIRCULAR]';
     }
-    seen.add(value as object);
+    seen.add(value);
 
     if (Array.isArray(value)) {
       return value.map(sanitize);

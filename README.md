@@ -64,15 +64,15 @@ pnpm format
 
 ### Packages
 
-| Package | Description |
-|---------|-------------|
-| `@nexipi/core` | Core agent functionality, LLM communication, tool execution |
-| `@nexipi/shared` | Shared TypeScript types, utilities, and constants |
+| Package          | Description                                                 |
+| ---------------- | ----------------------------------------------------------- |
+| `@nexipi/core`   | Core agent functionality, LLM communication, tool execution |
+| `@nexipi/shared` | Shared TypeScript types, utilities, and constants           |
 
 ### Apps
 
-| App | Description |
-|-----|-------------|
+| App                | Description                          |
+| ------------------ | ------------------------------------ |
 | `vscode-extension` | VS Code extension entry point and UI |
 
 ## Contributing
