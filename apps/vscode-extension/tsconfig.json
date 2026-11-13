@@ -11,10 +11,15 @@
     "baseUrl": ".",
     "paths": {
       "@nexipi/core": ["../../packages/core/dist"],
-      "@nexipi/shared": ["../../packages/shared/dist"]
+      "@nexipi/shared": ["../../packages/shared/dist"],
+      "@nexipi/ui": ["../../packages/ui"]
     }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"],
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/shared" }]
+  "references": [
+    { "path": "../../packages/core" },
+    { "path": "../../packages/shared" },
+    { "path": "../../packages/ui" }
+  ]
 }

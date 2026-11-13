@@ -1,10 +1,6 @@
-import { Header } from './Header';
-import { WelcomeScreen } from './WelcomeScreen';
-import { ChatArea } from './ChatArea';
-import { Composer } from './Composer';
-import { StatusIndicator } from './StatusIndicator';
-import { useChat } from '../hooks/useChat';
-import type { WebviewMessage } from '../types';
+import { Header, WelcomeScreen, ChatArea, Composer, StatusIndicator } from './components';
+import { useChat } from './hooks/useChat';
+import type { WebviewMessage } from './types';
 
 export function App() {
   const {

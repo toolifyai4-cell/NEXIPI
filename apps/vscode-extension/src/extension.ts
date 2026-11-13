@@ -54,10 +54,109 @@ function updateStatusBar(
   statusBarItem.text = `${icons[status]} ${texts[status]}${message ? ` - ${message}` : ''}`;
 }
 
+class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
+  public static readonly viewType = 'nexipi.sidebar';
+  private _view?: vscode.WebviewView;
+  private readonly _extensionUri: vscode.Uri;
+  private readonly _logger: Logger;
+
+  constructor(extensionUri: vscode.Uri, logger: Logger) {
+    this._extensionUri = extensionUri;
+    this._logger = logger;
+  }
+
+  public resolveWebviewView(
+    webviewView: vscode.WebviewView,
+    _context: vscode.WebviewViewResolveContext,
+    _token: vscode.CancellationToken
+  ): void {
+    this._view = webviewView;
+
+    webviewView.webview.options = {
+      enableScripts: true,
+      localResourceRoots: [
+        vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview'),
+      ],
+    };
+
+    webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
+
+    webviewView.webview.onDidReceiveMessage(
+      (message) => this._onMessage(message),
+      undefined,
+      []
+    );
+
+    this._logger.info('Sidebar webview resolved');
+  }
+
+  private _getHtmlForWebview(webview: vscode.Webview): string {
+    const scriptUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.js')
+    );
+    const styleUri = webview.asWebviewUri(
+      vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.css')
+    );
+
+    const nonce = this._getNonce();
+
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'nonce-${nonce}' ${webview.cspSource}; script-src 'nonce-${nonce}'; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};">
+  <link href="${styleUri}" rel="stylesheet" nonce="${nonce}">
+  <title>NexiPi</title>
+</head>
+<body>
+  <div id="root"></div>
+  <script nonce="${nonce}" src="${scriptUri}"></script>
+</body>
+</html>`;
+  }
+
+  private _getNonce(): string {
+    let text = '';
+    const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    for (let i = 0; i < 32; i++) {
+      text += possible.charAt(Math.floor(Math.random() * possible.length));
+    }
+    return text;
+  }
+
+  private _onMessage(message: unknown): void {
+    if (typeof message !== 'object' || message === null) {
+      return;
+    }
+
+    const msg = message as { type: string; payload?: unknown };
+
+    switch (msg.type) {
+      case 'ready':
+        this._logger.debug('Webview ready');
+        break;
+      case 'sendMessage':
+        this._logger.info('Message from webview', { payload: msg.payload });
+        break;
+      case 'newChat':
+        this._logger.info('New chat requested from webview');
+        break;
+      default:
+        this._logger.warn('Unknown message type from webview', { type: msg.type });
+    }
+  }
+
+  public postMessage(message: unknown): void {
+    this._view?.webview.postMessage(message);
+  }
+}
+
 function registerCommands(
   context: vscode.ExtensionContext,
   nexipiContext: NexiPiContext,
-  config: vscode.WorkspaceConfiguration
+  config: vscode.WorkspaceConfiguration,
+  sidebarProvider: NexiPiSidebarProvider
 ): vscode.Disposable[] {
   const { outputChannel, statusBarItem, logger } = nexipiContext;
   const disposables: vscode.Disposable[] = [];
@@ -108,12 +207,23 @@ function registerCommands(
         '  nexipi.start - Initialize and start NexiPi',
         '  nexipi.showOutput - Show the output channel',
         '  nexipi.showInformation - Show this information',
+        '  nexipi.focusSidebar - Focus the NexiPi sidebar',
       ].join('\n');
       void vscode.window.showInformationMessage(info, { modal: true });
     }
   );
 
-  disposables.push(startDisposable, showOutputDisposable, showInformationDisposable);
+  const focusSidebarDisposable = vscode.commands.registerCommand('nexipi.focusSidebar', () => {
+    logger.info('Command executed: nexipi.focusSidebar');
+    vscode.commands.executeCommand('workbench.view.extension.nexipi');
+  });
+
+  disposables.push(
+    startDisposable,
+    showOutputDisposable,
+    showInformationDisposable,
+    focusSidebarDisposable
+  );
   return disposables;
 }
 
@@ -130,6 +240,8 @@ export function activate(context: vscode.ExtensionContext): void {
     `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
   );
 
+  const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger);
+
   const nexipiContext: NexiPiContext = {
     outputChannel,
     statusBarItem,
@@ -137,7 +249,13 @@ export function activate(context: vscode.ExtensionContext): void {
     disposables: [],
   };
 
-  const commandDisposables = registerCommands(context, nexipiContext, config);
+  const sidebarDisposable = vscode.window.registerWebviewViewProvider(
+    NexiPiSidebarProvider.viewType,
+    sidebarProvider,
+    { webviewOptions: { retainContextWhenHidden: true } }
+  );
+
+  const commandDisposables = registerCommands(context, nexipiContext, config, sidebarProvider);
   nexipiContext.disposables.push(...commandDisposables);
 
   const configChangeDisposable = vscode.workspace.onDidChangeConfiguration(event => {
@@ -149,7 +267,12 @@ export function activate(context: vscode.ExtensionContext): void {
   });
   nexipiContext.disposables.push(configChangeDisposable);
 
-  nexipiContext.disposables.push(outputChannel, statusBarItem, ...commandDisposables);
+  nexipiContext.disposables.push(
+    outputChannel,
+    statusBarItem,
+    sidebarDisposable,
+    ...commandDisposables
+  );
 
   context.subscriptions.push(...nexipiContext.disposables);
 

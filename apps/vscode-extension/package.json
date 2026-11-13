@@ -25,7 +25,8 @@
   "activationEvents": [
     "onCommand:nexipi.start",
     "onCommand:nexipi.showOutput",
-    "onCommand:nexipi.showInformation"
+    "onCommand:nexipi.showInformation",
+    "onView:nexipi.sidebar"
   ],
   "contributes": {
     "commands": [
@@ -42,6 +43,11 @@
       {
         "command": "nexipi.showInformation",
         "title": "NexiPi: Show Information",
+        "category": "NexiPi"
+      },
+      {
+        "command": "nexipi.focusSidebar",
+        "title": "NexiPi: Focus Sidebar",
         "category": "NexiPi"
       }
     ],
@@ -77,12 +83,40 @@
         {
           "command": "nexipi.showInformation"
         }
+      ],
+      "view/title": [
+        {
+          "command": "nexipi.focusSidebar",
+          "when": "view == nexipi.sidebar",
+          "group": "navigation"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "nexipi",
+          "title": "NexiPi",
+          "icon": "resources/nexipi-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "nexipi": [
+        {
+          "id": "nexipi.sidebar",
+          "name": "NexiPi",
+          "type": "webview",
+          "icon": "resources/nexipi-icon.svg",
+          "contextualTitle": "NexiPi"
+        }
       ]
     }
   },
   "devDependencies": {
     "@nexipi/core": "workspace:*",
     "@nexipi/shared": "workspace:*",
+    "@nexipi/ui": "workspace:*",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0",

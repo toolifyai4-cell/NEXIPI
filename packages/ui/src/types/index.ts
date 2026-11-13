@@ -13,6 +13,11 @@ export interface ChatState {
 
 export type ViewMode = 'welcome' | 'chat';
 
+export interface WelcomePrompt {
+  label: string;
+  prompt: string;
+}
+
 export interface WebviewMessage {
   type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready';
   payload?: unknown;
