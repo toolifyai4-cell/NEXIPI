@@ -85,7 +85,7 @@ describe('events', () => {
       emitter.on('test:event', errorListener);
       emitter.on('test:event', goodListener);
       emitter.emit('test:event', { value: 1 });
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 10));
       expect(goodListener).toHaveBeenCalledOnce();
       expect(onListenerError).toHaveBeenCalledOnce();
     });
@@ -93,7 +93,7 @@ describe('events', () => {
     it('should support emitAsync', async () => {
       const emitter = new EventEmitter<TestEvents>();
       const listener1 = vi.fn(async () => {
-        await new Promise((resolve) => setTimeout(resolve, 5));
+        await new Promise(resolve => setTimeout(resolve, 5));
       });
       const listener2 = vi.fn();
       emitter.on('test:event', listener1);

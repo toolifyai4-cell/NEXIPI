@@ -1,5 +1,7 @@
-import type { Logger, LogLevel } from '@nexipi/shared';
+import type { Logger as SharedLogger, LogLevel } from '@nexipi/shared';
 import type { EngineConfig } from './config.js';
+
+export type Logger = SharedLogger;
 
 const LOG_LEVELS: Record<LogLevel, number> = {
   debug: 0,
@@ -8,7 +10,18 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-const SENSITIVE_KEYS = new Set(['apiKey', 'token', 'secret', 'password', 'key', 'auth', 'credential']);
+const SENSITIVE_KEYS = [
+  'apiKey',
+  'api_key',
+  'token',
+  'secret',
+  'password',
+  'auth',
+  'credential',
+  'accessToken',
+  'refreshToken',
+  'apikey',
+];
 
 function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!meta) {
@@ -17,7 +30,7 @@ function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> |
   const sanitized: Record<string, unknown> = {};
   for (const [key, value] of Object.entries(meta)) {
     const lowerKey = key.toLowerCase();
-    if (SENSITIVE_KEYS.some((s) => lowerKey.includes(s))) {
+    if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
       sanitized[key] = '[REDACTED]';
     } else if (typeof value === 'object' && value !== null) {
       sanitized[key] = sanitizeMeta(value as Record<string, unknown>);
@@ -59,4 +72,4 @@ export function createNoopLogger(): Logger {
   };
 }
 
-export { LOG_LEVELS, type LogLevel } from '@nexipi/shared';
+export { LOG_LEVELS, type LogLevel };

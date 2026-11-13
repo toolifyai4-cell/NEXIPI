@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { createLogger, createNoopLogger, LOG_LEVELS, type LogLevel, type Logger } from './logger.js';
+import {
+  createLogger,
+  createNoopLogger,
+  LOG_LEVELS,
+  type LogLevel,
+  type Logger,
+} from './logger.js';
 import type { EngineConfig } from './config.js';
 
 const originalConsoleLog = console.log;

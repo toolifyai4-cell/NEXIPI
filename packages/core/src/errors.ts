@@ -16,16 +16,17 @@ export enum EngineErrorCode {
   INTERNAL_ERROR = 'INTERNAL_ERROR',
 }
 
+export type EngineErrorOptions = {
+  cause?: Error | undefined;
+  context?: Record<string, unknown> | undefined;
+};
+
 export class EngineError extends Error {
   public readonly code: EngineErrorCode;
-  public readonly cause?: Error;
-  public readonly context?: Record<string, unknown>;
+  public override readonly cause?: Error | undefined;
+  public readonly context?: Record<string, unknown> | undefined;
 
-  constructor(
-    code: EngineErrorCode,
-    message: string,
-    options?: { cause?: Error; context?: Record<string, unknown> }
-  ) {
+  constructor(code: EngineErrorCode, message: string, options?: EngineErrorOptions) {
     super(message);
     this.name = 'EngineError';
     this.code = code;
@@ -50,7 +51,7 @@ export class EngineError extends Error {
 export function createEngineError(
   code: EngineErrorCode,
   message: string,
-  options?: { cause?: Error; context?: Record<string, unknown> }
+  options?: EngineErrorOptions
 ): EngineError {
   return new EngineError(code, message, options);
 }
@@ -59,7 +60,10 @@ export function isEngineError(error: unknown): error is EngineError {
   return error instanceof EngineError;
 }
 
-export function assertEngineError(error: unknown, code: EngineErrorCode): asserts error is EngineError {
+export function assertEngineError(
+  error: unknown,
+  code: EngineErrorCode
+): asserts error is EngineError {
   if (!isEngineError(error) || error.code !== code) {
     throw new EngineError(
       EngineErrorCode.INTERNAL_ERROR,

@@ -21,9 +21,9 @@ export interface TaskResult {
 
 export interface TaskMetadata {
   createdAt: number;
-  startedAt?: number;
-  completedAt?: number;
-  durationMs?: number;
+  startedAt?: number | undefined;
+  completedAt?: number | undefined;
+  durationMs?: number | undefined;
 }
 
 export interface Task<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult> {
@@ -33,7 +33,7 @@ export interface Task<T extends TaskPayload = TaskPayload, R extends TaskResult 
   status: TaskStatus;
   result?: R;
   error?: EngineError;
-  readonly metadata: TaskMetadata;
+  metadata: TaskMetadata;
 }
 
 export interface TaskOptions<T extends TaskPayload = TaskPayload> {
@@ -74,10 +74,10 @@ export function startTask<T extends TaskPayload = TaskPayload, R extends TaskRes
   };
 }
 
-export function completeTask<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult>(
-  task: Task<T, R>,
-  result: R
-): Task<T, R> {
+export function completeTask<
+  T extends TaskPayload = TaskPayload,
+  R extends TaskResult = TaskResult,
+>(task: Task<T, R>, result: R): Task<T, R> {
   if (task.status !== TaskStatus.RUNNING) {
     throw new Error(`Cannot complete task in status ${task.status}`);
   }
@@ -117,7 +117,11 @@ export function failTask<T extends TaskPayload = TaskPayload, R extends TaskResu
 export function cancelTask<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult>(
   task: Task<T, R>
 ): Task<T, R> {
-  if (task.status === TaskStatus.COMPLETED || task.status === TaskStatus.FAILED || task.status === TaskStatus.CANCELLED) {
+  if (
+    task.status === TaskStatus.COMPLETED ||
+    task.status === TaskStatus.FAILED ||
+    task.status === TaskStatus.CANCELLED
+  ) {
     throw new Error(`Cannot cancel task in status ${task.status}`);
   }
   const completedAt = Date.now();
@@ -149,7 +153,7 @@ export interface TaskQueueOptions {
 }
 
 export class TaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult> {
-  private readonly pending: Task<T, R>[] = [];
+  private pending: Array<Task<T, R>> = [];
   private readonly running: Map<TaskId, Task<T, R>> = new Map();
   private readonly completed: Map<TaskId, Task<T, R>> = new Map();
   private readonly options: TaskQueueOptions;
@@ -159,7 +163,11 @@ export class TaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult
   }
 
   enqueue(task: Task<T, R>): void {
-    if (this.running.has(task.id) || this.completed.has(task.id)) {
+    if (
+      this.running.has(task.id) ||
+      this.completed.has(task.id) ||
+      this.pending.some(t => t.id === task.id)
+    ) {
       throw new Error(`Task ${task.id} already exists in queue`);
     }
     this.pending.push(task);
@@ -176,20 +184,20 @@ export class TaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult
     return task;
   }
 
-  getRunning(): Task<T, R>[] {
+  getRunning(): Array<Task<T, R>> {
     return Array.from(this.running.values());
   }
 
-  getPending(): Task<T, R>[] {
+  getPending(): Array<Task<T, R>> {
     return [...this.pending];
   }
 
-  getCompleted(): Task<T, R>[] {
+  getCompleted(): Array<Task<T, R>> {
     return Array.from(this.completed.values());
   }
 
   getTask(id: TaskId): Task<T, R> | undefined {
-    return this.running.get(id) ?? this.completed.get(id) ?? this.pending.find((t) => t.id === id);
+    return this.running.get(id) ?? this.completed.get(id) ?? this.pending.find(t => t.id === id);
   }
 
   moveToCompleted(task: Task<T, R>): void {
@@ -197,8 +205,18 @@ export class TaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult
     this.completed.set(task.id, task);
   }
 
-  cancelAll(): Task<T, R>[] {
-    const cancelled: Task<T, R>[] = [];
+  updateTask(task: Task<T, R>): void {
+    if (this.running.has(task.id)) {
+      this.running.set(task.id, task);
+    } else if (this.pending.some(t => t.id === task.id)) {
+      this.pending = this.pending.map(t => (t.id === task.id ? task : t));
+    } else if (this.completed.has(task.id)) {
+      this.completed.set(task.id, task);
+    }
+  }
+
+  cancelAll(): Array<Task<T, R>> {
+    const cancelled: Array<Task<T, R>> = [];
     for (const task of this.running.values()) {
       cancelled.push(cancelTask(task));
     }
@@ -228,8 +246,9 @@ export class TaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult
   }
 }
 
-export function createTaskQueue<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult>(
-  maxConcurrent: number
-): TaskQueue<T, R> {
+export function createTaskQueue<
+  T extends TaskPayload = TaskPayload,
+  R extends TaskResult = TaskResult,
+>(maxConcurrent: number): TaskQueue<T, R> {
   return new TaskQueue<T, R>({ maxConcurrent });
 }

@@ -6,14 +6,10 @@ import {
   validateEngineConfig,
   mergeEngineConfig,
 } from './config.js';
+import { EngineError, EngineErrorCode, isEngineError, type EngineErrorOptions } from './errors.js';
 import {
-  EngineError,
-  EngineErrorCode,
-  isEngineError,
-} from './errors.js';
-import {
-  Task,
-  TaskStatus,
+  type Task,
+  type TaskQueue,
   type TaskId,
   type TaskPayload,
   type TaskResult,
@@ -23,7 +19,6 @@ import {
   failTask,
   cancelTask,
   isTaskTerminal,
-  TaskQueue,
   createTaskQueue,
 } from './tasks.js';
 
@@ -114,7 +109,10 @@ export class Engine {
         : new EngineError(
             EngineErrorCode.INITIALIZATION_FAILED,
             `Failed to initialize engine: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error instanceof Error ? error : undefined }
+            {
+              cause: error instanceof Error ? error : undefined,
+              context: undefined,
+            } as EngineErrorOptions
           );
       this.initError = engineError;
       this.status = EngineStatus.ERROR;
@@ -125,30 +123,27 @@ export class Engine {
   }
 
   async start(): Promise<void> {
-    if (this.status === EngineStatus.RUNNING) {
-      const error = new EngineError(
-        EngineErrorCode.ALREADY_STARTED,
-        'Engine is already running'
-      );
-      this.logger.warn('Start called on already running engine');
-      throw error;
-    }
-
-    if (this.status === EngineStatus.UNINITIALIZED) {
-      this.initialize();
-    } else if (this.status !== EngineStatus.INITIALIZED && this.status !== EngineStatus.STOPPED) {
-      const error = new EngineError(
-        EngineErrorCode.INVALID_LIFECYCLE_TRANSITION,
-        `Cannot start engine from status ${this.status}`
-      );
-      this.logger.error('Invalid lifecycle transition', { status: this.status });
-      throw error;
-    }
-
-    this.status = EngineStatus.STARTING;
-    this.logger.info('Engine starting');
-
     try {
+      if (this.status === EngineStatus.RUNNING) {
+        const error = new EngineError(EngineErrorCode.ALREADY_STARTED, 'Engine is already running');
+        this.logger.warn('Start called on already running engine');
+        throw error;
+      }
+
+      if (this.status === EngineStatus.UNINITIALIZED) {
+        this.initialize();
+      } else if (this.status !== EngineStatus.INITIALIZED && this.status !== EngineStatus.STOPPED) {
+        const error = new EngineError(
+          EngineErrorCode.INVALID_LIFECYCLE_TRANSITION,
+          `Cannot start engine from status ${this.status}`
+        );
+        this.logger.error('Invalid lifecycle transition', { status: this.status });
+        throw error;
+      }
+
+      this.status = EngineStatus.STARTING;
+      this.logger.info('Engine starting');
+
       await this.performStart();
       this.status = EngineStatus.RUNNING;
       this.logger.info('Engine started');
@@ -160,7 +155,10 @@ export class Engine {
         : new EngineError(
             EngineErrorCode.INTERNAL_ERROR,
             `Failed to start engine: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error instanceof Error ? error : undefined }
+            {
+              cause: error instanceof Error ? error : undefined,
+              context: undefined,
+            } as EngineErrorOptions
           );
       this.logger.error('Engine start failed', { error: engineError.message });
       this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
@@ -169,36 +167,33 @@ export class Engine {
   }
 
   private async performStart(): Promise<void> {
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   async stop(reason?: string): Promise<void> {
-    if (this.status === EngineStatus.STOPPED) {
-      const error = new EngineError(
-        EngineErrorCode.ALREADY_STOPPED,
-        'Engine is already stopped'
-      );
-      this.logger.warn('Stop called on already stopped engine');
-      throw error;
-    }
-
-    if (this.status !== EngineStatus.RUNNING && this.status !== EngineStatus.STARTING) {
-      const error = new EngineError(
-        EngineErrorCode.INVALID_LIFECYCLE_TRANSITION,
-        `Cannot stop engine from status ${this.status}`
-      );
-      this.logger.error('Invalid lifecycle transition', { status: this.status });
-      throw error;
-    }
-
-    this.status = EngineStatus.STOPPING;
-    this.logger.info('Engine stopping', { reason });
-
     try {
+      if (this.status === EngineStatus.STOPPED) {
+        const error = new EngineError(EngineErrorCode.ALREADY_STOPPED, 'Engine is already stopped');
+        this.logger.warn('Stop called on already stopped engine');
+        throw error;
+      }
+
+      if (this.status !== EngineStatus.RUNNING && this.status !== EngineStatus.STARTING) {
+        const error = new EngineError(
+          EngineErrorCode.INVALID_LIFECYCLE_TRANSITION,
+          `Cannot stop engine from status ${this.status}`
+        );
+        this.logger.error('Invalid lifecycle transition', { status: this.status });
+        throw error;
+      }
+
+      this.status = EngineStatus.STOPPING;
+      this.logger.info('Engine stopping', { reason });
+
       await this.performStop(reason);
       this.status = EngineStatus.STOPPED;
       this.logger.info('Engine stopped', { reason });
-      this.eventEmitter.emit('engine:stopped', { timestamp: Date.now(), reason });
+      this.eventEmitter.emit('engine:stopped', { timestamp: Date.now(), reason: reason ?? '' });
     } catch (error) {
       this.status = EngineStatus.ERROR;
       const engineError = isEngineError(error)
@@ -206,7 +201,10 @@ export class Engine {
         : new EngineError(
             EngineErrorCode.INTERNAL_ERROR,
             `Failed to stop engine: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error instanceof Error ? error : undefined }
+            {
+              cause: error instanceof Error ? error : undefined,
+              context: undefined,
+            } as EngineErrorOptions
           );
       this.logger.error('Engine stop failed', { error: engineError.message });
       this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
@@ -214,12 +212,12 @@ export class Engine {
     }
   }
 
-  private async performStop(reason?: string): Promise<void> {
+  private async performStop(_reason?: string): Promise<void> {
     const cancelledTasks = this.taskQueue.cancelAll();
     for (const task of cancelledTasks) {
       this.eventEmitter.emit('task:cancelled', { task });
     }
-    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise(resolve => setTimeout(resolve, 0));
   }
 
   createTask<T extends TaskPayload = TaskPayload, R extends TaskResult = TaskResult>(
@@ -244,7 +242,7 @@ export class Engine {
     executor: (payload: T) => Promise<R>
   ): Promise<Task<T, R>> {
     const startedTask = startTask(task);
-    this.taskQueue.moveToCompleted(startedTask);
+    this.taskQueue.updateTask(startedTask);
     this.logger.debug('Task started', { taskId: startedTask.id });
     this.eventEmitter.emit('task:started', { task: startedTask });
 
@@ -256,6 +254,7 @@ export class Engine {
         ),
       ]);
       const completedTask = completeTask(startedTask, result);
+      this.taskQueue.moveToCompleted(completedTask);
       this.logger.debug('Task completed', { taskId: completedTask.id });
       this.eventEmitter.emit('task:completed', { task: completedTask });
       return completedTask;
@@ -265,9 +264,13 @@ export class Engine {
         : new EngineError(
             EngineErrorCode.INTERNAL_ERROR,
             `Task execution failed: ${error instanceof Error ? error.message : String(error)}`,
-            { cause: error instanceof Error ? error : undefined }
+            {
+              cause: error instanceof Error ? error : undefined,
+              context: undefined,
+            } as EngineErrorOptions
           );
       const failedTask = failTask(startedTask, engineError);
+      this.taskQueue.moveToCompleted(failedTask);
       this.logger.error('Task failed', { taskId: failedTask.id, error: engineError.message });
       this.eventEmitter.emit('task:failed', { task: failedTask, error: engineError });
       throw engineError;
@@ -283,7 +286,7 @@ export class Engine {
       return false;
     }
     const cancelledTask = cancelTask(task);
-    this.taskQueue.moveToCompleted(cancelledTask);
+    this.taskQueue.updateTask(cancelledTask);
     this.logger.debug('Task cancelled', { taskId });
     this.eventEmitter.emit('task:cancelled', { task: cancelledTask });
     return true;
@@ -293,11 +296,17 @@ export class Engine {
     return this.taskQueue.size();
   }
 
-  on<T extends EventName>(eventName: T, listener: (payload: EngineEvents[T]) => void | Promise<void>) {
+  on<T extends EventName>(
+    eventName: T,
+    listener: (payload: EngineEvents[T]) => void | Promise<void>
+  ) {
     return this.eventEmitter.on(eventName, listener);
   }
 
-  off<T extends EventName>(eventName: T, listener: (payload: EngineEvents[T]) => void | Promise<void>) {
+  off<T extends EventName>(
+    eventName: T,
+    listener: (payload: EngineEvents[T]) => void | Promise<void>
+  ) {
     return this.eventEmitter.off(eventName, listener);
   }
 

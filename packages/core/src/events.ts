@@ -1,5 +1,3 @@
-import type { EngineError } from './errors.js';
-
 export type EventName = string;
 
 export interface EventMap {
@@ -14,15 +12,15 @@ export interface EventSubscription {
   unsubscribe: () => void;
 }
 
-export interface EventEmitterOptions<E extends EventMap> {
+export interface EventEmitterOptions {
   onListenerError?: (error: Error, eventName: EventName, payload: unknown) => void;
 }
 
 export class EventEmitter<E extends EventMap = EventMap> {
   private readonly listeners: Map<EventName, Set<EventListener<EventName, E>>> = new Map();
-  private readonly options: EventEmitterOptions<E>;
+  private readonly options: EventEmitterOptions;
 
-  constructor(options: EventEmitterOptions<E> = {}) {
+  constructor(options: EventEmitterOptions = {}) {
     this.options = options;
   }
 
@@ -59,7 +57,9 @@ export class EventEmitter<E extends EventMap = EventMap> {
       try {
         const result = listener(payload);
         if (result instanceof Promise) {
-          result.catch((error) => this.handleListenerError(error, eventName, payload));
+          result.catch((error: unknown) =>
+            this.handleListenerError(error as Error, eventName, payload)
+          );
         }
       } catch (error) {
         this.handleListenerError(error as Error, eventName, payload);
@@ -73,13 +73,15 @@ export class EventEmitter<E extends EventMap = EventMap> {
       return Promise.resolve([]);
     }
 
-    const promises: Promise<void>[] = [];
+    const promises: Array<Promise<void>> = [];
     for (const listener of eventListeners) {
       try {
         const result = listener(payload);
         if (result instanceof Promise) {
           promises.push(
-            result.catch((error) => this.handleListenerError(error, eventName, payload))
+            result.catch((error: unknown) =>
+              this.handleListenerError(error as Error, eventName, payload)
+            )
           );
         } else {
           promises.push(Promise.resolve());
@@ -121,7 +123,7 @@ export class EventEmitter<E extends EventMap = EventMap> {
 }
 
 export function createEventEmitter<E extends EventMap = EventMap>(
-  options?: EventEmitterOptions<E>
+  options?: EventEmitterOptions
 ): EventEmitter<E> {
   return new EventEmitter<E>(options);
 }

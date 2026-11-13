@@ -1,5 +1,4 @@
 import { z } from 'zod';
-import type { LogLevel } from '@nexipi/shared';
 
 export const EngineConfigSchema = z.object({
   name: z.string().min(1).default('nexipi'),
@@ -25,7 +24,9 @@ export function validateEngineConfig(config: unknown): EngineConfig {
   return EngineConfigSchema.parse(config);
 }
 
-export function safeValidateEngineConfig(config: unknown): { success: true; data: EngineConfig } | { success: false; error: z.ZodError } {
+export function safeValidateEngineConfig(
+  config: unknown
+): { success: true; data: EngineConfig } | { success: false; error: z.ZodError } {
   const result = EngineConfigSchema.safeParse(config);
   if (result.success) {
     return { success: true, data: result.data };
@@ -33,7 +34,10 @@ export function safeValidateEngineConfig(config: unknown): { success: true; data
   return { success: false, error: result.error };
 }
 
-export function mergeEngineConfig(base: EngineConfig, override: Partial<EngineConfig>): EngineConfig {
+export function mergeEngineConfig(
+  base: EngineConfig,
+  override: Partial<EngineConfig>
+): EngineConfig {
   return EngineConfigSchema.parse({ ...base, ...override });
 }
 
