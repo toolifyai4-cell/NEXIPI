@@ -476,4 +476,101 @@ describe('tasks', () => {
       expect(queue.size()).toEqual({ pending: 0, running: 0, completed: 0 });
     });
   });
+
+  describe('TaskQueue edge cases', () => {
+    it('should not allow dequeuing more than maxConcurrent', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task1 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '1' } });
+      const task2 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '2' } });
+      const task3 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '3' } });
+      queue.enqueue(task1);
+      queue.enqueue(task2);
+      queue.enqueue(task3);
+      queue.dequeue();
+      queue.dequeue();
+      expect(queue.dequeue()).toBeUndefined();
+      expect(queue.dequeue()).toBeUndefined();
+    });
+
+    it('should move completed task from running to completed', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task = createTask<TestPayload, TestResult>({
+        type: 'test',
+        payload: { input: 'hello' },
+      });
+      queue.enqueue(task);
+      const dequeued = queue.dequeue()!;
+      queue.moveToCompleted(dequeued);
+      expect(queue.getRunning().length).toBe(0);
+      expect(queue.getCompleted().length).toBe(1);
+    });
+
+    it('should update task in pending', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task = createTask<TestPayload, TestResult>({
+        id: 'task-1',
+        type: 'test',
+        payload: { input: 'hello' },
+      });
+      queue.enqueue(task);
+      const updated = { ...task, status: TaskStatus.RUNNING };
+      queue.updateTask(updated);
+      const found = queue.getTask('task-1');
+      expect(found?.status).toBe(TaskStatus.RUNNING);
+    });
+
+    it('should update task in running', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task = createTask<TestPayload, TestResult>({
+        id: 'task-1',
+        type: 'test',
+        payload: { input: 'hello' },
+      });
+      queue.enqueue(task);
+      queue.dequeue();
+      const updated = { ...task, status: TaskStatus.COMPLETED, result: { output: 'done' } };
+      queue.updateTask(updated);
+      const found = queue.getTask('task-1');
+      expect(found?.status).toBe(TaskStatus.COMPLETED);
+    });
+
+    it('should update task in completed', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task = createTask<TestPayload, TestResult>({
+        id: 'task-1',
+        type: 'test',
+        payload: { input: 'hello' },
+      });
+      queue.enqueue(task);
+      const dequeued = queue.dequeue()!;
+      queue.moveToCompleted(dequeued);
+      const updated = { ...task, result: { output: 'updated' } };
+      queue.updateTask(updated);
+      const found = queue.getTask('task-1');
+      expect(found?.result).toEqual({ output: 'updated' });
+    });
+
+    it('should cancel all pending and running tasks', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const task1 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '1' } });
+      const task2 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '2' } });
+      const task3 = createTask<TestPayload, TestResult>({ type: 'test', payload: { input: '3' } });
+      queue.enqueue(task1);
+      queue.enqueue(task2);
+      queue.enqueue(task3);
+      queue.dequeue();
+      const cancelled = queue.cancelAll();
+      expect(cancelled.length).toBe(3);
+      expect(cancelled.every(t => t.status === TaskStatus.CANCELLED)).toBe(true);
+      expect(queue.getRunning().length).toBe(0);
+      expect(queue.getPending().length).toBe(0);
+      expect(queue.getCompleted().length).toBe(3);
+    });
+
+    it('should handle cancelAll on empty queue', () => {
+      const queue = createTaskQueue<TestPayload, TestResult>(2);
+      const cancelled = queue.cancelAll();
+      expect(cancelled.length).toBe(0);
+    });
+  });
 });

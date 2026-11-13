@@ -122,4 +122,35 @@ describe('config', () => {
       expect(defaultEngineConfig.enableTelemetry).toBe(false);
     });
   });
+
+  describe('mergeEngineConfig edge cases', () => {
+    it('should not mutate base config', () => {
+      const base: EngineConfig = { ...defaultEngineConfig, name: 'base' };
+      const baseName = base.name;
+      mergeEngineConfig(base, { name: 'override' });
+      expect(base.name).toBe(baseName);
+    });
+
+    it('should not mutate override config', () => {
+      const base: EngineConfig = defaultEngineConfig;
+      const override = { name: 'override', logLevel: 'debug' as const };
+      const overrideName = override.name;
+      mergeEngineConfig(base, override);
+      expect(override.name).toBe(overrideName);
+    });
+
+    it('should apply defaults for missing fields', () => {
+      const base: EngineConfig = { ...defaultEngineConfig, name: 'base', maxConcurrentTasks: 5 };
+      const merged = mergeEngineConfig(base, { version: '2.0.0' });
+      expect(merged.name).toBe('base');
+      expect(merged.version).toBe('2.0.0');
+      expect(merged.maxConcurrentTasks).toBe(5);
+      expect(merged.logLevel).toBe('info');
+    });
+
+    it('should reject invalid merged values', () => {
+      const base: EngineConfig = defaultEngineConfig;
+      expect(() => mergeEngineConfig(base, { maxConcurrentTasks: -1 })).toThrow();
+    });
+  });
 });

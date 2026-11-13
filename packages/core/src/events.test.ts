@@ -131,13 +131,102 @@ describe('events', () => {
       expect(emitter.listenerCount('test:other')).toBe(0);
     });
 
-    it('should remove all listeners when no event specified', () => {
+it('should remove all listeners when no event specified', () => {
       const emitter = new EventEmitter<TestEvents>();
       emitter.on('test:event', vi.fn());
       emitter.on('test:other', vi.fn());
       emitter.removeAllListeners();
       expect(emitter.listenerCount('test:event')).toBe(0);
       expect(emitter.listenerCount('test:other')).toBe(0);
+    });
+  });
+
+  describe('EventEmitter edge cases', () => {
+    it('should handle listener removing itself during emit', () => {
+      const emitter = new EventEmitter<TestEvents>();
+      const listener = vi.fn(() => {
+        emitter.off('test:event', listener);
+      });
+      emitter.on('test:event', listener);
+      emitter.emit('test:event', { value: 1 });
+      expect(listener).toHaveBeenCalledOnce();
+      expect(emitter.listenerCount('test:event')).toBe(0);
+    });
+
+    it('should handle listener removing another listener during emit', () => {
+      const emitter = new EventEmitter<TestEvents>();
+      const listener1 = vi.fn();
+      const listener2 = vi.fn(() => {
+        emitter.off('test:event', listener1);
+      });
+      emitter.on('test:event', listener1);
+      emitter.on('test:event', listener2);
+      emitter.emit('test:event', { value: 1 });
+      expect(listener1).toHaveBeenCalledOnce();
+      expect(listener2).toHaveBeenCalledOnce();
+      expect(emitter.listenerCount('test:event')).toBe(1);
+    });
+
+    it('should handle removeAllListeners during emit', () => {
+      const emitter = new EventEmitter<TestEvents>();
+      const listener1 = vi.fn();
+      const listener2 = vi.fn(() => {
+        emitter.removeAllListeners('test:event');
+      });
+      emitter.on('test:event', listener1);
+      emitter.on('test:event', listener2);
+      emitter.emit('test:event', { value: 1 });
+      expect(listener1).toHaveBeenCalledOnce();
+      expect(listener2).toHaveBeenCalledOnce();
+      expect(emitter.listenerCount('test:event')).toBe(0);
+    });
+
+    it('should not emit to listeners added during emit', () => {
+      const emitter = new EventEmitter<TestEvents>();
+      const listener1 = vi.fn(() => {
+        emitter.on('test:event', listener2);
+      });
+      const listener2 = vi.fn();
+      emitter.on('test:event', listener1);
+      emitter.emit('test:event', { value: 1 });
+      expect(listener1).toHaveBeenCalledOnce();
+      expect(listener2).not.toHaveBeenCalled();
+    });
+
+    it('should handle async listener errors in emitAsync', async () => {
+      const onListenerError = vi.fn();
+      const emitter = new EventEmitter<TestEvents>({ onListenerError });
+      const errorListener = vi.fn(async () => {
+        throw new Error('Async error');
+      });
+      const goodListener = vi.fn();
+      emitter.on('test:event', errorListener);
+      emitter.on('test:event', goodListener);
+      await emitter.emitAsync('test:event', { value: 1 });
+      expect(goodListener).toHaveBeenCalledOnce();
+      expect(onListenerError).toHaveBeenCalledOnce();
+    });
+
+    it('should handle sync listener errors in emitAsync', async () => {
+      const onListenerError = vi.fn();
+      const emitter = new EventEmitter<TestEvents>({ onListenerError });
+      const errorListener = vi.fn(() => {
+        throw new Error('Sync error');
+      });
+      const goodListener = vi.fn();
+      emitter.on('test:event', errorListener);
+      emitter.on('test:event', goodListener);
+      await emitter.emitAsync('test:event', { value: 1 });
+      expect(goodListener).toHaveBeenCalledOnce();
+      expect(onListenerError).toHaveBeenCalledOnce();
+    });
+
+it('should not leak listeners after emitAsync', async () => {
+      const emitter = new EventEmitter<TestEvents>();
+      const listener = vi.fn();
+      emitter.on('test:event', listener);
+      await emitter.emitAsync('test:event', { value: 1 });
+      expect(emitter.listenerCount('test:event')).toBe(1);
     });
   });
 

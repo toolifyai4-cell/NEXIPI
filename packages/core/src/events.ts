@@ -53,7 +53,8 @@ export class EventEmitter<E extends EventMap = EventMap> {
       return;
     }
 
-    for (const listener of eventListeners) {
+    const listenersSnapshot = [...eventListeners];
+    for (const listener of listenersSnapshot) {
       try {
         const result = listener(payload);
         if (result instanceof Promise) {
@@ -73,8 +74,9 @@ export class EventEmitter<E extends EventMap = EventMap> {
       return Promise.resolve([]);
     }
 
+    const listenersSnapshot = [...eventListeners];
     const promises: Array<Promise<void>> = [];
-    for (const listener of eventListeners) {
+    for (const listener of listenersSnapshot) {
       try {
         const result = listener(payload);
         if (result instanceof Promise) {

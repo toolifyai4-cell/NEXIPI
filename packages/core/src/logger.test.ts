@@ -150,4 +150,47 @@ describe('logger', () => {
       expect(LOG_LEVELS.error).toBe(3);
     });
   });
+
+  describe('sanitizeMeta edge cases', () => {
+    it('should sanitize sensitive keys in arrays', () => {
+      const logger = createLogger(createConfig());
+      logger.info('message', { items: [{ apiKey: 'secret1' }, { token: 'secret2' }] });
+      expect(logs[0]).toContain('[REDACTED]');
+      expect(logs[0]).not.toContain('secret1');
+      expect(logs[0]).not.toContain('secret2');
+    });
+
+    it('should sanitize nested arrays', () => {
+      const logger = createLogger(createConfig());
+      logger.info('message', { data: [[{ password: 'nested' }]] });
+      expect(logs[0]).toContain('[REDACTED]');
+      expect(logs[0]).not.toContain('nested');
+    });
+
+    it('should handle null values', () => {
+      const logger = createLogger(createConfig());
+      logger.info('message', { key: null });
+      expect(logs[0]).toContain('null');
+    });
+
+    it('should handle undefined values', () => {
+      const logger = createLogger(createConfig());
+      logger.info('message', { key: undefined });
+      expect(logs[0]).toContain('{}');
+    });
+
+    it('should handle circular references gracefully', () => {
+      const logger = createLogger(createConfig());
+      const circular: any = { key: 'value' };
+      circular.self = circular;
+      expect(() => logger.info('message', circular)).not.toThrow();
+    });
+
+    it('should be case-insensitive for sensitive keys', () => {
+      const logger = createLogger(createConfig());
+      logger.info('message', { APIKEY: 'upper', ApiKey: 'mixed', apikey: 'lower' });
+      const redactedCount = (logs[0].match(/\[REDACTED\]/g) || []).length;
+      expect(redactedCount).toBe(3);
+    });
+  });
 });

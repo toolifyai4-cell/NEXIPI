@@ -27,18 +27,36 @@ function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> |
   if (!meta) {
     return undefined;
   }
-  const sanitized: Record<string, unknown> = {};
-  for (const [key, value] of Object.entries(meta)) {
-    const lowerKey = key.toLowerCase();
-    if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
-      sanitized[key] = '[REDACTED]';
-    } else if (typeof value === 'object' && value !== null) {
-      sanitized[key] = sanitizeMeta(value as Record<string, unknown>);
-    } else {
-      sanitized[key] = value;
+  const seen = new WeakSet<object>();
+
+  function sanitize(value: unknown): unknown {
+    if (value === null) {
+      return null;
     }
+    if (typeof value !== 'object') {
+      return value;
+    }
+    if (seen.has(value as object)) {
+      return '[CIRCULAR]';
+    }
+    seen.add(value as object);
+
+    if (Array.isArray(value)) {
+      return value.map(sanitize);
+    }
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const lowerKey = key.toLowerCase();
+      if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
+        sanitized[key] = '[REDACTED]';
+      } else {
+        sanitized[key] = sanitize(val);
+      }
+    }
+    return sanitized;
   }
-  return sanitized;
+
+  return sanitize(meta) as Record<string, unknown>;
 }
 
 export function createLogger(config: EngineConfig): Logger {

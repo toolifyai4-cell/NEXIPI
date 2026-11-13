@@ -366,4 +366,171 @@ describe('engine', () => {
       expect(listener).toHaveBeenCalledOnce();
     });
   });
+
+  describe('lifecycle concurrency', () => {
+    it('should handle concurrent initialize calls deterministically', async () => {
+      const engine1 = createTestEngine();
+      const engine2 = createTestEngine();
+      const results = await Promise.allSettled([
+        engine1.initialize(),
+        engine2.initialize(),
+      ]);
+      expect(results[0].status).toBe('fulfilled');
+      expect(results[1].status).toBe('fulfilled');
+      expect(engine1.getStatus()).toBe(EngineStatus.INITIALIZED);
+      expect(engine2.getStatus()).toBe(EngineStatus.INITIALIZED);
+    });
+
+    it('should handle concurrent start calls on same engine', async () => {
+      await engine.start();
+      const results = await Promise.allSettled([
+        engine.start(),
+        engine.start(),
+      ]);
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(rejected.length).toBe(2);
+      expect(engine.getStatus()).toBe(EngineStatus.RUNNING);
+    });
+
+    it('should handle concurrent stop calls on same engine', async () => {
+      await engine.start();
+      const results = await Promise.allSettled([
+        engine.stop('first'),
+        engine.stop('second'),
+      ]);
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(rejected.length).toBe(1);
+      expect(engine.getStatus()).toBe(EngineStatus.STOPPED);
+    });
+
+    it('should handle concurrent initialize and start', async () => {
+      const engine3 = createTestEngine();
+      const results = await Promise.allSettled([
+        engine3.initialize(),
+        engine3.start(),
+      ]);
+      const rejected = results.filter(r => r.status === 'rejected');
+      expect(rejected.length).toBeLessThanOrEqual(1);
+      expect([EngineStatus.INITIALIZED, EngineStatus.RUNNING]).toContain(engine3.getStatus());
+    });
+  });
+
+  describe('task execution concurrency', () => {
+    beforeEach(async () => {
+      await engine.start();
+    });
+
+    it('should enforce maxConcurrentTasks limit', async () => {
+      const limitedEngine = createTestEngine({
+        config: { maxConcurrentTasks: 2, taskTimeoutMs: 5000 },
+      });
+      await limitedEngine.start();
+
+      let runningCount = 0;
+      let maxRunning = 0;
+      const barriers: Array<() => void> = [];
+
+      const createTask = () => limitedEngine.executeTask(
+        limitedEngine.createTask('test', {}),
+        async () => {
+          runningCount++;
+          maxRunning = Math.max(maxRunning, runningCount);
+          await new Promise<void>(resolve => barriers.push(() => { runningCount--; resolve(); }));
+        }
+      );
+
+      const tasks = [
+        createTask(),
+        createTask(),
+        createTask(),
+      ];
+
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(maxRunning).toBeLessThanOrEqual(2);
+
+      barriers.forEach(fn => fn());
+      await Promise.allSettled(tasks);
+    });
+
+    it('should not execute same task twice', async () => {
+      const task = engine.createTask('test', { input: 'hello' });
+      let executeCount = 0;
+      const executor = async () => {
+        executeCount++;
+        await new Promise(resolve => setTimeout(resolve, 10));
+        return { output: 'done' };
+      };
+
+      await Promise.allSettled([
+        engine.executeTask(task, executor),
+        engine.executeTask(task, executor),
+      ]);
+
+      expect(executeCount).toBe(1);
+    });
+
+    it('should mark task as FAILED on timeout but executor continues', async () => {
+      let executorCompleted = false;
+      const task = engine.createTask('test', { input: 'hello' });
+      await expect(
+        engine.executeTask(task, async () => {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          executorCompleted = true;
+          return { output: 'done' };
+        })
+      ).rejects.toThrow();
+
+      await new Promise(resolve => setTimeout(resolve, 2100));
+      expect(executorCompleted).toBe(true);
+      const updatedTask = engine.getTask(task.id);
+      expect(updatedTask?.status).toBe(TaskStatus.FAILED);
+    });
+
+    it('should not allow executing task not in queue', async () => {
+      const orphanTask = engine.createTask('test', { input: 'orphan' });
+      await engine.executeTask(orphanTask, async () => ({ output: 'done' }));
+      const stats = engine.getTaskQueueStats();
+      expect(stats.pending).toBe(0);
+      expect(stats.running).toBe(0);
+      expect(stats.completed).toBe(1);
+    });
+  });
+
+  describe('post-stop behavior', () => {
+    it('should allow restart from STOPPED state', async () => {
+      await engine.start();
+      await engine.stop();
+      await engine.start();
+      expect(engine.getStatus()).toBe(EngineStatus.RUNNING);
+    });
+
+    it('should clear task queue on restart', async () => {
+      await engine.start();
+      engine.createTask('test', { input: '1' });
+      await engine.stop();
+      await engine.start();
+      const stats = engine.getTaskQueueStats();
+      expect(stats.pending).toBe(0);
+      expect(stats.completed).toBe(0);
+    });
+  });
+
+  describe('config sanitization', () => {
+    it('should not expose sensitive config in logs', () => {
+      const sensitiveEngine = createTestEngine({
+        config: { apiKey: 'secret123' as any },
+      });
+      const logger = sensitiveEngine.getLogger();
+      const logs: string[] = [];
+      const originalLog = console.log;
+      console.log = vi.fn((msg: string) => logs.push(msg));
+      try {
+        sensitiveEngine.initialize();
+        expect(logs.some(l => l.includes('secret123'))).toBe(false);
+        expect(logs.some(l => l.includes('[REDACTED]'))).toBe(true);
+      } finally {
+        console.log = originalLog;
+      }
+    });
+  });
 });

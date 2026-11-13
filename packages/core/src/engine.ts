@@ -20,6 +20,7 @@ import {
   cancelTask,
   isTaskTerminal,
   createTaskQueue,
+  TaskStatus,
 } from './tasks.js';
 
 export enum EngineStatus {
@@ -50,6 +51,34 @@ export interface EngineOptions {
   logger?: Logger;
 }
 
+function createMutex() {
+  let locked = false;
+  const waitQueue: Array<() => void> = [];
+
+  return {
+    async acquire(): Promise<() => void> {
+      if (!locked) {
+        locked = true;
+        return () => {
+          locked = false;
+          const next = waitQueue.shift();
+          if (next) next();
+        };
+      }
+      return new Promise<() => void>((resolve) => {
+        waitQueue.push(() => {
+          locked = true;
+          resolve(() => {
+            locked = false;
+            const next = waitQueue.shift();
+            if (next) next();
+          });
+        });
+      });
+    },
+  };
+}
+
 export class Engine {
   private status: EngineStatus = EngineStatus.UNINITIALIZED;
   private readonly config: EngineConfig;
@@ -57,6 +86,8 @@ export class Engine {
   private readonly eventEmitter: EventEmitter<EngineEvents>;
   private readonly taskQueue: TaskQueue;
   private initError?: EngineError;
+  private readonly lifecycleMutex = createMutex();
+  private readonly executionMutex = createMutex();
 
   constructor(options: EngineOptions = {}) {
     this.config = mergeEngineConfig(defaultEngineConfig, options.config ?? {});
@@ -85,44 +116,50 @@ export class Engine {
     return this.eventEmitter;
   }
 
-  initialize(): void {
-    if (this.status !== EngineStatus.UNINITIALIZED) {
-      const error = new EngineError(
-        EngineErrorCode.ALREADY_INITIALIZED,
-        `Engine already initialized (current status: ${this.status})`
-      );
-      this.logger.error('Initialization failed', { error: error.message });
-      throw error;
-    }
-
+  async initialize(): Promise<void> {
+    const release = await this.lifecycleMutex.acquire();
     try {
-      validateEngineConfig(this.config);
-      this.status = EngineStatus.INITIALIZED;
-      this.logger.info('Engine initialized', { config: this.sanitizeConfig(this.config) });
-      this.eventEmitter.emit('engine:initialized', {
-        config: this.config,
-        timestamp: Date.now(),
-      });
-    } catch (error) {
-      const engineError = isEngineError(error)
-        ? error
-        : new EngineError(
-            EngineErrorCode.INITIALIZATION_FAILED,
-            `Failed to initialize engine: ${error instanceof Error ? error.message : String(error)}`,
-            {
-              cause: error instanceof Error ? error : undefined,
-              context: undefined,
-            } as EngineErrorOptions
-          );
-      this.initError = engineError;
-      this.status = EngineStatus.ERROR;
-      this.logger.error('Engine initialization failed', { error: engineError.message });
-      this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
-      throw engineError;
+      if (this.status !== EngineStatus.UNINITIALIZED) {
+        const error = new EngineError(
+          EngineErrorCode.ALREADY_INITIALIZED,
+          `Engine already initialized (current status: ${this.status})`
+        );
+        this.logger.error('Initialization failed', { error: error.message });
+        throw error;
+      }
+
+      try {
+        validateEngineConfig(this.config);
+        this.status = EngineStatus.INITIALIZED;
+        this.logger.info('Engine initialized', { config: this.sanitizeConfig(this.config) });
+        this.eventEmitter.emit('engine:initialized', {
+          config: this.config,
+          timestamp: Date.now(),
+        });
+      } catch (error) {
+        const engineError = isEngineError(error)
+          ? error
+          : new EngineError(
+              EngineErrorCode.INITIALIZATION_FAILED,
+              `Failed to initialize engine: ${error instanceof Error ? error.message : String(error)}`,
+              {
+                cause: error instanceof Error ? error : undefined,
+                context: undefined,
+              } as EngineErrorOptions
+            );
+        this.initError = engineError;
+        this.status = EngineStatus.ERROR;
+        this.logger.error('Engine initialization failed', { error: engineError.message });
+        this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
+        throw engineError;
+      }
+    } finally {
+      release();
     }
   }
 
   async start(): Promise<void> {
+    const release = await this.lifecycleMutex.acquire();
     try {
       if (this.status === EngineStatus.RUNNING) {
         const error = new EngineError(EngineErrorCode.ALREADY_STARTED, 'Engine is already running');
@@ -131,7 +168,7 @@ export class Engine {
       }
 
       if (this.status === EngineStatus.UNINITIALIZED) {
-        this.initialize();
+        await this.initialize();
       } else if (this.status !== EngineStatus.INITIALIZED && this.status !== EngineStatus.STOPPED) {
         const error = new EngineError(
           EngineErrorCode.INVALID_LIFECYCLE_TRANSITION,
@@ -139,6 +176,10 @@ export class Engine {
         );
         this.logger.error('Invalid lifecycle transition', { status: this.status });
         throw error;
+      }
+
+      if (this.status === EngineStatus.STOPPED) {
+        this.taskQueue.clear();
       }
 
       this.status = EngineStatus.STARTING;
@@ -163,6 +204,8 @@ export class Engine {
       this.logger.error('Engine start failed', { error: engineError.message });
       this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
       throw engineError;
+    } finally {
+      release();
     }
   }
 
@@ -171,6 +214,7 @@ export class Engine {
   }
 
   async stop(reason?: string): Promise<void> {
+    const release = await this.lifecycleMutex.acquire();
     try {
       if (this.status === EngineStatus.STOPPED) {
         const error = new EngineError(EngineErrorCode.ALREADY_STOPPED, 'Engine is already stopped');
@@ -209,6 +253,8 @@ export class Engine {
       this.logger.error('Engine stop failed', { error: engineError.message });
       this.eventEmitter.emit('engine:error', { error: engineError, timestamp: Date.now() });
       throw engineError;
+    } finally {
+      release();
     }
   }
 
@@ -241,39 +287,73 @@ export class Engine {
     task: Task<T, R>,
     executor: (payload: T) => Promise<R>
   ): Promise<Task<T, R>> {
-    const startedTask = startTask(task);
-    this.taskQueue.updateTask(startedTask);
-    this.logger.debug('Task started', { taskId: startedTask.id });
-    this.eventEmitter.emit('task:started', { task: startedTask });
-
+    const release = await this.executionMutex.acquire();
     try {
-      const result = await Promise.race([
-        executor(startedTask.payload),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Task timeout')), this.config.taskTimeoutMs)
-        ),
-      ]);
-      const completedTask = completeTask(startedTask, result);
-      this.taskQueue.moveToCompleted(completedTask);
-      this.logger.debug('Task completed', { taskId: completedTask.id });
-      this.eventEmitter.emit('task:completed', { task: completedTask });
-      return completedTask;
-    } catch (error) {
-      const engineError = isEngineError(error)
-        ? error
-        : new EngineError(
-            EngineErrorCode.INTERNAL_ERROR,
-            `Task execution failed: ${error instanceof Error ? error.message : String(error)}`,
-            {
-              cause: error instanceof Error ? error : undefined,
-              context: undefined,
-            } as EngineErrorOptions
-          );
-      const failedTask = failTask(startedTask, engineError);
-      this.taskQueue.moveToCompleted(failedTask);
-      this.logger.error('Task failed', { taskId: failedTask.id, error: engineError.message });
-      this.eventEmitter.emit('task:failed', { task: failedTask, error: engineError });
-      throw engineError;
+      const currentTask = this.taskQueue.getTask(task.id);
+      if (!currentTask) {
+        const error = new EngineError(
+          EngineErrorCode.TASK_NOT_FOUND,
+          `Task ${task.id} not found in queue`
+        );
+        this.logger.error('Task execution failed', { taskId: task.id, error: error.message });
+        throw error;
+      }
+
+      if (currentTask.status !== TaskStatus.PENDING) {
+        const error = new EngineError(
+          EngineErrorCode.INTERNAL_ERROR,
+          `Cannot execute task in status ${currentTask.status}`
+        );
+        this.logger.error('Task execution failed', { taskId: task.id, error: error.message });
+        throw error;
+      }
+
+      const dequeuedTask = this.taskQueue.dequeue();
+      if (!dequeuedTask || dequeuedTask.id !== task.id) {
+        const error = new EngineError(
+          EngineErrorCode.TASK_NOT_FOUND,
+          `Task ${task.id} not at front of queue`
+        );
+        this.logger.error('Task execution failed', { taskId: task.id, error: error.message });
+        throw error;
+      }
+
+      const startedTask = startTask(dequeuedTask);
+      this.taskQueue.updateTask(startedTask);
+      this.logger.debug('Task started', { taskId: startedTask.id });
+      this.eventEmitter.emit('task:started', { task: startedTask });
+
+      try {
+        const result = await Promise.race([
+          executor(startedTask.payload),
+          new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error('Task timeout')), this.config.taskTimeoutMs)
+          ),
+        ]);
+        const completedTask = completeTask(startedTask, result);
+        this.taskQueue.moveToCompleted(completedTask);
+        this.logger.debug('Task completed', { taskId: completedTask.id });
+        this.eventEmitter.emit('task:completed', { task: completedTask });
+        return completedTask;
+      } catch (error) {
+        const engineError = isEngineError(error)
+          ? error
+          : new EngineError(
+              EngineErrorCode.INTERNAL_ERROR,
+              `Task execution failed: ${error instanceof Error ? error.message : String(error)}`,
+              {
+                cause: error instanceof Error ? error : undefined,
+                context: undefined,
+              } as EngineErrorOptions
+            );
+        const failedTask = failTask(startedTask, engineError);
+        this.taskQueue.moveToCompleted(failedTask);
+        this.logger.error('Task failed', { taskId: failedTask.id, error: engineError.message });
+        this.eventEmitter.emit('task:failed', { task: failedTask, error: engineError });
+        throw engineError;
+      }
+    } finally {
+      release();
     }
   }
 
@@ -311,7 +391,45 @@ export class Engine {
   }
 
   private sanitizeConfig(config: EngineConfig): Record<string, unknown> {
-    return { ...config };
+    const SENSITIVE_KEYS = [
+      'apiKey',
+      'api_key',
+      'token',
+      'secret',
+      'password',
+      'auth',
+      'credential',
+      'accessToken',
+      'refreshToken',
+      'apikey',
+      'clientSecret',
+      'client_secret',
+      'privateKey',
+      'private_key',
+      'authorization',
+      'bearer',
+    ];
+
+    function sanitize(value: unknown): unknown {
+      if (value === null || typeof value !== 'object') {
+        return value;
+      }
+      if (Array.isArray(value)) {
+        return value.map(sanitize);
+      }
+      const sanitized: Record<string, unknown> = {};
+      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+        const lowerKey = key.toLowerCase();
+        if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
+          sanitized[key] = '[REDACTED]';
+        } else {
+          sanitized[key] = sanitize(val);
+        }
+      }
+      return sanitized;
+    }
+
+    return sanitize(config) as Record<string, unknown>;
   }
 }
 
