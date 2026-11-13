@@ -19,7 +19,7 @@ describe('vscode-extension', () => {
     expect(pkg.default.activationEvents).toContain('onCommand:nexipi.start');
     expect(pkg.default.activationEvents).toContain('onCommand:nexipi.showOutput');
     expect(pkg.default.activationEvents).toContain('onCommand:nexipi.showInformation');
-    expect(pkg.default.contributes.commands).toHaveLength(3);
+    expect(pkg.default.contributes.commands).toHaveLength(4);
     expect(pkg.default.contributes.configuration.properties).toHaveProperty('nexipi.enabled');
     expect(pkg.default.contributes.configuration.properties).toHaveProperty('nexipi.logLevel');
   });
