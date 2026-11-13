@@ -37,7 +37,11 @@ describe('App', () => {
   it('renders welcome screen when viewMode is welcome', () => {
     render(<App />);
     expect(screen.getByText('Welcome to NexiPi')).toBeInTheDocument();
-    expect(screen.getByText('An extensible AI coding agent for Visual Studio Code. NexiPi helps you understand, write, and improve code through natural conversation.')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        'An extensible AI coding agent for Visual Studio Code. NexiPi helps you understand, write, and improve code through natural conversation.'
+      )
+    ).toBeInTheDocument();
   });
 
   it('renders prompt cards', () => {

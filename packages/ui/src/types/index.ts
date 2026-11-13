@@ -27,3 +27,15 @@ export interface ExtensionMessage {
   type: 'info' | 'error' | 'state';
   payload: unknown;
 }
+
+export interface VsCodeApi {
+  postMessage(message: unknown): void;
+  getState(): unknown;
+  setState(state: unknown): void;
+}
+
+declare global {
+  interface Window {
+    acquireVsCodeApi?: () => VsCodeApi;
+  }
+}

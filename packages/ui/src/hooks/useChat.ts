@@ -89,6 +89,17 @@ export function useChat() {
   );
 
   const postMessage = useCallback((message: WebviewMessage) => {
+    // Use VS Code Webview API when available (inside webview context)
+    // Fallback to window.parent.postMessage for development/testing outside webview
+    try {
+      const vscodeApi = window.acquireVsCodeApi?.();
+      if (vscodeApi) {
+        vscodeApi.postMessage(message);
+        return;
+      }
+    } catch {
+      // acquireVsCodeApi not available or already called
+    }
     if (window.parent !== window) {
       window.parent.postMessage(message, '*');
     }
