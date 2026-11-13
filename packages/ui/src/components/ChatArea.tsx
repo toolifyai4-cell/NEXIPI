@@ -11,7 +11,14 @@ export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps)
     return (
       <div className="nexipi-chat-empty" role="status" aria-live="polite">
         <div className="nexipi-empty-state">
-          <svg className="nexipi-empty-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+          <svg
+            className="nexipi-empty-icon"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+            aria-hidden="true"
+          >
             <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
           </svg>
           <p className="nexipi-empty-text">No messages yet</p>
@@ -25,7 +32,7 @@ export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps)
   return (
     <div className="nexipi-chat-area" role="log" aria-live="polite" aria-label="Conversation">
       <div className="nexipi-message-list">
-        {messages.map((message) => (
+        {messages.map(message => (
           <MessageBubble key={message.id} message={message} />
         ))}
         {isLoading && (
@@ -71,16 +78,12 @@ function MessageBubble({ message }: MessageBubbleProps) {
       </div>
       <div className="nexipi-message-content">
         <div className="nexipi-message-header">
-          <span className="nexipi-message-role">
-            {message.role === 'user' ? 'You' : 'NexiPi'}
-          </span>
+          <span className="nexipi-message-role">{message.role === 'user' ? 'You' : 'NexiPi'}</span>
           <time className="nexipi-message-time" dateTime={message.timestamp.toISOString()}>
             {timeString}
           </time>
         </div>
-        <div className="nexipi-message-text">
-          {formatMessage(message.content)}
-        </div>
+        <div className="nexipi-message-text">{formatMessage(message.content)}</div>
       </div>
     </article>
   );
@@ -89,7 +92,7 @@ function MessageBubble({ message }: MessageBubbleProps) {
 function formatMessage(content: string): React.ReactNode {
   // Simple markdown-like formatting for code blocks and inline code
   const parts = content.split(/(`[^`]+`|```[\s\S]*?```)/g);
-  
+
   return parts.map((part, index) => {
     if (part.startsWith('```') && part.endsWith('```')) {
       const code = part.slice(3, -3).trim();
@@ -100,7 +103,11 @@ function formatMessage(content: string): React.ReactNode {
       );
     }
     if (part.startsWith('`') && part.endsWith('`')) {
-      return <code key={index} className="nexipi-inline-code">{part.slice(1, -1)}</code>;
+      return (
+        <code key={index} className="nexipi-inline-code">
+          {part.slice(1, -1)}
+        </code>
+      );
     }
     return part.split('\n').map((line, i) => (
       <React.Fragment key={i}>

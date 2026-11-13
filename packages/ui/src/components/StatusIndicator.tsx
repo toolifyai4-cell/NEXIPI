@@ -15,7 +15,11 @@ export function StatusIndicator({ status, label }: StatusIndicatorProps) {
 
   return (
     <footer className="nexipi-status" role="status" aria-live="polite">
-      <div className="nexipi-status-indicator" style={{ backgroundColor: config.color }} aria-hidden="true" />
+      <div
+        className="nexipi-status-indicator"
+        style={{ backgroundColor: config.color }}
+        aria-hidden="true"
+      />
       <span className="nexipi-status-label">{label}</span>
     </footer>
   );

@@ -21,17 +21,10 @@ export function App() {
       <Header onNewChat={handleNewChat} onSettings={() => {}} />
       <main className="nexipi-main" role="main">
         {viewMode === 'welcome' ? (
-          <WelcomeScreen
-            prompts={welcomePrompts}
-            onPromptSelect={handlePromptSelect}
-          />
+          <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
         ) : (
           <>
-            <ChatArea
-              messages={messages}
-              isLoading={isLoading}
-              messagesEndRef={messagesEndRef}
-            />
+            <ChatArea messages={messages} isLoading={isLoading} messagesEndRef={messagesEndRef} />
             <Composer
               value={currentInput}
               onChange={setCurrentInput}
@@ -43,10 +36,7 @@ export function App() {
           </>
         )}
       </main>
-      <StatusIndicator
-        status="disconnected"
-        label="AI model not configured"
-      />
+      <StatusIndicator status="disconnected" label="AI model not configured" />
     </div>
   );
 }

@@ -7,7 +7,14 @@ interface ComposerProps {
   placeholder: string;
 }
 
-export function Composer({ value, onChange, onSend, onKeyDown, disabled, placeholder }: ComposerProps) {
+export function Composer({
+  value,
+  onChange,
+  onSend,
+  onKeyDown,
+  disabled,
+  placeholder,
+}: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -29,7 +36,12 @@ export function Composer({ value, onChange, onSend, onKeyDown, disabled, placeho
   };
 
   return (
-    <form className="nexipi-composer" onSubmit={handleSubmit} role="form" aria-label="Message composer">
+    <form
+      className="nexipi-composer"
+      onSubmit={handleSubmit}
+      role="form"
+      aria-label="Message composer"
+    >
       <div className="nexipi-composer-toolbar">
         <button
           type="button"
@@ -39,7 +51,13 @@ export function Composer({ value, onChange, onSend, onKeyDown, disabled, placeho
           title="Add context (not yet implemented)"
           disabled
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
             <path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5L15.5 3z" />
             <polyline points="15 3 15 9 21 9" />
             <path d="M10.5 15.5L12 17l4.5-4.5" />
@@ -55,7 +73,7 @@ export function Composer({ value, onChange, onSend, onKeyDown, disabled, placeho
           ref={textareaRef}
           className="nexipi-composer-input"
           value={value}
-          onChange={(e) => onChange(e.target.value)}
+          onChange={e => onChange(e.target.value)}
           onKeyDown={onKeyDown}
           disabled={disabled}
           placeholder={placeholder}
@@ -77,7 +95,13 @@ export function Composer({ value, onChange, onSend, onKeyDown, disabled, placeho
           aria-label="Send message"
           title={disabled ? 'AI model not configured — coming in Phase 04' : 'Send message'}
         >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            aria-hidden="true"
+          >
             <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
           </svg>
         </button>

@@ -74,29 +74,23 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
 
     webviewView.webview.options = {
       enableScripts: true,
-      localResourceRoots: [
-        vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview'),
-      ],
+      localResourceRoots: [vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview')],
     };
 
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
-    webviewView.webview.onDidReceiveMessage(
-      (message) => this._onMessage(message),
-      undefined,
-      []
-    );
+    webviewView.webview.onDidReceiveMessage(message => this._onMessage(message), undefined, []);
 
     this._logger.info('Sidebar webview resolved');
   }
 
   private _getHtmlForWebview(webview: vscode.Webview): string {
-    const scriptUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.js')
-    );
-    const styleUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.css')
-    );
+    const scriptUri = webview
+      .asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.js'))
+      .toString();
+    const styleUri = webview
+      .asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.css'))
+      .toString();
 
     const nonce = this._getNonce();
 
@@ -156,7 +150,7 @@ function registerCommands(
   context: vscode.ExtensionContext,
   nexipiContext: NexiPiContext,
   config: vscode.WorkspaceConfiguration,
-  sidebarProvider: NexiPiSidebarProvider
+  _sidebarProvider: NexiPiSidebarProvider
 ): vscode.Disposable[] {
   const { outputChannel, statusBarItem, logger } = nexipiContext;
   const disposables: vscode.Disposable[] = [];
@@ -215,7 +209,7 @@ function registerCommands(
 
   const focusSidebarDisposable = vscode.commands.registerCommand('nexipi.focusSidebar', () => {
     logger.info('Command executed: nexipi.focusSidebar');
-    vscode.commands.executeCommand('workbench.view.extension.nexipi');
+    void vscode.commands.executeCommand('workbench.view.extension.nexipi');
   });
 
   disposables.push(

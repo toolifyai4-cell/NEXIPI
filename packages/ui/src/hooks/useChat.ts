@@ -44,7 +44,7 @@ export function useChat() {
       content,
       timestamp: new Date(),
     };
-    setMessages((prev) => [...prev, message]);
+    setMessages(prev => [...prev, message]);
     return message;
   }, []);
 
@@ -59,7 +59,10 @@ export function useChat() {
 
     // Simulate AI response delay - in Phase 04 this will be replaced with actual AI call
     setTimeout(() => {
-      addMessage('assistant', 'AI conversation functionality will be implemented in Phase 04. This is a placeholder response.');
+      addMessage(
+        'assistant',
+        'AI conversation functionality will be implemented in Phase 04. This is a placeholder response.'
+      );
       setIsLoading(false);
     }, 1000);
   }, [currentInput, isLoading, addMessage]);
@@ -75,12 +78,15 @@ export function useChat() {
     setCurrentInput(prompt);
   }, []);
 
-  const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      sendMessage();
-    }
-  }, [sendMessage]);
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendMessage();
+      }
+    },
+    [sendMessage]
+  );
 
   const postMessage = useCallback((message: WebviewMessage) => {
     if (window.parent !== window) {

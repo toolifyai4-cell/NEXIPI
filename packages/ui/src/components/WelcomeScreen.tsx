@@ -19,7 +19,13 @@ export function WelcomeScreen({ prompts, onPromptSelect }: WelcomeScreenProps) {
     <div className="nexipi-welcome" role="region" aria-label="Welcome">
       <div className="nexipi-welcome-content">
         <div className="nexipi-welcome-brand" aria-hidden="true">
-          <svg className="nexipi-logo-large" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+          <svg
+            className="nexipi-logo-large"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.5"
+          >
             <path d="M12 2L2 7l10 5 10-5-10-5z" />
             <path d="M2 17l10 5 10-5" />
             <path d="M2 12l10 5 10-5" />
@@ -27,15 +33,15 @@ export function WelcomeScreen({ prompts, onPromptSelect }: WelcomeScreenProps) {
         </div>
         <h1 className="nexipi-welcome-title">Welcome to NexiPi</h1>
         <p className="nexipi-welcome-description">
-          An extensible AI coding agent for Visual Studio Code.
-          NexiPi helps you understand, write, and improve code through natural conversation.
+          An extensible AI coding agent for Visual Studio Code. NexiPi helps you understand, write,
+          and improve code through natural conversation.
         </p>
         <div className="nexipi-welcome-prompts">
           {Object.entries(promptGroups).map(([groupTitle, groupPrompts]) => (
             <div key={groupTitle} className="nexipi-prompt-group">
               <h2 className="nexipi-prompt-group-title">{groupTitle}</h2>
               <div className="nexipi-prompt-list" role="list">
-                {groupPrompts.map((prompt) => (
+                {groupPrompts.map(prompt => (
                   <button
                     key={prompt.label}
                     className="nexipi-prompt-card"
@@ -45,7 +51,14 @@ export function WelcomeScreen({ prompts, onPromptSelect }: WelcomeScreenProps) {
                   >
                     <span className="nexipi-prompt-label">{prompt.label}</span>
                     <span className="nexipi-prompt-preview">{prompt.prompt}</span>
-                    <svg className="nexipi-prompt-arrow" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                    <svg
+                      className="nexipi-prompt-arrow"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2"
+                      aria-hidden="true"
+                    >
                       <path d="M5 12h14M12 5l7 7-7 7" />
                     </svg>
                   </button>
