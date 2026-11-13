@@ -4,10 +4,9 @@ import { resolve } from 'path';
 
 export default defineConfig({
   plugins: [react()],
-  root: './src',
   base: '',
   build: {
-    outDir: '../../apps/vscode-extension/dist/webview',
+    outDir: resolve(__dirname, '../../apps/vscode-extension/dist/webview'),
     emptyOutDir: true,
     rollupOptions: {
       input: {

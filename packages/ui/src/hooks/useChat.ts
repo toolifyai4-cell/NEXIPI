@@ -105,6 +105,10 @@ export function useChat() {
     }
   }, []);
 
+  useEffect(() => {
+    postMessage({ type: 'ready' });
+  }, [postMessage]);
+
   return {
     messages,
     isLoading,

@@ -92,6 +92,8 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
       .asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'main.css'))
       .toString();
 
+    this._logger.debug('Webview resource URIs', { scriptUri, styleUri });
+
     const nonce = this._getNonce();
 
     return `<!DOCTYPE html>
