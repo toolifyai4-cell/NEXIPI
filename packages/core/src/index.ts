@@ -23,6 +23,7 @@ export {
 export {
   EngineErrorCode,
   EngineError,
+  EngineErrorOptions,
   createEngineError,
   isEngineError,
   assertEngineError,
