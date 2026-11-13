@@ -145,7 +145,9 @@ describe('timeout vs concurrency', () => {
     // Now both slots are used (task1's executor + task2's executor)
     // Try to start a third task - should fail
     const task3 = engine.createTask('fast', { id: 3 });
-    await expect(engine.executeTask(task3, async () => ({ done: true }))).rejects.toThrow('Concurrency limit reached');
+    await expect(engine.executeTask(task3, async () => ({ done: true }))).rejects.toThrow(
+      'Concurrency limit reached'
+    );
 
     // Wait for task1's executor to finish
     await new Promise(resolve => setTimeout(resolve, 300));

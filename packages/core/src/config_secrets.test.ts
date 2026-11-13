@@ -103,7 +103,14 @@ describe('configuration and secrets', () => {
     });
 
     it('should sanitize meta in logger', () => {
-      const logger = createLogger({ logLevel: 'debug', name: 'test', version: '1.0.0', maxConcurrentTasks: 10, taskTimeoutMs: 30000, enableTelemetry: false });
+      const logger = createLogger({
+        logLevel: 'debug',
+        name: 'test',
+        version: '1.0.0',
+        maxConcurrentTasks: 10,
+        taskTimeoutMs: 30000,
+        enableTelemetry: false,
+      });
 
       const logs: string[] = [];
       const originalLog = console.log;

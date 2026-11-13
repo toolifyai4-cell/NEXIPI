@@ -278,10 +278,28 @@ export class Engine {
       this.eventEmitter.emit('task:cancelled', { task });
     }
 
-    // Wait for all active executors to settle before completing stop
-    // This prevents old executors from continuing after restart
+    // Wait for all active executors to settle before completing stop,
+    // but with a bounded timeout to prevent indefinite hanging.
+    // Note: JavaScript cannot forcibly terminate arbitrary promises;
+    // this timeout only bounds the *wait*, not the executor execution.
     if (this.activeExecutors.size > 0) {
-      await Promise.allSettled(this.activeExecutors.values());
+      const executorPromises = Array.from(this.activeExecutors.values());
+      const shutdownTimeoutMs = this.config.shutdownTimeoutMs;
+
+      const waitPromise = Promise.allSettled(executorPromises);
+      const timeoutPromise = new Promise<void>(resolve =>
+        setTimeout(() => resolve(), shutdownTimeoutMs)
+      );
+
+      await Promise.race([waitPromise, timeoutPromise]);
+
+      const remainingCount = this.activeExecutors.size;
+      if (remainingCount > 0) {
+        this.logger.warn('Shutdown timeout reached, some executors did not settle', {
+          remainingExecutors: remainingCount,
+          shutdownTimeoutMs,
+        });
+      }
       this.activeExecutors.clear();
     }
 
@@ -413,22 +431,28 @@ export class Engine {
         release2();
       }
 
+      const isTimeout = engineError.message.includes('Task timeout');
+      if (isTimeout) {
+        this.eventEmitter.emit('task:timeout', { task: failedTask });
+      }
       this.logger.error('Task failed', { taskId: failedTask.id, error: engineError.message });
       this.eventEmitter.emit('task:failed', { task: failedTask, error: engineError });
 
       // Wait for executor to actually settle before releasing the concurrency slot
-      void executorPromise.finally(() => {
-        void this.executionMutex.acquire().then(release3 => {
-          try {
-            this.taskQueue.moveToCompleted(failedTask);
-            this.activeExecutors.delete(startedTask.id);
-          } finally {
-            release3();
-          }
+      void executorPromise
+        .finally(() => {
+          void this.executionMutex.acquire().then(release3 => {
+            try {
+              this.taskQueue.moveToCompleted(failedTask);
+              this.activeExecutors.delete(startedTask.id);
+            } finally {
+              release3();
+            }
+          });
+        })
+        .catch(() => {
+          // Ignore errors from the executor itself
         });
-      }).catch(() => {
-        // Ignore errors from the executor itself
-      });
 
       throw engineError;
     }
@@ -455,18 +479,20 @@ export class Engine {
         this.eventEmitter.emit('task:cancelled', { task: cancelledTask });
 
         // Wait for executor to settle, then move to completed
-        void executorPromise.finally(() => {
-          void this.executionMutex.acquire().then(release => {
-            try {
-              this.taskQueue.moveToCompleted(cancelledTask);
-              this.activeExecutors.delete(taskId);
-            } finally {
-              release();
-            }
+        void executorPromise
+          .finally(() => {
+            void this.executionMutex.acquire().then(release => {
+              try {
+                this.taskQueue.moveToCompleted(cancelledTask);
+                this.activeExecutors.delete(taskId);
+              } finally {
+                release();
+              }
+            });
+          })
+          .catch(() => {
+            // Ignore errors
           });
-        }).catch(() => {
-          // Ignore errors
-        });
         return true;
       }
     }

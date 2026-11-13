@@ -6,6 +6,7 @@ export const EngineConfigSchema = z.object({
   logLevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
   maxConcurrentTasks: z.number().int().positive().default(10),
   taskTimeoutMs: z.number().int().positive().default(30000),
+  shutdownTimeoutMs: z.number().int().positive().default(10000),
   enableTelemetry: z.boolean().default(false),
 });
 
@@ -17,6 +18,7 @@ export const defaultEngineConfig: EngineConfig = {
   logLevel: 'info',
   maxConcurrentTasks: 10,
   taskTimeoutMs: 30000,
+  shutdownTimeoutMs: 10000,
   enableTelemetry: false,
 };
 
