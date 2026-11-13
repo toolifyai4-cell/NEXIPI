@@ -16,6 +16,61 @@ export enum EngineErrorCode {
   INTERNAL_ERROR = 'INTERNAL_ERROR',
 }
 
+const SENSITIVE_KEYS = [
+  'apiKey',
+  'api_key',
+  'token',
+  'secret',
+  'password',
+  'auth',
+  'credential',
+  'accessToken',
+  'refreshToken',
+  'apikey',
+  'clientSecret',
+  'client_secret',
+  'privateKey',
+  'private_key',
+  'authorization',
+  'bearer',
+];
+
+function sanitizeContext(context?: Record<string, unknown>): Record<string, unknown> | undefined {
+  if (!context) {
+    return undefined;
+  }
+  const seen = new WeakSet<object>();
+
+  function sanitize(value: unknown): unknown {
+    if (value === null) {
+      return null;
+    }
+    if (typeof value !== 'object') {
+      return value;
+    }
+    if (seen.has(value)) {
+      return '[CIRCULAR]';
+    }
+    seen.add(value);
+
+    if (Array.isArray(value)) {
+      return value.map(sanitize);
+    }
+    const sanitized: Record<string, unknown> = {};
+    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
+      const lowerKey = key.toLowerCase();
+      if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
+        sanitized[key] = '[REDACTED]';
+      } else {
+        sanitized[key] = sanitize(val);
+      }
+    }
+    return sanitized;
+  }
+
+  return sanitize(context) as Record<string, unknown>;
+}
+
 export type EngineErrorOptions = {
   cause?: Error | undefined;
   context?: Record<string, unknown> | undefined;
@@ -42,7 +97,7 @@ export class EngineError extends Error {
       code: this.code,
       message: this.message,
       cause: this.cause?.message,
-      context: this.context,
+      context: sanitizeContext(this.context),
       stack: this.stack,
     };
   }

@@ -9,6 +9,9 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
     },
-    setupFiles: [resolve(__dirname, 'apps/vscode-extension/src/test-setup.ts')],
+    setupFiles: [
+      resolve(__dirname, 'apps/vscode-extension/src/test-setup.ts'),
+      resolve(__dirname, 'packages/core/src/test-setup.ts'),
+    ],
   },
 });

@@ -88,6 +88,7 @@ export class Engine {
   private initError?: EngineError;
   private readonly lifecycleMutex = createMutex();
   private readonly executionMutex = createMutex();
+  private readonly activeExecutors = new Map<TaskId, Promise<unknown>>();
 
   constructor(options: EngineOptions = {}) {
     this.config = mergeEngineConfig(defaultEngineConfig, options.config ?? {});
@@ -276,6 +277,14 @@ export class Engine {
     for (const task of cancelledTasks) {
       this.eventEmitter.emit('task:cancelled', { task });
     }
+
+    // Wait for all active executors to settle before completing stop
+    // This prevents old executors from continuing after restart
+    if (this.activeExecutors.size > 0) {
+      await Promise.allSettled(this.activeExecutors.values());
+      this.activeExecutors.clear();
+    }
+
     await new Promise(resolve => setTimeout(resolve, 0));
   }
 
@@ -325,6 +334,18 @@ export class Engine {
         throw error;
       }
 
+      // Check concurrency limit based on active executors
+      // (tasks in running queue are also tracked in activeExecutors)
+      const activeCount = this.activeExecutors.size;
+      if (activeCount >= this.config.maxConcurrentTasks) {
+        const error = new EngineError(
+          EngineErrorCode.INTERNAL_ERROR,
+          `Concurrency limit reached (max: ${this.config.maxConcurrentTasks})`
+        );
+        this.logger.error('Task execution failed', { taskId: task.id, error: error.message });
+        throw error;
+      }
+
       dequeuedTask = this.taskQueue.dequeue() as Task<T, R> | undefined;
       if (!dequeuedTask || dequeuedTask.id !== task.id) {
         const error = new EngineError(
@@ -344,19 +365,23 @@ export class Engine {
     }
 
     // Execute without holding the mutex to allow concurrency
+    const executorPromise = executor(startedTask.payload);
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Task timeout')), this.config.taskTimeoutMs)
+    );
+
+    // Track the executor until it settles to prevent concurrency limit bypass
+    this.activeExecutors.set(startedTask.id, executorPromise);
+
     try {
-      const result = await Promise.race([
-        executor(startedTask.payload),
-        new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Task timeout')), this.config.taskTimeoutMs)
-        ),
-      ]);
+      const result = await Promise.race([executorPromise, timeoutPromise]);
       const completedTask = completeTask(startedTask, result);
 
       // Re-acquire mutex to move to completed
       const release2 = await this.executionMutex.acquire();
       try {
         this.taskQueue.moveToCompleted(completedTask);
+        this.activeExecutors.delete(startedTask.id);
       } finally {
         release2();
       }
@@ -377,16 +402,34 @@ export class Engine {
           );
       const failedTask = failTask(startedTask, engineError);
 
-      // Re-acquire mutex to move to completed
+      // Re-acquire mutex to update task as failed (but keep in running until executor settles)
       const release2 = await this.executionMutex.acquire();
       try {
-        this.taskQueue.moveToCompleted(failedTask);
+        // On timeout/error, we keep the task in RUNNING state in the queue
+        // until the executor actually settles, to maintain accurate concurrency accounting
+        // The task is already marked FAILED for the caller, but stays in running map
+        this.taskQueue.updateTask(failedTask);
       } finally {
         release2();
       }
 
       this.logger.error('Task failed', { taskId: failedTask.id, error: engineError.message });
       this.eventEmitter.emit('task:failed', { task: failedTask, error: engineError });
+
+      // Wait for executor to actually settle before releasing the concurrency slot
+      void executorPromise.finally(() => {
+        void this.executionMutex.acquire().then(release3 => {
+          try {
+            this.taskQueue.moveToCompleted(failedTask);
+            this.activeExecutors.delete(startedTask.id);
+          } finally {
+            release3();
+          }
+        });
+      }).catch(() => {
+        // Ignore errors from the executor itself
+      });
+
       throw engineError;
     }
   }
@@ -399,6 +442,35 @@ export class Engine {
     if (isTaskTerminal(task)) {
       return false;
     }
+
+    // If task is running, we need to wait for its executor to settle
+    // to maintain accurate concurrency accounting
+    if (task.status === TaskStatus.RUNNING) {
+      const executorPromise = this.activeExecutors.get(taskId);
+      if (executorPromise) {
+        // Mark as cancelled but keep in running until executor settles
+        const cancelledTask = cancelTask(task);
+        this.taskQueue.updateTask(cancelledTask);
+        this.logger.debug('Task cancelled (running)', { taskId });
+        this.eventEmitter.emit('task:cancelled', { task: cancelledTask });
+
+        // Wait for executor to settle, then move to completed
+        void executorPromise.finally(() => {
+          void this.executionMutex.acquire().then(release => {
+            try {
+              this.taskQueue.moveToCompleted(cancelledTask);
+              this.activeExecutors.delete(taskId);
+            } finally {
+              release();
+            }
+          });
+        }).catch(() => {
+          // Ignore errors
+        });
+        return true;
+      }
+    }
+
     const cancelledTask = cancelTask(task);
     this.taskQueue.updateTask(cancelledTask);
     this.logger.debug('Task cancelled', { taskId });
