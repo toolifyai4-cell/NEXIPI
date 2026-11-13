@@ -46,9 +46,9 @@ const PROVIDER_ERROR_CODE_MAP: Record<string, ModelProviderErrorCode> = {
 
 export class ModelProviderError extends EngineError {
   public readonly providerId: string;
-  public readonly modelId: string | undefined;
+  public readonly modelId?: string;
   public readonly retryable: boolean;
-  public readonly providerErrorCode: string | undefined;
+  public readonly providerErrorCode?: string;
 
   constructor(
     code: ModelProviderErrorCode,
@@ -81,10 +81,6 @@ export class ModelProviderError extends EngineError {
       default:
         return false;
     }
-  }
-
-  override get name(): string {
-    return 'ModelProviderError';
   }
 
   static fromError(
@@ -159,7 +155,7 @@ export class ModelProviderError extends EngineError {
     const base = super.toJSON();
     return {
       ...base,
-      name: this.name,
+      name: 'ModelProviderError',
       providerId: this.providerId,
       modelId: this.modelId,
       retryable: this.retryable,
