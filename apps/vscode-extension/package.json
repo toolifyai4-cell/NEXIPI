@@ -69,16 +69,13 @@
     "menus": {
       "commandPalette": [
         {
-          "command": "nexipi.start",
-          "when": "nexipi.enabled"
+          "command": "nexipi.start"
         },
         {
-          "command": "nexipi.showOutput",
-          "when": "nexipi.enabled"
+          "command": "nexipi.showOutput"
         },
         {
-          "command": "nexipi.showInformation",
-          "when": "nexipi.enabled"
+          "command": "nexipi.showInformation"
         }
       ]
     }
