@@ -1,6 +1,5 @@
 import { Header, WelcomeScreen, ChatArea, Composer, StatusIndicator } from './components';
 import { useChat } from './hooks/useChat';
-import type { WebviewMessage } from './types';
 
 export function App() {
   const {
@@ -25,7 +24,6 @@ export function App() {
           <WelcomeScreen
             prompts={welcomePrompts}
             onPromptSelect={handlePromptSelect}
-            onNewChat={handleNewChat}
           />
         ) : (
           <>

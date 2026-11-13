@@ -1,13 +1,12 @@
 import { useMemo } from 'react';
-import type { WelcomePrompt } from '../hooks/useChat';
+import type { WelcomePrompt } from '../types';
 
 interface WelcomeScreenProps {
   prompts: WelcomePrompt[];
   onPromptSelect: (prompt: string) => void;
-  onNewChat: () => void;
 }
 
-export function WelcomeScreen({ prompts, onPromptSelect, onNewChat }: WelcomeScreenProps) {
+export function WelcomeScreen({ prompts, onPromptSelect }: WelcomeScreenProps) {
   const promptGroups = useMemo(() => {
     const groups = {
       'Get started': prompts.slice(0, 2),
@@ -36,7 +35,7 @@ export function WelcomeScreen({ prompts, onPromptSelect, onNewChat }: WelcomeScr
             <div key={groupTitle} className="nexipi-prompt-group">
               <h2 className="nexipi-prompt-group-title">{groupTitle}</h2>
               <div className="nexipi-prompt-list" role="list">
-                {groupPrompts.map((prompt, index) => (
+                {groupPrompts.map((prompt) => (
                   <button
                     key={prompt.label}
                     className="nexipi-prompt-card"
