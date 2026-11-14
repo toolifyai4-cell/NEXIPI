@@ -180,7 +180,13 @@ describe('streaming types', () => {
       const provider: StreamingProvider = {
         executeStream: vi.fn().mockReturnValue(
           (async function* () {
-            yield { type: 'stream:delta', conversationId: '', messageId: '', delta: '', timestamp: 0 };
+            yield {
+              type: 'stream:delta',
+              conversationId: '',
+              messageId: '',
+              delta: '',
+              timestamp: 0,
+            };
           })()
         ),
       };
@@ -224,7 +230,13 @@ describe('streaming types', () => {
       const provider: StreamingProvider = {
         executeStream: vi.fn().mockReturnValue(
           (async function* () {
-            yield { type: 'stream:delta', conversationId: '', messageId: '', delta: '', timestamp: 0 };
+            yield {
+              type: 'stream:delta',
+              conversationId: '',
+              messageId: '',
+              delta: '',
+              timestamp: 0,
+            };
           })()
         ),
       };

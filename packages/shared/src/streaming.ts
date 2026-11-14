@@ -10,11 +10,7 @@ export type UsageStatistics = {
 };
 
 export type StreamEventType =
-  | 'stream:start'
-  | 'stream:delta'
-  | 'stream:complete'
-  | 'stream:error'
-  | 'stream:cancel';
+  'stream:start' | 'stream:delta' | 'stream:complete' | 'stream:error' | 'stream:cancel';
 
 export interface StreamEventMap {
   'stream:start': StreamStartEvent;
@@ -70,11 +66,7 @@ export interface StreamCancelEvent {
 }
 
 export type StreamEvent =
-  | StreamStartEvent
-  | StreamDeltaEvent
-  | StreamCompleteEvent
-  | StreamErrorEvent
-  | StreamCancelEvent;
+  StreamStartEvent | StreamDeltaEvent | StreamCompleteEvent | StreamErrorEvent | StreamCancelEvent;
 
 export const StreamStartEventSchema = z.object({
   type: z.literal('stream:start'),
@@ -187,7 +179,12 @@ export function createStreamCompleteEvent(
 export function createStreamErrorEvent(
   conversationId: string,
   messageId: string,
-  error: { code: string; message: string; retryable: boolean; providerErrorCode?: string | undefined }
+  error: {
+    code: string;
+    message: string;
+    retryable: boolean;
+    providerErrorCode?: string | undefined;
+  }
 ): StreamErrorEvent {
   return {
     type: 'stream:error',
@@ -228,7 +225,7 @@ export interface StreamingProvider {
   executeStream(
     request: {
       readonly model: ModelId;
-      readonly messages: readonly { readonly role: string; readonly content: string }[];
+      readonly messages: ReadonlyArray<{ readonly role: string; readonly content: string }>;
       readonly parameters?: Record<string, unknown> | undefined;
     },
     signal?: AbortSignal
@@ -239,7 +236,7 @@ export interface NonStreamingProvider {
   execute(
     request: {
       readonly model: ModelId;
-      readonly messages: readonly { readonly role: string; readonly content: string }[];
+      readonly messages: ReadonlyArray<{ readonly role: string; readonly content: string }>;
       readonly parameters?: Record<string, unknown> | undefined;
     },
     signal?: AbortSignal
@@ -256,6 +253,8 @@ export function isStreamingProvider(provider: ProviderExecutor): provider is Str
   return typeof (provider as StreamingProvider).executeStream === 'function';
 }
 
-export function isNonStreamingProvider(provider: ProviderExecutor): provider is NonStreamingProvider {
+export function isNonStreamingProvider(
+  provider: ProviderExecutor
+): provider is NonStreamingProvider {
   return typeof (provider as NonStreamingProvider).execute === 'function';
 }

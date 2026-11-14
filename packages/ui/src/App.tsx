@@ -20,11 +20,11 @@ export function App() {
     welcomePrompts,
   } = useChat();
 
-  const composerDisabled = isLoading || !modelConfigured;
-
   const handleCancel = () => {
     // Find the active streaming message and cancel it
-    const activeMessage = messages.find(m => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending'));
+    const activeMessage = messages.find(
+      m => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending')
+    );
     if (activeMessage) {
       handleCancelMessage(activeMessage.id);
     }

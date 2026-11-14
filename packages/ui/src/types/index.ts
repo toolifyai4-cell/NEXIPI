@@ -1,8 +1,18 @@
-import type { Message as SharedMessage, Conversation as SharedConversation, MessageStatus, MessageRole } from '@nexipi/shared';
+import type {
+  Message as SharedMessage,
+  Conversation as SharedConversation,
+  MessageStatus as SharedMessageStatus,
+  MessageRole as SharedMessageRole,
+  MessageId as SharedMessageId,
+  ConversationId as SharedConversationId,
+} from '@nexipi/shared';
 
-export interface Message extends SharedMessage {}
-export type MessageStatus = MessageStatus;
-export type MessageRole = MessageRole;
+export type Message = SharedMessage;
+export type Conversation = SharedConversation;
+export type MessageStatus = SharedMessageStatus;
+export type MessageRole = SharedMessageRole;
+export type MessageId = SharedMessageId;
+export type ConversationId = SharedConversationId;
 
 export interface ChatState {
   messages: Message[];
@@ -17,15 +27,28 @@ export interface WelcomePrompt {
   prompt: string;
 }
 
-export interface Conversation extends SharedConversation {}
-
 export interface WebviewMessage {
-  type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready' | 'openSettings' | 'cancelMessage' | 'retryMessage';
+  type:
+    | 'sendMessage'
+    | 'newChat'
+    | 'promptSelected'
+    | 'ready'
+    | 'openSettings'
+    | 'cancelMessage'
+    | 'retryMessage';
   payload?: unknown;
 }
 
 export interface ExtensionMessage {
-  type: 'info' | 'error' | 'state' | 'settingsOpened' | 'chatCleared' | 'streamEvent' | 'messageCreated' | 'messageUpdated';
+  type:
+    | 'info'
+    | 'error'
+    | 'state'
+    | 'settingsOpened'
+    | 'chatCleared'
+    | 'streamEvent'
+    | 'messageCreated'
+    | 'messageUpdated';
   payload: unknown;
 }
 

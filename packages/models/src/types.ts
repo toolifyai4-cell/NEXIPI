@@ -1,5 +1,11 @@
 import { z } from 'zod';
-import type { ModelId, UsageStatistics, StreamDeltaEvent, StreamCompleteEvent, StreamErrorEvent } from '@nexipi/shared';
+import type {
+  ModelId,
+  UsageStatistics,
+  StreamDeltaEvent,
+  StreamCompleteEvent,
+  StreamErrorEvent,
+} from '@nexipi/shared';
 
 export type ProviderId = string & { readonly __brand: unique symbol };
 
@@ -269,7 +275,10 @@ export interface ModelProvider {
   validateRequest(request: ModelRequest): Promise<ValidationResult>;
 
   execute(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>;
-  executeStream?(request: ModelRequest, signal?: AbortSignal): AsyncIterable<StreamDeltaEvent | StreamCompleteEvent | StreamErrorEvent>;
+  executeStream?(
+    request: ModelRequest,
+    signal?: AbortSignal
+  ): AsyncIterable<StreamDeltaEvent | StreamCompleteEvent | StreamErrorEvent>;
 
   healthCheck(): Promise<ProviderHealth>;
 }

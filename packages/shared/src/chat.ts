@@ -13,12 +13,7 @@ export function createMessageId(id: string): MessageId {
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
-export type MessageStatus =
-  | 'pending'
-  | 'streaming'
-  | 'completed'
-  | 'failed'
-  | 'cancelled';
+export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
 
 export const MessageStatusSchema = z.enum([
   'pending',
@@ -137,7 +132,9 @@ export function appendMessageContent(message: Message, delta: string): Message {
 }
 
 export function isMessageTerminal(message: Message): boolean {
-  return message.status === 'completed' || message.status === 'failed' || message.status === 'cancelled';
+  return (
+    message.status === 'completed' || message.status === 'failed' || message.status === 'cancelled'
+  );
 }
 
 export function isMessageActive(message: Message): boolean {

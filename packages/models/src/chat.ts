@@ -1,10 +1,9 @@
 import { EventEmitter, type EventMap, type EventName } from '@nexipi/core';
 import { createLogger, type Logger } from '@nexipi/core';
-import { EngineError, EngineErrorCode, isEngineError, type EngineErrorOptions } from '@nexipi/core';
-import { sanitize } from '@nexipi/core';
+import { EngineError, EngineErrorCode, type EngineErrorOptions } from '@nexipi/core';
 import {
-  ConversationId,
-  MessageId,
+  type ConversationId,
+  type MessageId,
   type Message,
   type MessageRole,
   type MessageStatus,
@@ -12,30 +11,22 @@ import {
   type ConversationState,
   createConversation,
   createMessage,
-  updateMessageStatus,
-  appendMessageContent,
   isMessageTerminal,
   isMessageActive,
 } from '@nexipi/shared';
 import type {
   ModelProvider,
   ModelRequest,
-  ModelResponse,
   ModelId,
   ProviderId,
   GenerationParameters,
   ModelMessage,
 } from './types.js';
-import { ProviderRegistry, createProviderRegistry } from './registry.js';
+import type { ProviderRegistry } from './registry.js';
+import { createProviderRegistry } from './registry.js';
 import {
   type StreamEvent,
-  type StreamStartEvent,
-  type StreamDeltaEvent,
-  type StreamCompleteEvent,
-  type StreamErrorEvent,
-  type StreamCancelEvent,
   createStreamStartEvent,
-  createStreamDeltaEvent,
   createStreamCompleteEvent,
   createStreamErrorEvent,
   createStreamCancelEvent,
@@ -49,7 +40,12 @@ export interface ChatServiceEvents extends EventMap {
   'message:updated': { message: Message; timestamp: number };
   'message:deleted': { messageId: MessageId; conversationId: ConversationId; timestamp: number };
   'stream:event': { event: StreamEvent; timestamp: number };
-  'chat:error': { error: EngineError; conversationId?: ConversationId; messageId?: MessageId; timestamp: number };
+  'chat:error': {
+    error: EngineError;
+    conversationId?: ConversationId;
+    messageId?: MessageId;
+    timestamp: number;
+  };
 }
 
 export interface ChatServiceOptions {
@@ -82,15 +78,17 @@ export class ChatService {
     this.providerRegistry = options.providerRegistry ?? createProviderRegistry();
     this.defaultModel = options.defaultModel;
     this.defaultProvider = options.defaultProvider;
-    this.logger = options.logger ?? createLogger({
-      name: 'chat-service',
-      version: '0.0.1',
-      logLevel: 'info',
-      maxConcurrentTasks: 10,
-      taskTimeoutMs: 30000,
-      shutdownTimeoutMs: 10000,
-      enableTelemetry: false,
-    });
+    this.logger =
+      options.logger ??
+      createLogger({
+        name: 'chat-service',
+        version: '0.0.1',
+        logLevel: 'info',
+        maxConcurrentTasks: 10,
+        taskTimeoutMs: 30000,
+        shutdownTimeoutMs: 10000,
+        enableTelemetry: false,
+      });
     this.maxHistoryLength = options.maxHistoryLength ?? 100;
     this.eventEmitter = new EventEmitter<ChatServiceEvents>({
       onListenerError: (error, eventName) => {
@@ -112,7 +110,8 @@ export class ChatService {
   }
 
   createConversation(title: string = 'New Conversation'): Conversation {
-    const conversationId = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}` as ConversationId;
+    const conversationId =
+      `${Date.now()}-${Math.random().toString(36).substr(2, 9)}` as ConversationId;
     const conversation = createConversation(conversationId, title);
     this.conversations.set(conversationId, conversation);
     this.messages.set(conversationId, new Map());
@@ -141,7 +140,10 @@ export class ChatService {
     };
     this.conversations.set(conversationId, updated);
     this.logger.debug('Conversation title updated', { conversationId, title });
-    this.eventEmitter.emit('conversation:updated', { conversation: updated, timestamp: Date.now() });
+    this.eventEmitter.emit('conversation:updated', {
+      conversation: updated,
+      timestamp: Date.now(),
+    });
     return updated;
   }
 
@@ -238,7 +240,11 @@ export class ChatService {
     if (deleted) {
       this.updateConversationTimestamp(conversationId);
       this.logger.debug('Message deleted', { conversationId, messageId });
-      this.eventEmitter.emit('message:deleted', { messageId, conversationId, timestamp: Date.now() });
+      this.eventEmitter.emit('message:deleted', {
+        messageId,
+        conversationId,
+        timestamp: Date.now(),
+      });
     }
     return deleted;
   }
@@ -262,6 +268,7 @@ export class ChatService {
     };
   }
 
+  // eslint-disable-next-line @typescript-eslint/require-await
   async sendMessage(
     conversationId: ConversationId,
     content: string,
@@ -274,7 +281,10 @@ export class ChatService {
   ): Promise<MessageId> {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
-      throw new EngineError(EngineErrorCode.INVALID_CONFIGURATION, `Conversation ${conversationId} not found`);
+      throw new EngineError(
+        EngineErrorCode.INVALID_CONFIGURATION,
+        `Conversation ${conversationId} not found`
+      );
     }
 
     const userMessage = this.addMessage(conversationId, 'user', content, 'completed');
@@ -288,7 +298,12 @@ export class ChatService {
     }
 
     const controller = new AbortController();
-    const streamPromise = this.executeStream(conversationId, assistantMessage.id, controller.signal, options);
+    const streamPromise = this.executeStream(
+      conversationId,
+      assistantMessage.id,
+      controller.signal,
+      options
+    );
 
     const activeStream: ActiveStream = {
       controller,
@@ -304,7 +319,7 @@ export class ChatService {
       .then(() => {
         this.activeStreams.delete(assistantMessage.id);
       })
-      .catch((error) => {
+      .catch(error => {
         this.activeStreams.delete(assistantMessage.id);
         if (!controller.signal.aborted) {
           this.logger.error('Stream execution failed', {
@@ -333,7 +348,7 @@ export class ChatService {
     const modelId = options.model ?? this.defaultModel;
 
     if (!providerId) {
-      await this.handleStreamError(conversationId, messageId, {
+      this.handleStreamError(conversationId, messageId, {
         code: 'NO_PROVIDER',
         message: 'No model provider configured',
         retryable: false,
@@ -342,7 +357,7 @@ export class ChatService {
     }
 
     if (!modelId) {
-      await this.handleStreamError(conversationId, messageId, {
+      this.handleStreamError(conversationId, messageId, {
         code: 'NO_MODEL',
         message: 'No model selected',
         retryable: false,
@@ -352,7 +367,7 @@ export class ChatService {
 
     const provider = this.providerRegistry.get(providerId);
     if (!provider) {
-      await this.handleStreamError(conversationId, messageId, {
+      this.handleStreamError(conversationId, messageId, {
         code: 'PROVIDER_NOT_FOUND',
         message: `Provider ${providerId} not found`,
         retryable: false,
@@ -362,7 +377,7 @@ export class ChatService {
 
     const modelMetadata = provider.getModel(modelId);
     if (!modelMetadata) {
-      await this.handleStreamError(conversationId, messageId, {
+      this.handleStreamError(conversationId, messageId, {
         code: 'MODEL_NOT_FOUND',
         message: `Model ${modelId} not found in provider ${providerId}`,
         retryable: false,
@@ -393,20 +408,26 @@ export class ChatService {
     try {
       // Check if provider supports streaming
       const supportsStreaming = typeof provider.executeStream === 'function';
-      
+
       if (supportsStreaming) {
         await this.executeStreamingProvider(provider, request, conversationId, messageId, signal);
       } else if (typeof provider.execute === 'function') {
-        await this.executeNonStreamingProvider(provider, request, conversationId, messageId, signal);
+        await this.executeNonStreamingProvider(
+          provider,
+          request,
+          conversationId,
+          messageId,
+          signal
+        );
       } else {
-        await this.handleStreamError(conversationId, messageId, {
+        this.handleStreamError(conversationId, messageId, {
           code: 'PROVIDER_NOT_SUPPORTED',
           message: 'Provider does not implement execute or executeStream',
           retryable: false,
         });
       }
     } catch (error) {
-      if (signal.aborted || error instanceof DOMException && error.name === 'AbortError') {
+      if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         this.logger.info('Stream cancelled', { conversationId, messageId });
         this.eventEmitter.emit('stream:event', {
           event: createStreamCancelEvent(conversationId, messageId),
@@ -452,7 +473,10 @@ export class ChatService {
         this.eventEmitter.emit('stream:event', { event, timestamp: Date.now() });
       } else if (event.type === 'stream:complete') {
         if (hasCompleted) {
-          this.logger.warn('Duplicate stream:complete event ignored', { conversationId, messageId });
+          this.logger.warn('Duplicate stream:complete event ignored', {
+            conversationId,
+            messageId,
+          });
           continue;
         }
         hasCompleted = true;
@@ -474,7 +498,7 @@ export class ChatService {
           continue;
         }
         hasCompleted = true;
-        await this.handleStreamError(conversationId, messageId, event.error);
+        this.handleStreamError(conversationId, messageId, event.error);
         break;
       }
     }
@@ -516,7 +540,10 @@ export class ChatService {
       );
 
       this.updateMessage(conversationId, messageId, {
-        content: typeof result.choices[0]?.message.content === 'string' ? result.choices[0].message.content : '',
+        content:
+          typeof result.choices[0]?.message.content === 'string'
+            ? result.choices[0].message.content
+            : '',
         status: 'completed',
         metadata: {
           usage: result.usage,
@@ -526,10 +553,10 @@ export class ChatService {
 
       this.eventEmitter.emit('stream:event', { event: completeEvent, timestamp: Date.now() });
     } catch (error) {
-      if (signal.aborted || error instanceof DOMException && error.name === 'AbortError') {
+      if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         throw error;
       }
-      await this.handleStreamError(conversationId, messageId, {
+      this.handleStreamError(conversationId, messageId, {
         code: 'EXECUTION_FAILED',
         message: error instanceof Error ? error.message : String(error),
         retryable: true,
@@ -537,11 +564,16 @@ export class ChatService {
     }
   }
 
-  private async handleStreamError(
+  private handleStreamError(
     conversationId: ConversationId,
     messageId: MessageId,
-    error: { code: string; message: string; retryable: boolean; providerErrorCode?: string | undefined }
-  ): Promise<void> {
+    error: {
+      code: string;
+      message: string;
+      retryable: boolean;
+      providerErrorCode?: string | undefined;
+    }
+  ): void {
     const errorEvent = createStreamErrorEvent(conversationId, messageId, error);
 
     this.updateMessage(conversationId, messageId, {
@@ -606,7 +638,10 @@ export class ChatService {
     return false;
   }
 
-  retryMessage(conversationId: ConversationId, messageId: MessageId): Promise<MessageId | undefined> {
+  retryMessage(
+    conversationId: ConversationId,
+    messageId: MessageId
+  ): Promise<MessageId | undefined> {
     const message = this.getMessage(conversationId, messageId);
     if (!message || message.role !== 'assistant') {
       return Promise.resolve(undefined);
@@ -653,7 +688,7 @@ export class ChatService {
     }
   }
 
-  async dispose(): Promise<void> {
+  dispose(): void {
     for (const stream of this.activeStreams.values()) {
       stream.controller.abort();
     }

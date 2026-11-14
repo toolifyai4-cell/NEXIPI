@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChatService, createChatService } from './chat.js';
 import { createProviderRegistry } from './registry.js';
-import { createProviderId, createModelId, type ModelProvider, type ModelMetadata, type ProviderHealth } from './types.js';
+import {
+  createProviderId,
+  createModelId,
+  type ModelProvider,
+  type ModelMetadata,
+  type ProviderHealth,
+} from './types.js';
 import { EngineErrorCode, isEngineError } from './errors.js';
 import type { StreamEvent } from '@nexipi/core';
 
@@ -288,7 +294,9 @@ describe('ChatService', () => {
     });
 
     it('should merge metadata when updating', () => {
-      const message = chatService.addMessage(conversationId, 'assistant', 'Test', 'pending', { a: 1 });
+      const message = chatService.addMessage(conversationId, 'assistant', 'Test', 'pending', {
+        a: 1,
+      });
       const updated = chatService.updateMessage(conversationId, message!.id, {
         metadata: { b: 2 },
       });
@@ -367,9 +375,15 @@ describe('ChatService', () => {
     it('should capture error from failed message', () => {
       const conversation = chatService.createConversation('Error Test');
       chatService.addMessage(conversation.id, 'user', 'Hello');
-      const failedMsg = chatService.addMessage(conversation.id, 'assistant', 'Error occurred', 'failed', {
-        error: { code: 'TEST', message: 'Test error', retryable: false },
-      });
+      const failedMsg = chatService.addMessage(
+        conversation.id,
+        'assistant',
+        'Error occurred',
+        'failed',
+        {
+          error: { code: 'TEST', message: 'Test error', retryable: false },
+        }
+      );
 
       const state = chatService.getConversationState(conversation.id);
 
@@ -391,9 +405,27 @@ describe('ChatService', () => {
       let yieldCount = 0;
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Hello', timestamp: Date.now() };
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: ' world', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Hello',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: ' world',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -408,9 +440,21 @@ describe('ChatService', () => {
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
           for (const delta of deltas) {
-            yield { type: 'stream:delta', conversationId: '', messageId: '', delta, timestamp: Date.now() };
+            yield {
+              type: 'stream:delta',
+              conversationId: '',
+              messageId: '',
+              delta,
+              timestamp: Date.now(),
+            };
           }
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -430,8 +474,20 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Test', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Test',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -448,7 +504,13 @@ describe('ChatService', () => {
     it('should handle stream error', async () => {
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Partial', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Partial',
+            timestamp: Date.now(),
+          };
           yield {
             type: 'stream:error',
             conversationId: '',
@@ -471,8 +533,21 @@ describe('ChatService', () => {
       const usage = { promptTokens: 10, completionTokens: 20, totalTokens: 30 };
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Test', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', usage, timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Test',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            usage,
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -505,7 +580,11 @@ describe('ChatService', () => {
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
       expect(finalMessage?.content).toBe('Non-streaming response');
       expect(finalMessage?.status).toBe('completed');
-      expect(finalMessage?.metadata?.usage).toEqual({ promptTokens: 5, completionTokens: 10, totalTokens: 15 });
+      expect(finalMessage?.metadata?.usage).toEqual({
+        promptTokens: 5,
+        completionTokens: 10,
+        totalTokens: 15,
+      });
     });
   });
 
@@ -525,9 +604,21 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Start',
+            timestamp: Date.now(),
+          };
           await completePromise;
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -550,9 +641,21 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Start',
+            timestamp: Date.now(),
+          };
           await completePromise;
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -584,7 +687,13 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Start',
+            timestamp: Date.now(),
+          };
           await completePromise;
         })()
       );
@@ -616,8 +725,20 @@ describe('ChatService', () => {
       const failedMessage = chatService.addMessage(conversationId, 'assistant', 'Error', 'failed');
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Retry', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Retry',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -631,11 +752,28 @@ describe('ChatService', () => {
     });
 
     it('should retry cancelled message', async () => {
-      const cancelledMessage = chatService.addMessage(conversationId, 'assistant', 'Cancelled', 'cancelled');
+      const cancelledMessage = chatService.addMessage(
+        conversationId,
+        'assistant',
+        'Cancelled',
+        'cancelled'
+      );
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Retry', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Retry',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -646,13 +784,23 @@ describe('ChatService', () => {
     });
 
     it('should return undefined for completed message', () => {
-      const completedMessage = chatService.addMessage(conversationId, 'assistant', 'Done', 'completed');
+      const completedMessage = chatService.addMessage(
+        conversationId,
+        'assistant',
+        'Done',
+        'completed'
+      );
       const newMessageId = chatService.retryMessage(conversationId, completedMessage!.id);
       expect(newMessageId).toBeUndefined();
     });
 
     it('should return undefined for streaming message', () => {
-      const streamingMessage = chatService.addMessage(conversationId, 'assistant', 'Generating', 'streaming');
+      const streamingMessage = chatService.addMessage(
+        conversationId,
+        'assistant',
+        'Generating',
+        'streaming'
+      );
       const newMessageId = chatService.retryMessage(conversationId, streamingMessage!.id);
       expect(newMessageId).toBeUndefined();
     });
@@ -747,8 +895,20 @@ describe('ChatService', () => {
       let capturedRequest: any;
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Response', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Response',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -776,8 +936,20 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Response', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Response',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
@@ -793,17 +965,34 @@ describe('ChatService', () => {
     it('should include system prompt when provided', async () => {
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Response', timestamp: Date.now() };
-          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Response',
+            timestamp: Date.now(),
+          };
+          yield {
+            type: 'stream:complete',
+            conversationId: '',
+            messageId: '',
+            finishReason: 'stop',
+            timestamp: Date.now(),
+          };
         })()
       );
 
-      await chatService.sendMessage(conversationId, 'Test', { systemPrompt: 'You are a helpful assistant' });
+      await chatService.sendMessage(conversationId, 'Test', {
+        systemPrompt: 'You are a helpful assistant',
+      });
       await new Promise(resolve => setTimeout(resolve, 50));
 
       const call = mockStreamingProvider.executeStream.mock.calls[0];
       const request = call[0];
-      expect(request.messages[0]).toEqual({ role: 'system', content: 'You are a helpful assistant' });
+      expect(request.messages[0]).toEqual({
+        role: 'system',
+        content: 'You are a helpful assistant',
+      });
     });
   });
 
@@ -816,7 +1005,13 @@ describe('ChatService', () => {
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
+          yield {
+            type: 'stream:delta',
+            conversationId: '',
+            messageId: '',
+            delta: 'Start',
+            timestamp: Date.now(),
+          };
           await completePromise;
         })()
       );

@@ -16,6 +16,8 @@ import type {
   MessageUpdatedPayload,
   CancelMessagePayload,
   RetryMessagePayload,
+  MessageId,
+  ConversationId,
 } from '../types';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -62,25 +64,42 @@ export function useChat(options: UseChatOptions = {}) {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  const addMessage = useCallback((role: Message['role'], content: string, status: Message['status'] = 'pending', metadata?: Record<string, unknown>) => {
-    const message: Message = {
-      id: generateId(),
-      conversationId: conversationId ?? generateId(),
-      role,
-      content,
-      status,
-      timestamp: Date.now(),
-      metadata,
-    };
-    setMessages(prev => [...prev, message]);
-    return message;
-  }, [conversationId]);
+  const addMessage = useCallback(
+    (
+      role: Message['role'],
+      content: string,
+      status: Message['status'] = 'pending',
+      metadata?: Record<string, unknown>
+    ) => {
+      const messageId = generateId() as MessageId;
+      const convId = (conversationId ?? generateId()) as ConversationId;
+      const message: Message = {
+        id: messageId,
+        conversationId: convId,
+        role,
+        content,
+        status,
+        timestamp: Date.now(),
+        metadata,
+      };
+      setMessages(prev => [...prev, message]);
+      return message;
+    },
+    [conversationId]
+  );
 
-  const updateMessage = useCallback((messageId: string, updates: Partial<Pick<Message, 'content' | 'status' | 'metadata'>>) => {
-    setMessages(prev => prev.map(msg =>
-      msg.id === messageId ? { ...msg, ...updates, metadata: { ...msg.metadata, ...updates.metadata } } : msg
-    ));
-  }, []);
+  const updateMessage = useCallback(
+    (messageId: string, updates: Partial<Pick<Message, 'content' | 'status' | 'metadata'>>) => {
+      setMessages(prev =>
+        prev.map(msg =>
+          msg.id === messageId
+            ? { ...msg, ...updates, metadata: { ...msg.metadata, ...updates.metadata } }
+            : msg
+        )
+      );
+    },
+    []
+  );
 
   const resetLoadingState = useCallback(() => {
     setIsLoading(false);
@@ -154,56 +173,64 @@ export function useChat(options: UseChatOptions = {}) {
                 break;
               }
               case 'stream:delta': {
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id === event.messageId) {
-                    return { ...msg, content: msg.content + event.delta, status: 'streaming' };
-                  }
-                  return msg;
-                }));
+                setMessages(prev =>
+                  prev.map(msg => {
+                    if (msg.id === event.messageId) {
+                      return { ...msg, content: msg.content + event.delta, status: 'streaming' };
+                    }
+                    return msg;
+                  })
+                );
                 break;
               }
               case 'stream:complete': {
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id === event.messageId) {
-                    return {
-                      ...msg,
-                      status: 'completed',
-                      metadata: {
-                        ...msg.metadata,
-                        usage: event.usage,
-                        finishReason: event.finishReason,
-                      },
-                    };
-                  }
-                  return msg;
-                }));
+                setMessages(prev =>
+                  prev.map(msg => {
+                    if (msg.id === event.messageId) {
+                      return {
+                        ...msg,
+                        status: 'completed',
+                        metadata: {
+                          ...msg.metadata,
+                          usage: event.usage,
+                          finishReason: event.finishReason,
+                        },
+                      };
+                    }
+                    return msg;
+                  })
+                );
                 setIsLoading(false);
                 break;
               }
               case 'stream:error': {
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id === event.messageId) {
-                    return {
-                      ...msg,
-                      status: 'failed',
-                      metadata: {
-                        ...msg.metadata,
-                        error: event.error,
-                      },
-                    };
-                  }
-                  return msg;
-                }));
+                setMessages(prev =>
+                  prev.map(msg => {
+                    if (msg.id === event.messageId) {
+                      return {
+                        ...msg,
+                        status: 'failed',
+                        metadata: {
+                          ...msg.metadata,
+                          error: event.error,
+                        },
+                      };
+                    }
+                    return msg;
+                  })
+                );
                 setIsLoading(false);
                 break;
               }
               case 'stream:cancel': {
-                setMessages(prev => prev.map(msg => {
-                  if (msg.id === event.messageId) {
-                    return { ...msg, status: 'cancelled' };
-                  }
-                  return msg;
-                }));
+                setMessages(prev =>
+                  prev.map(msg => {
+                    if (msg.id === event.messageId) {
+                      return { ...msg, status: 'cancelled' };
+                    }
+                    return msg;
+                  })
+                );
                 setIsLoading(false);
                 break;
               }

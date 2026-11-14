@@ -1,6 +1,4 @@
-export {
-  version,
-} from './version.js';
+export { version } from './version.js';
 
 export interface AgentConfig {
   readonly name: string;

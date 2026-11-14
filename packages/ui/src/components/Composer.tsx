@@ -105,8 +105,8 @@ export function Composer({
             isLoading
               ? 'Waiting for response...'
               : modelConfigured
-              ? 'Message NexiPi...'
-              : 'Configure an AI model to start chatting'
+                ? 'Message NexiPi...'
+                : 'Configure an AI model to start chatting'
           }
           aria-label="Message input"
           aria-multiline="true"

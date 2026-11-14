@@ -1,7 +1,8 @@
 import * as vscode from 'vscode';
 import { defaultConfig } from '@nexipi/core';
 import type { Logger, LogLevel } from '@nexipi/shared';
-import { ChatService, createChatService } from '@nexipi/models';
+import type { ChatService } from '@nexipi/models';
+import { createChatService } from '@nexipi/models';
 import { createProviderRegistry } from '@nexipi/models';
 import type { StreamEvent, Message, ConversationId, MessageId } from '@nexipi/shared';
 
@@ -73,43 +74,46 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _setupChatServiceListeners(): void {
-    this._chatService.on('stream:event', ({ event, timestamp }) => {
+    this._chatService.on('stream:event', ({ event, timestamp: _timestamp }) => {
       this._sendStreamEvent(event);
     });
 
-    this._chatService.on('message:created', ({ message, timestamp }) => {
+    this._chatService.on('message:created', ({ message, timestamp: _timestamp }) => {
       this._sendMessageCreated(message);
     });
 
-    this._chatService.on('message:updated', ({ message, timestamp }) => {
+    this._chatService.on('message:updated', ({ message, timestamp: _timestamp }) => {
       this._sendMessageUpdated(message);
     });
 
-    this._chatService.on('conversation:created', ({ conversation, timestamp }) => {
+    this._chatService.on('conversation:created', ({ conversation, timestamp: _timestamp }) => {
       this._logger.debug('Conversation created', { conversationId: conversation.id });
     });
 
-    this._chatService.on('chat:error', ({ error, conversationId, messageId, timestamp }) => {
-      this._logger.error('Chat error', { conversationId, messageId, error: error.message });
-    });
+    this._chatService.on(
+      'chat:error',
+      ({ error, conversationId, messageId, timestamp: _timestamp }) => {
+        this._logger.error('Chat error', { conversationId, messageId, error: error.message });
+      }
+    );
   }
 
   private _sendStreamEvent(event: StreamEvent): void {
-    this._view?.webview.postMessage({
+    void this._view?.webview.postMessage({
       type: 'streamEvent',
       payload: { event },
     });
   }
 
   private _sendMessageCreated(message: Message): void {
-    this._view?.webview.postMessage({
+    void this._view?.webview.postMessage({
       type: 'messageCreated',
       payload: { message },
     });
   }
 
   private _sendMessageUpdated(message: Message): void {
-    this._view?.webview.postMessage({
+    void this._view?.webview.postMessage({
       type: 'messageUpdated',
       payload: { message },
     });
@@ -118,7 +122,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   private _sendInitialState(): void {
     const modelConfigured = false;
 
-    this._view?.webview.postMessage({
+    void this._view?.webview.postMessage({
       type: 'state',
       payload: {
         messages: [],
@@ -195,7 +199,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
 
     const msg = message as { type: string; payload?: unknown };
 
-    (async () => {
+    void (async () => {
       switch (msg.type) {
         case 'ready':
           this._logger.debug('Webview ready');
@@ -220,7 +224,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             this._logger.error('Failed to send message', { error: err.message });
-            this._view?.webview.postMessage({
+            void this._view?.webview.postMessage({
               type: 'error',
               payload: { message: err.message },
             });
@@ -230,7 +234,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
         case 'newChat': {
           this._logger.info('New chat requested from webview');
           const conversation = this._chatService.createConversation();
-          this._view?.webview.postMessage({
+          void this._view?.webview.postMessage({
             type: 'state',
             payload: {
               messages: [],
@@ -259,7 +263,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             const err = error instanceof Error ? error : new Error(String(error));
             this._logger.error('Failed to open settings', { error: err.message });
           }
-          this._view?.webview.postMessage({
+          void this._view?.webview.postMessage({
             type: 'settingsOpened',
             payload: { timestamp: new Date().toISOString() },
           });
@@ -272,7 +276,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
           this._logger.info('Cancel message requested', { messageId: payload.messageId });
-          this._chatService.cancelMessage(payload.messageId);
+          this._chatService.cancelMessage(payload.messageId as MessageId);
           break;
         }
         case 'retryMessage': {
@@ -282,7 +286,10 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
           this._logger.info('Retry message requested', { messageId: payload.messageId });
-          this._chatService.retryMessage(payload.conversationId, payload.messageId);
+          this._chatService.retryMessage(
+            payload.conversationId as ConversationId,
+            payload.messageId as MessageId
+          );
           break;
         }
         default:

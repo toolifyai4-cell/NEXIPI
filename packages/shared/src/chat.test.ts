@@ -103,7 +103,9 @@ describe('chat types', () => {
 
     it('should preserve original message properties', () => {
       const conversationId = createConversationId('conv-1');
-      const message = createMessage(conversationId, 'assistant', 'Test', 'pending', { custom: 'data' });
+      const message = createMessage(conversationId, 'assistant', 'Test', 'pending', {
+        custom: 'data',
+      });
       const updated = updateMessageStatus(message, 'completed');
 
       expect(updated.id).toBe(message.id);
@@ -126,7 +128,9 @@ describe('chat types', () => {
 
     it('should preserve other message properties', () => {
       const conversationId = createConversationId('conv-1');
-      const message = createMessage(conversationId, 'assistant', 'Start', 'streaming', { foo: 'bar' });
+      const message = createMessage(conversationId, 'assistant', 'Start', 'streaming', {
+        foo: 'bar',
+      });
       const updated = appendMessageContent(message, ' middle');
 
       expect(updated.id).toBe(message.id);
@@ -158,7 +162,12 @@ describe('chat types', () => {
     });
 
     it('should return false for streaming status', () => {
-      const message = createMessage(createConversationId('c'), 'assistant', 'generating', 'streaming');
+      const message = createMessage(
+        createConversationId('c'),
+        'assistant',
+        'generating',
+        'streaming'
+      );
       expect(isMessageTerminal(message)).toBe(false);
     });
   });
@@ -170,7 +179,12 @@ describe('chat types', () => {
     });
 
     it('should return true for streaming status', () => {
-      const message = createMessage(createConversationId('c'), 'assistant', 'generating', 'streaming');
+      const message = createMessage(
+        createConversationId('c'),
+        'assistant',
+        'generating',
+        'streaming'
+      );
       expect(isMessageActive(message)).toBe(true);
     });
 

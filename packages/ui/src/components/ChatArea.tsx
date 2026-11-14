@@ -1,5 +1,5 @@
 import { useMemo } from 'react';
-import type { Message, MessageStatus } from '../types';
+import type { Message } from '../types';
 
 interface ChatAreaProps {
   messages: Message[];
@@ -9,7 +9,13 @@ interface ChatAreaProps {
   onRetryMessage?: (messageId: string) => void;
 }
 
-export function ChatArea({ messages, isLoading, messagesEndRef, onCancelMessage, onRetryMessage }: ChatAreaProps) {
+export function ChatArea({
+  messages,
+  isLoading,
+  messagesEndRef,
+  onCancelMessage,
+  onRetryMessage,
+}: ChatAreaProps) {
   if (messages.length === 0) {
     return (
       <div className="nexipi-chat-empty" role="status" aria-live="polite">
@@ -92,8 +98,11 @@ function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
     }
   }, [message.status]);
 
-  const showCancelButton = message.role === 'assistant' && (message.status === 'streaming' || message.status === 'pending');
-  const showRetryButton = message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled');
+  const showCancelButton =
+    message.role === 'assistant' &&
+    (message.status === 'streaming' || message.status === 'pending');
+  const showRetryButton =
+    message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled');
 
   return (
     <article className={`nexipi-message nexipi-message--${message.role}`} role="listitem">
@@ -114,7 +123,10 @@ function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
       <div className="nexipi-message-content">
         <div className="nexipi-message-header">
           <span className="nexipi-message-role">{message.role === 'user' ? 'You' : 'NexiPi'}</span>
-          <time className="nexipi-message-time" dateTime={new Date(message.timestamp).toISOString()}>
+          <time
+            className="nexipi-message-time"
+            dateTime={new Date(message.timestamp).toISOString()}
+          >
             {timeString}
           </time>
           {(message.status !== 'completed' || message.role === 'assistant') && (
@@ -133,7 +145,13 @@ function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
                 aria-label="Stop generation"
                 title="Stop generation"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
                   <rect x="6" y="6" width="12" height="12" rx="2" />
                 </svg>
               </button>
@@ -145,7 +163,13 @@ function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
                 aria-label="Retry"
                 title="Retry"
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  aria-hidden="true"
+                >
                   <path d="M23 4v6h-6" />
                   <path d="M1 20v-6h6" />
                   <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
@@ -154,19 +178,25 @@ function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
             )}
           </div>
         )}
-        {message.status === 'failed' && message.metadata?.error && (
+        {message.status === 'failed' && message.metadata?.error ? (
           <div className="nexipi-message-error" role="alert">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
               <circle cx="12" cy="12" r="10" />
               <line x1="12" y1="8" x2="12" y2="12" />
               <line x1="12" y1="16" x2="12.01" y2="16" />
             </svg>
-            <span>{message.metadata.error.message}</span>
-            {message.metadata.error.retryable && (
+            <span>{String((message.metadata.error as Record<string, unknown>).message)}</span>
+            {Boolean((message.metadata.error as Record<string, unknown>).retryable) && (
               <span className="nexipi-error-retryable"> (Retryable)</span>
             )}
           </div>
-        )}
+        ) : null}
       </div>
     </article>
   );
