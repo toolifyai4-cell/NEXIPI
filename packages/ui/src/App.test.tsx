@@ -1,34 +1,32 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
 import { App } from './App';
-import { useChat } from './hooks/useChat';
 
-vi.mock('./hooks/useChat');
-
-const createMockUseChat = (overrides: Partial<ReturnType<typeof useChat>> = {}) => ({
-  messages: [],
-  isLoading: false,
-  currentInput: '',
-  setCurrentInput: vi.fn(),
-  viewMode: 'welcome' as const,
-  sendMessage: vi.fn(),
-  handleNewChat: vi.fn(),
-  handlePromptSelect: vi.fn(),
-  handleKeyDown: vi.fn(),
-  messagesEndRef: { current: null },
-  welcomePrompts: [
-    { label: 'Test prompt 1', prompt: 'Test prompt 1 content' },
-    { label: 'Test prompt 2', prompt: 'Test prompt 2 content' },
-  ],
-  postMessage: vi.fn(),
-  scrollToBottom: vi.fn(),
-  ...overrides,
-});
+// Mock window.acquireVsCodeApi for each test
+const mockPostMessage = vi.fn();
+const mockAcquireVsCodeApi = vi.fn(() => ({
+  postMessage: mockPostMessage,
+  getState: vi.fn(),
+  setState: vi.fn(),
+}));
 
 describe('App', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.mocked(useChat).mockReturnValue(createMockUseChat());
+    mockPostMessage.mockClear();
+    mockAcquireVsCodeApi.mockClear();
+
+    Object.defineProperty(global.window, 'acquireVsCodeApi', {
+      value: mockAcquireVsCodeApi,
+      writable: true,
+      configurable: true,
+    });
+
+    Object.defineProperty(global.window, 'parent', {
+      value: { postMessage: vi.fn(), ...global.window },
+      writable: true,
+      configurable: true,
+    });
   });
 
   it('renders header with NexiPi branding', () => {
@@ -48,95 +46,142 @@ describe('App', () => {
 
   it('renders prompt cards', () => {
     render(<App />);
-    expect(screen.getByText('Test prompt 1')).toBeInTheDocument();
-    expect(screen.getByText('Test prompt 2')).toBeInTheDocument();
+    expect(screen.getByText('Explain this codebase')).toBeInTheDocument();
+    expect(screen.getByText('Find a bug')).toBeInTheDocument();
   });
 
-  it('renders status indicator with disconnected status', () => {
+  it('renders status indicator as interactive button', () => {
     render(<App />);
-    expect(screen.getByText('AI model not configured')).toBeInTheDocument();
+    const statusButton = screen.getByRole('button', { name: /Model status: AI model not configured/ });
+    expect(statusButton).toBeInTheDocument();
   });
 
   it('calls handleNewChat when new chat button is clicked', () => {
     render(<App />);
     const newChatBtn = screen.getByLabelText('New chat');
     fireEvent.click(newChatBtn);
-    expect(vi.mocked(useChat).mock.results[0].value.handleNewChat).toHaveBeenCalled();
+    // Should stay in welcome mode
+    expect(screen.getByText('Welcome to NexiPi')).toBeInTheDocument();
   });
 
-  it('calls handlePromptSelect when a prompt card is clicked', () => {
+  it('populates composer when a prompt card is clicked', () => {
     render(<App />);
-    const promptCard = screen.getByLabelText('Try: Test prompt 1');
+    const promptCard = screen.getByLabelText('Try: Explain this codebase');
     fireEvent.click(promptCard);
-    expect(vi.mocked(useChat).mock.results[0].value.handlePromptSelect).toHaveBeenCalledWith(
-      'Test prompt 1 content'
-    );
-  });
-});
-
-describe('App - Chat Mode', () => {
-  beforeEach(() => {
-    vi.clearAllMocks();
-    vi.mocked(useChat).mockReturnValue(
-      createMockUseChat({
-        messages: [
-          { id: '1', role: 'user', content: 'Hello', timestamp: new Date() },
-          { id: '2', role: 'assistant', content: 'Hi there!', timestamp: new Date() },
-        ],
-        currentInput: 'test message',
-        viewMode: 'chat',
-      })
-    );
-  });
-
-  it('renders chat area with messages when viewMode is chat', () => {
-    render(<App />);
-    expect(screen.getByText('Hello')).toBeInTheDocument();
-    expect(screen.getByText('Hi there!')).toBeInTheDocument();
-  });
-
-  it('renders composer with current input value', () => {
-    render(<App />);
     const textarea = screen.getByLabelText('Message input');
-    expect(textarea).toHaveValue('test message');
+    expect(textarea).toHaveValue('Give me an overview of this repository structure and key components.');
   });
 
-  it('calls setCurrentInput when typing in composer', () => {
+  it('opens settings dropdown when settings button is clicked', () => {
     render(<App />);
-    const textarea = screen.getByLabelText('Message input');
-    fireEvent.change(textarea, { target: { value: 'new message' } });
-    expect(vi.mocked(useChat).mock.results[0].value.setCurrentInput).toHaveBeenCalledWith(
-      'new message'
-    );
+    const menuBtn = screen.getByLabelText('Settings');
+    fireEvent.click(menuBtn);
+    const settingsItem = screen.getByRole('menuitem', { name: /Settings/i });
+    expect(settingsItem).toBeInTheDocument();
   });
 
-  it('calls sendMessage when send button is clicked', () => {
+  it('sends openSettings message when settings menu item is clicked', () => {
+    render(<App />);
+    const menuBtn = screen.getByLabelText('Settings');
+    fireEvent.click(menuBtn);
+    const settingsItem = screen.getByRole('menuitem', { name: /Settings/i });
+    fireEvent.click(settingsItem);
+    expect(mockPostMessage).toHaveBeenCalledWith({
+      type: 'openSettings',
+      payload: { reason: 'user_click' },
+    });
+  });
+
+  it('sends openSettings message with model_status_click when status indicator is clicked', () => {
+    render(<App />);
+    const statusButton = screen.getByRole('button', { name: /Model status: AI model not configured/ });
+    fireEvent.click(statusButton);
+    expect(mockPostMessage).toHaveBeenCalledWith({
+      type: 'openSettings',
+      payload: { reason: 'model_status_click' },
+    });
+  });
+
+  it('send button is disabled when input is empty', () => {
     render(<App />);
     const sendBtn = screen.getByLabelText('Send message');
-    fireEvent.click(sendBtn);
-    expect(vi.mocked(useChat).mock.results[0].value.sendMessage).toHaveBeenCalled();
+    expect(sendBtn).toBeDisabled();
   });
 
-  it('does not call sendMessage when input is empty', () => {
-    vi.clearAllMocks();
-    vi.mocked(useChat).mockReturnValue(
-      createMockUseChat({
-        messages: [],
-        currentInput: '',
-        viewMode: 'chat',
-      })
-    );
-
+  it('send button is enabled when input has content', () => {
     render(<App />);
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'hello' } });
     const sendBtn = screen.getByLabelText('Send message');
-    fireEvent.click(sendBtn);
-    expect(vi.mocked(useChat).mock.results[0].value.sendMessage).not.toHaveBeenCalled();
+    expect(sendBtn).not.toBeDisabled();
   });
 
-  it('calls handleNewChat when new chat button is clicked in chat mode', () => {
+  it('Ctrl+Enter submits the message and switches to chat view', async () => {
     render(<App />);
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'test message' } });
+
+    const event = {
+      key: 'Enter',
+      ctrlKey: true,
+      metaKey: false,
+      preventDefault: vi.fn(),
+      shiftKey: false,
+    } as unknown as React.KeyboardEvent<HTMLTextAreaElement>;
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, event);
+    });
+
+    // Wait for view to switch to chat mode
+    await waitFor(() => {
+      expect(screen.getByText('test message')).toBeInTheDocument();
+    });
+    expect(textarea).toHaveValue('');
+  });
+
+  it('Shift+Enter inserts newline in textarea', () => {
+    render(<App />);
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'line 1' } });
+
+    const event = {
+      key: 'Enter',
+      ctrlKey: false,
+      metaKey: false,
+      shiftKey: true,
+      preventDefault: vi.fn(),
+    } as unknown as React.KeyboardEvent<HTMLTextAreaElement>;
+
+    fireEvent.keyDown(textarea, event);
+
+    // Should not submit, just allow newline (default behavior)
+    expect(textarea).toHaveValue('line 1\n');
+  });
+
+  it('new chat button clears messages and returns to welcome view', async () => {
+    render(<App />);
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+    const sendBtn = screen.getByLabelText('Send message');
+    
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('hello')).toBeInTheDocument();
+    });
+
     const newChatBtn = screen.getByLabelText('New chat');
-    fireEvent.click(newChatBtn);
-    expect(vi.mocked(useChat).mock.results[0].value.handleNewChat).toHaveBeenCalled();
+    await act(async () => {
+      fireEvent.click(newChatBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome to NexiPi')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('hello')).not.toBeInTheDocument();
+    expect(textarea).toHaveValue('');
   });
 });

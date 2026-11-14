@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Message, ViewMode, WebviewMessage } from '../types';
+import type { Message, ViewMode, WebviewMessage, SendMessagePayload, NewChatPayload, PromptSelectedPayload, OpenSettingsPayload } from '../types';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -48,46 +48,7 @@ export function useChat() {
     return message;
   }, []);
 
-  const sendMessage = useCallback(() => {
-    if (!currentInput.trim() || isLoading) return;
-
-    const userMessage = currentInput.trim();
-    setCurrentInput('');
-    addMessage('user', userMessage);
-    setIsLoading(true);
-    setViewMode('chat');
-
-    // In Phase 04, actual AI response handling will be implemented here.
-    // For now, we keep isLoading true to indicate the request was sent.
-    // The extension will handle the response and update state via postMessage.
-  }, [currentInput, isLoading, addMessage]);
-
-  const handleNewChat = useCallback(() => {
-    setMessages([]);
-    setCurrentInput('');
-    setIsLoading(false);
-    setViewMode('welcome');
-  }, []);
-
-  const handlePromptSelect = useCallback((prompt: string) => {
-    setCurrentInput(prompt);
-  }, []);
-
-  const handleKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Ctrl+Enter (or Cmd+Enter on Mac) to send
-      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        e.preventDefault();
-        sendMessage();
-      }
-      // Shift+Enter inserts newline (default textarea behavior, no action needed)
-    },
-    [sendMessage]
-  );
-
   const postMessage = useCallback((message: WebviewMessage) => {
-    // Use VS Code Webview API when available (inside webview context)
-    // Fallback to window.parent.postMessage for development/testing outside webview
     try {
       const vscodeApi = window.acquireVsCodeApi?.();
       if (vscodeApi) {
@@ -102,6 +63,55 @@ export function useChat() {
     }
   }, []);
 
+  const sendMessage = useCallback(() => {
+    if (!currentInput.trim() || isLoading) return;
+
+    const userMessage = currentInput.trim();
+    setCurrentInput('');
+    addMessage('user', userMessage);
+    setIsLoading(true);
+    setViewMode('chat');
+
+    // Send message to extension host
+    const payload: SendMessagePayload = { content: userMessage };
+    postMessage({ type: 'sendMessage', payload });
+  }, [currentInput, isLoading, addMessage, postMessage]);
+
+  const handleNewChat = useCallback(() => {
+    setMessages([]);
+    setCurrentInput('');
+    setIsLoading(false);
+    setViewMode('welcome');
+
+    // Notify extension host
+    const payload: NewChatPayload = { timestamp: new Date().toISOString() };
+    postMessage({ type: 'newChat', payload });
+  }, [postMessage]);
+
+  const handlePromptSelect = useCallback((prompt: string) => {
+    setCurrentInput(prompt);
+    // Notify extension host
+    const payload: PromptSelectedPayload = { prompt };
+    postMessage({ type: 'promptSelected', payload });
+  }, [postMessage]);
+
+  const handleOpenSettings = useCallback((reason: 'user_click' | 'model_status_click' = 'user_click') => {
+    const payload: OpenSettingsPayload = { reason };
+    postMessage({ type: 'openSettings', payload });
+  }, [postMessage]);
+
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      // Ctrl+Enter (or Cmd+Enter on Mac) to send
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        sendMessage();
+      }
+      // Shift+Enter inserts newline (default textarea behavior, no action needed)
+    },
+    [sendMessage]
+  );
+
   useEffect(() => {
     postMessage({ type: 'ready' });
   }, [postMessage]);
@@ -115,6 +125,7 @@ export function useChat() {
     sendMessage,
     handleNewChat,
     handlePromptSelect,
+    handleOpenSettings,
     handleKeyDown,
     scrollToBottom,
     messagesEndRef,

@@ -19,13 +19,36 @@ export interface WelcomePrompt {
 }
 
 export interface WebviewMessage {
-  type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready';
+  type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready' | 'openSettings';
   payload?: unknown;
 }
 
 export interface ExtensionMessage {
-  type: 'info' | 'error' | 'state';
+  type: 'info' | 'error' | 'state' | 'settingsOpened' | 'chatCleared';
   payload: unknown;
+}
+
+export interface SendMessagePayload {
+  content: string;
+}
+
+export interface NewChatPayload {
+  timestamp: string;
+}
+
+export interface PromptSelectedPayload {
+  prompt: string;
+}
+
+export interface OpenSettingsPayload {
+  reason: 'user_click' | 'model_status_click';
+}
+
+export interface ExtensionStatePayload {
+  messages: Message[];
+  currentInput: string;
+  viewMode: ViewMode;
+  isLoading: boolean;
 }
 
 export interface VsCodeApi {

@@ -92,7 +92,6 @@ export function Composer({
         <button
           type="submit"
           className="nexipi-composer-send"
-          onClick={onSend}
           disabled={disabled || !value.trim()}
           aria-label="Send message"
           title={disabled ? 'AI model not configured — coming in Phase 04' : 'Send message'}

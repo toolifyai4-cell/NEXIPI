@@ -134,9 +134,30 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
         break;
       case 'sendMessage':
         this._logger.info('Message from webview', { payload: msg.payload });
+        // In Phase 04, the extension will process the message and send AI response back
+        // For now, acknowledge receipt
+        this._view?.webview.postMessage({
+          type: 'info',
+          payload: { message: 'Message received. AI model integration coming in Phase 04.' },
+        });
         break;
       case 'newChat':
         this._logger.info('New chat requested from webview');
+        this._view?.webview.postMessage({
+          type: 'chatCleared',
+          payload: { timestamp: new Date().toISOString() },
+        });
+        break;
+      case 'promptSelected':
+        this._logger.debug('Prompt selected from webview', { payload: msg.payload });
+        break;
+      case 'openSettings':
+        this._logger.info('Open settings requested from webview', { payload: msg.payload });
+        void vscode.commands.executeCommand('workbench.action.openSettings', 'nexipi');
+        this._view?.webview.postMessage({
+          type: 'settingsOpened',
+          payload: { timestamp: new Date().toISOString() },
+        });
         break;
       default:
         this._logger.warn('Unknown message type from webview', { type: msg.type });

@@ -11,18 +11,15 @@ export function App() {
     sendMessage,
     handleNewChat,
     handlePromptSelect,
+    handleOpenSettings,
     handleKeyDown,
     messagesEndRef,
     welcomePrompts,
   } = useChat();
 
-  const handleSettings = () => {
-    // Settings functionality not yet implemented
-  };
-
   return (
     <div className="nexipi-app">
-      <Header onNewChat={handleNewChat} onSettings={handleSettings} />
+      <Header onNewChat={handleNewChat} onSettings={handleOpenSettings} />
       <main className="nexipi-main" role="main">
         <div className="nexipi-content" role="region" aria-label={viewMode === 'welcome' ? 'Welcome' : 'Conversation'}>
           {viewMode === 'welcome' ? (
@@ -40,7 +37,7 @@ export function App() {
           placeholder={isLoading ? 'Waiting for response...' : 'Message NexiPi...'}
         />
       </main>
-      <StatusIndicator status="disconnected" label="AI model not configured" />
+      <StatusIndicator status="disconnected" label="AI model not configured" onClick={handleOpenSettings} />
     </div>
   );
 }

@@ -76,7 +76,14 @@ export function Header({ onNewChat, onSettings }: HeaderProps) {
           </button>
           {showMenu && (
             <div className="nexipi-dropdown" role="menu">
-              <button className="nexipi-dropdown-item" role="menuitem" onClick={onSettings}>
+              <button
+                className="nexipi-dropdown-item"
+                role="menuitem"
+                onClick={() => {
+                  onSettings();
+                  setShowMenu(false);
+                }}
+              >
                 <svg
                   viewBox="0 0 24 24"
                   fill="none"

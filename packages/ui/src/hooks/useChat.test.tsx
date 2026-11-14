@@ -143,4 +143,14 @@ describe('useChat hook', () => {
 
     expect(result.current.messages).toHaveLength(1);
   });
+
+  it('handleOpenSettings is a function', () => {
+    const { result } = renderHook(() => useChat());
+    expect(typeof result.current.handleOpenSettings).toBe('function');
+  });
+
+  it('postMessage is a function', () => {
+    const { result } = renderHook(() => useChat());
+    expect(typeof result.current.postMessage).toBe('function');
+  });
 });
