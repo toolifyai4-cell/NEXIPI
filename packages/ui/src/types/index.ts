@@ -49,6 +49,15 @@ export interface ExtensionStatePayload {
   currentInput: string;
   viewMode: ViewMode;
   isLoading: boolean;
+  modelConfigured: boolean;
+}
+
+export interface ExtensionInfoPayload {
+  message: string;
+}
+
+export interface ExtensionErrorPayload {
+  message: string;
 }
 
 export interface VsCodeApi {

@@ -7,6 +7,10 @@ import type {
   NewChatPayload,
   PromptSelectedPayload,
   OpenSettingsPayload,
+  ExtensionMessage,
+  ExtensionStatePayload,
+  ExtensionInfoPayload,
+  ExtensionErrorPayload,
 } from '../types';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -35,6 +39,7 @@ export function useChat() {
   const [isLoading, setIsLoading] = useState(false);
   const [currentInput, setCurrentInput] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('welcome');
+  const [modelConfigured, setModelConfigured] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const scrollToBottom = useCallback(() => {
@@ -56,6 +61,63 @@ export function useChat() {
     return message;
   }, []);
 
+  const resetLoadingState = useCallback(() => {
+    setIsLoading(false);
+  }, []);
+
+  const handleExtensionMessage = useCallback(
+    (event: MessageEvent) => {
+      const message = event.data as ExtensionMessage;
+      if (!message || typeof message !== 'object' || !message.type) {
+        return;
+      }
+
+      switch (message.type) {
+        case 'state': {
+          const payload = message.payload as ExtensionStatePayload;
+          if (payload && typeof payload.modelConfigured === 'boolean') {
+            setModelConfigured(payload.modelConfigured);
+          }
+          break;
+        }
+        case 'info': {
+          const payload = message.payload as ExtensionInfoPayload;
+          if (payload?.message) {
+            addMessage('assistant', payload.message);
+          }
+          resetLoadingState();
+          break;
+        }
+        case 'error': {
+          const payload = message.payload as ExtensionErrorPayload;
+          if (payload?.message) {
+            addMessage('assistant', `Error: ${payload.message}`);
+          }
+          resetLoadingState();
+          break;
+        }
+        case 'chatCleared': {
+          setMessages([]);
+          setViewMode('welcome');
+          resetLoadingState();
+          break;
+        }
+        case 'settingsOpened': {
+          // Settings opened, no state change needed
+          break;
+        }
+        default:
+          break;
+      }
+    },
+    [addMessage, resetLoadingState]
+  );
+
+  useEffect(() => {
+    window.addEventListener('message', handleExtensionMessage);
+    return () => window.removeEventListener('message', handleExtensionMessage);
+  }, [handleExtensionMessage]);
+
   const postMessage = useCallback((message: WebviewMessage) => {
     try {
       const vscodeApi = window.acquireVsCodeApi?.();
@@ -74,6 +136,21 @@ export function useChat() {
   const sendMessage = useCallback(() => {
     if (!currentInput.trim() || isLoading) return;
 
+    if (!modelConfigured) {
+      const userMessage = currentInput.trim();
+      setCurrentInput('');
+      addMessage('user', userMessage);
+      setViewMode('chat');
+
+      // Show error message for missing model
+      addMessage(
+        'assistant',
+        'No AI model is configured. Open NexiPi settings to configure a model before chatting.'
+      );
+      // Do not set isLoading, composer stays enabled
+      return;
+    }
+
     const userMessage = currentInput.trim();
     setCurrentInput('');
     addMessage('user', userMessage);
@@ -83,7 +160,7 @@ export function useChat() {
     // Send message to extension host
     const payload: SendMessagePayload = { content: userMessage };
     postMessage({ type: 'sendMessage', payload });
-  }, [currentInput, isLoading, addMessage, postMessage]);
+  }, [currentInput, isLoading, modelConfigured, addMessage, postMessage]);
 
   const handleNewChat = useCallback(() => {
     setMessages([]);
@@ -136,6 +213,7 @@ export function useChat() {
     currentInput,
     setCurrentInput,
     viewMode,
+    modelConfigured,
     sendMessage,
     handleNewChat,
     handlePromptSelect,

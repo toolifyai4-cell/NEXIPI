@@ -1,6 +1,11 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, act, waitFor } from '@testing-library/react';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { render, screen, fireEvent, act, waitFor, cleanup } from '@testing-library/react';
 import { App } from './App';
+
+afterEach(() => {
+  cleanup();
+  vi.clearAllMocks();
+});
 
 // Mock window.acquireVsCodeApi for each test
 const mockPostMessage = vi.fn();
@@ -9,6 +14,23 @@ const mockAcquireVsCodeApi = vi.fn(() => ({
   getState: vi.fn(),
   setState: vi.fn(),
 }));
+
+const simulateExtensionStateMessage = (modelConfigured: boolean) => {
+  window.dispatchEvent(
+    new MessageEvent('message', {
+      data: {
+        type: 'state',
+        payload: {
+          messages: [],
+          currentInput: '',
+          viewMode: 'welcome',
+          isLoading: false,
+          modelConfigured,
+        },
+      },
+    })
+  );
+};
 
 describe('App', () => {
   beforeEach(() => {
@@ -50,7 +72,7 @@ describe('App', () => {
     expect(screen.getByText('Find a bug')).toBeInTheDocument();
   });
 
-  it('renders status indicator as interactive button', () => {
+  it('renders status indicator as interactive button with disconnected status initially', () => {
     render(<App />);
     const statusButton = screen.getByRole('button', {
       name: /Model status: AI model not configured/,
@@ -110,22 +132,65 @@ describe('App', () => {
     });
   });
 
-  it('send button is disabled when input is empty', () => {
+  it('composer is disabled when model is not configured', () => {
     render(<App />);
+    // Default modelConfigured is false
+    const textarea = screen.getByLabelText('Message input');
+    expect(textarea).toBeDisabled();
     const sendBtn = screen.getByLabelText('Send message');
     expect(sendBtn).toBeDisabled();
   });
 
-  it('send button is enabled when input has content', () => {
+  it('composer shows placeholder to configure model when not configured', () => {
     render(<App />);
     const textarea = screen.getByLabelText('Message input');
-    fireEvent.change(textarea, { target: { value: 'hello' } });
-    const sendBtn = screen.getByLabelText('Send message');
-    expect(sendBtn).not.toBeDisabled();
+    expect(textarea).toHaveAttribute('placeholder', 'Configure an AI model to start chatting');
   });
 
-  it('Ctrl+Enter submits the message and switches to chat view', async () => {
+  it('composer becomes enabled after receiving model configured state', () => {
     render(<App />);
+    // Initially disabled
+    const textarea = screen.getByLabelText('Message input');
+    expect(textarea).toBeDisabled();
+
+    // Simulate extension sending model configured state
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    // Now composer should be enabled
+    expect(textarea).not.toBeDisabled();
+    const sendBtn = screen.getByLabelText('Send message');
+    expect(sendBtn).not.toBeDisabled();
+    expect(textarea).toHaveAttribute('placeholder', 'Message NexiPi...');
+  });
+
+  it('status indicator shows connected when model is configured', () => {
+    render(<App />);
+    // Initially disconnected
+    let statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    expect(statusButton).toBeInTheDocument();
+
+    // Simulate extension sending model configured state
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    // Now should show connected
+    statusButton = screen.getByRole('button', {
+      name: /Model status: AI model configured/,
+    });
+    expect(statusButton).toBeInTheDocument();
+  });
+
+  it('sends message and shows loading when model configured', async () => {
+    render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
     const textarea = screen.getByLabelText('Message input');
     fireEvent.change(textarea, { target: { value: 'test message' } });
 
@@ -146,6 +211,56 @@ describe('App', () => {
       expect(screen.getByText('test message')).toBeInTheDocument();
     });
     expect(textarea).toHaveValue('');
+
+    // Should show loading indicator (typing indicator)
+    expect(screen.getByRole('status', { name: /loading/i })).toBeInTheDocument();
+  });
+
+  it('shows error message and keeps composer enabled when sending without model configured', async () => {
+    render(<App />);
+    // Ensure modelConfigured is false
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'state',
+            payload: {
+              messages: [],
+              currentInput: '',
+              viewMode: 'welcome',
+              isLoading: false,
+              modelConfigured: false,
+            },
+          },
+        })
+      );
+    });
+    // Default modelConfigured is false
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+
+    const sendBtn = screen.getByLabelText('Send message');
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    // User message should appear
+    await waitFor(() => {
+      expect(screen.getByText('hello')).toBeInTheDocument();
+    });
+
+    // Error message should appear (use flexible text matcher)
+    await waitFor(() => {
+      expect(screen.getByText(/No AI model is configured/i)).toBeInTheDocument();
+      expect(screen.getByText(/Open NexiPi settings to configure a model before chatting/i)).toBeInTheDocument();
+    });
+
+    // Composer should still be enabled (not disabled)
+    expect(textarea).not.toBeDisabled();
+    expect(textarea).toHaveValue('');
+
+    // Should NOT show loading indicator
+    expect(screen.queryByRole('status', { name: /loading/i })).not.toBeInTheDocument();
   });
 
   it('Shift+Enter inserts newline in textarea', () => {
@@ -173,6 +288,9 @@ describe('App', () => {
 
   it('new chat button clears messages and returns to welcome view', async () => {
     render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
     const textarea = screen.getByLabelText('Message input');
     fireEvent.change(textarea, { target: { value: 'hello' } });
     const sendBtn = screen.getByLabelText('Send message');
@@ -195,5 +313,42 @@ describe('App', () => {
     });
     expect(screen.queryByText('hello')).not.toBeInTheDocument();
     expect(textarea).toHaveValue('');
+  });
+
+  it('resets loading state when extension sends info message', async () => {
+    render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'test' } });
+
+    const sendBtn = screen.getByLabelText('Send message');
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Waiting for response...')).toBeInTheDocument();
+    });
+
+    // Simulate extension response
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'info',
+            payload: { message: 'AI response' },
+          },
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByText('Waiting for response...')).not.toBeInTheDocument();
+    });
+    expect(screen.getByText('AI response')).toBeInTheDocument();
+    expect(textarea).not.toBeDisabled();
   });
 });

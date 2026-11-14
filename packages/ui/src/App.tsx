@@ -8,6 +8,7 @@ export function App() {
     currentInput,
     setCurrentInput,
     viewMode,
+    modelConfigured,
     sendMessage,
     handleNewChat,
     handlePromptSelect,
@@ -16,6 +17,8 @@ export function App() {
     messagesEndRef,
     welcomePrompts,
   } = useChat();
+
+  const composerDisabled = isLoading || !modelConfigured;
 
   return (
     <div className="nexipi-app">
@@ -37,13 +40,19 @@ export function App() {
           onChange={setCurrentInput}
           onSend={sendMessage}
           onKeyDown={handleKeyDown}
-          disabled={isLoading}
-          placeholder={isLoading ? 'Waiting for response...' : 'Message NexiPi...'}
+          disabled={composerDisabled}
+          placeholder={
+            isLoading
+              ? 'Waiting for response...'
+              : modelConfigured
+                ? 'Message NexiPi...'
+                : 'Configure an AI model to start chatting'
+          }
         />
       </main>
       <StatusIndicator
-        status="disconnected"
-        label="AI model not configured"
+        status={modelConfigured ? 'connected' : 'disconnected'}
+        label={modelConfigured ? 'AI model configured' : 'AI model not configured'}
         onClick={handleOpenSettings}
         reason="model_status_click"
       />

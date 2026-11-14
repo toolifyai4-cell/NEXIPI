@@ -87,14 +87,14 @@ export function Composer({
       </div>
       <div className="nexipi-composer-footer">
         <span className="nexipi-composer-status" aria-live="polite">
-          {disabled ? 'AI model not configured — Phase 04' : 'Ready'}
+          {disabled ? 'AI model not configured' : 'Ready'}
         </span>
         <button
           type="submit"
           className="nexipi-composer-send"
           disabled={disabled || !value.trim()}
           aria-label="Send message"
-          title={disabled ? 'AI model not configured — coming in Phase 04' : 'Send message'}
+          title={disabled ? 'AI model not configured' : 'Send message'}
         >
           <svg
             viewBox="0 0 24 24"

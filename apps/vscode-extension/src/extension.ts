@@ -121,6 +121,25 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
     return text;
   }
 
+  private _sendInitialState(): void {
+    const config = vscode.workspace.getConfiguration('nexipi');
+    // Check if any model is configured (for now, we consider it configured if enabled)
+    // In future phases, this will check actual model credentials
+    const modelConfigured = config.get<boolean>('nexipi.enabled', true);
+
+    this._view?.webview.postMessage({
+      type: 'state',
+      payload: {
+        messages: [],
+        currentInput: '',
+        viewMode: 'welcome',
+        isLoading: false,
+        modelConfigured,
+      },
+    });
+    this._logger.debug('Sent initial state to webview', { modelConfigured });
+  }
+
   private _onMessage(message: unknown): void {
     if (typeof message !== 'object' || message === null) {
       return;
@@ -128,40 +147,50 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
 
     const msg = message as { type: string; payload?: unknown };
 
-    switch (msg.type) {
-      case 'ready':
-        this._logger.debug('Webview ready');
-        break;
-      case 'sendMessage':
-        this._logger.info('Message from webview', { payload: msg.payload });
-        // In Phase 04, the extension will process the message and send AI response back
-        // For now, acknowledge receipt
-        this._view?.webview.postMessage({
-          type: 'info',
-          payload: { message: 'Message received. AI model integration coming in Phase 04.' },
-        });
-        break;
-      case 'newChat':
-        this._logger.info('New chat requested from webview');
-        this._view?.webview.postMessage({
-          type: 'chatCleared',
-          payload: { timestamp: new Date().toISOString() },
-        });
-        break;
-      case 'promptSelected':
-        this._logger.debug('Prompt selected from webview', { payload: msg.payload });
-        break;
-      case 'openSettings':
-        this._logger.info('Open settings requested from webview', { payload: msg.payload });
-        void vscode.commands.executeCommand('workbench.action.openSettings', 'nexipi');
-        this._view?.webview.postMessage({
-          type: 'settingsOpened',
-          payload: { timestamp: new Date().toISOString() },
-        });
-        break;
-      default:
-        this._logger.warn('Unknown message type from webview', { type: msg.type });
-    }
+    (async () => {
+      switch (msg.type) {
+        case 'ready':
+          this._logger.debug('Webview ready');
+          // Send initial state including model configuration status
+          this._sendInitialState();
+          break;
+        case 'sendMessage':
+          this._logger.info('Message from webview', { payload: msg.payload });
+          // In Phase 04, the extension will process the message and send AI response back
+          // For now, acknowledge receipt
+          this._view?.webview.postMessage({
+            type: 'info',
+            payload: { message: 'Message received. AI model integration coming in future phases.' },
+          });
+          break;
+        case 'newChat':
+          this._logger.info('New chat requested from webview');
+          this._view?.webview.postMessage({
+            type: 'chatCleared',
+            payload: { timestamp: new Date().toISOString() },
+          });
+          break;
+        case 'promptSelected':
+          this._logger.debug('Prompt selected from webview', { payload: msg.payload });
+          break;
+        case 'openSettings':
+          this._logger.info('Open settings requested from webview', { payload: msg.payload });
+          try {
+            await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nexipi');
+            this._logger.info('Settings opened successfully');
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            this._logger.error('Failed to open settings', { error: err.message });
+          }
+          this._view?.webview.postMessage({
+            type: 'settingsOpened',
+            payload: { timestamp: new Date().toISOString() },
+          });
+          break;
+        default:
+          this._logger.warn('Unknown message type from webview', { type: msg.type });
+      }
+    })();
   }
 
   public postMessage(message: unknown): void {
