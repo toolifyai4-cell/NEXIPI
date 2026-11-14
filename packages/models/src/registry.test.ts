@@ -129,17 +129,44 @@ describe('ProviderRegistry', () => {
       expect(model?.modelId).toBe(modelId);
     });
 
-    it('should throw on duplicate model ID within same provider', () => {
-      const modelId = createModelId('duplicate-model');
+    it('should not corrupt registry when model indexing fails', () => {
+      const providerId = createProviderId('dup-model-provider');
+      const modelId = createModelId('dup-model');
       const provider = createMockProvider({
+        metadata: { id: providerId, name: 'Dup Provider', version: '1.0.0' },
         models: [
-          { ...createMockProvider().metadata, modelId, displayName: 'Model 1' } as ModelMetadata,
-          { ...createMockProvider().metadata, modelId, displayName: 'Model 2' } as ModelMetadata,
+          {
+            providerId,
+            modelId,
+            displayName: 'Model 1',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
+          {
+            providerId,
+            modelId,
+            displayName: 'Model 2',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
         ],
       });
 
-      // This test would need a provider with duplicate models, but the mock doesn't support it easily
-      // The registry checks for duplicates during registration
+      expect(() => registry.register(provider)).toThrow();
+      expect(registry.has(providerId)).toBe(false);
+      expect(registry.getModel(providerId, modelId)).toBeUndefined();
     });
   });
 

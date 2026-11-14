@@ -20,8 +20,25 @@ export class ProviderRegistry {
       );
     }
 
+    // Validate model uniqueness before mutating any state so a failed
+    // registration cannot leave the registry partially populated.
+    const seen = new Set<string>();
+    for (const model of provider.listModels()) {
+      const key = `${providerId}:${model.modelId}`;
+      if (seen.has(key) || this.modelIndex.has(key)) {
+        throw createEngineError(
+          EngineErrorCode.INVALID_CONFIGURATION,
+          `Duplicate model ID '${model.modelId}' for provider '${providerId}'`
+        );
+      }
+      seen.add(key);
+    }
+
     this.providers.set(providerId, provider);
-    this.indexModels(provider);
+    for (const model of provider.listModels()) {
+      const key = `${providerId}:${model.modelId}`;
+      this.modelIndex.set(key, model);
+    }
   }
 
   unregister(providerId: ProviderId): boolean {
@@ -31,7 +48,12 @@ export class ProviderRegistry {
     }
 
     this.removeModelsFromIndex(provider);
-    return this.providers.delete(providerId);
+    const deleted = this.providers.delete(providerId);
+    // Best-effort disposal; do not block unregistration on provider cleanup.
+    void provider.dispose().catch(() => {
+      // Swallow disposal errors to avoid unhandled rejections.
+    });
+    return deleted;
   }
 
   get(providerId: ProviderId): ModelProvider | undefined {
@@ -100,20 +122,6 @@ export class ProviderRegistry {
           },
         ],
       };
-    }
-  }
-
-  private indexModels(provider: ModelProvider): void {
-    const providerId = provider.metadata.id;
-    for (const model of provider.listModels()) {
-      const key = `${providerId}:${model.modelId}`;
-      if (this.modelIndex.has(key)) {
-        throw createEngineError(
-          EngineErrorCode.INVALID_CONFIGURATION,
-          `Duplicate model ID '${model.modelId}' for provider '${providerId}'`
-        );
-      }
-      this.modelIndex.set(key, model);
     }
   }
 

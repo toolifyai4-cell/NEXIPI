@@ -49,32 +49,38 @@ export class InMemoryCredentialStore implements CredentialStore {
   }
 }
 
+/**
+ * A credential store decorator that redacts secret values on retrieval.
+ *
+ * NOTE: This is NOT an OS-backed secure storage implementation. It wraps a
+ * delegate {@link CredentialStore} (typically {@link InMemoryCredentialStore})
+ * and returns redacted copies of credentials to prevent accidental secret
+ * leakage through logs or error messages. Actual OS-backed secure persistence
+ * (e.g. VS Code SecretStorage) is not implemented here; integrate such a
+ * store as the delegate when available. No custom encryption is performed.
+ */
 export class SecretCredentialStore implements CredentialStore {
   private readonly delegate: CredentialStore;
   private readonly logger: Logger;
-  private readonly secretKeys: Set<string> = new Set([
-    'apiKey',
+  private readonly secretKeysArray: string[] = [
+    'apikey',
     'api_key',
     'token',
     'secret',
     'password',
     'auth',
     'credential',
-    'accessToken',
-    'refreshToken',
-    'apikey',
-    'clientSecret',
+    'accesstoken',
+    'refreshtoken',
+    'clientsecret',
     'client_secret',
-    'privateKey',
+    'privatekey',
     'private_key',
     'authorization',
     'bearer',
-    'api_key',
     'access_token',
     'refresh_token',
-    'client_secret',
-    'private_key',
-  ]);
+  ];
 
   constructor(delegate: CredentialStore, logger?: Logger) {
     this.delegate = delegate;
@@ -123,7 +129,9 @@ export class SecretCredentialStore implements CredentialStore {
 
   private isSecretKey(key: string): boolean {
     const lowerKey = key.toLowerCase();
-    return this.secretKeys.has(lowerKey) || this.secretKeys.has(key);
+    // Match by substring (consistent with core sanitization) so variants such
+    // as "myApiKey" or "apiKeyValue" are also redacted.
+    return this.secretKeysArray.some(secret => lowerKey.includes(secret));
   }
 }
 

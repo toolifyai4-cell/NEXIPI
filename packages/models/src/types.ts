@@ -206,17 +206,17 @@ export const FinishReasonSchema = z.enum([
 ]);
 
 export interface UsageStatistics {
-  readonly promptTokens: number;
-  readonly completionTokens: number;
-  readonly totalTokens: number;
+  readonly promptTokens?: number | undefined;
+  readonly completionTokens?: number | undefined;
+  readonly totalTokens?: number | undefined;
   readonly cachedTokens?: number | undefined;
   readonly metadata?: Record<string, unknown> | undefined;
 }
 
 export const UsageStatisticsSchema = z.object({
-  promptTokens: z.number().int().nonnegative(),
-  completionTokens: z.number().int().nonnegative(),
-  totalTokens: z.number().int().nonnegative(),
+  promptTokens: z.number().int().nonnegative().optional(),
+  completionTokens: z.number().int().nonnegative().optional(),
+  totalTokens: z.number().int().nonnegative().optional(),
   cachedTokens: z.number().int().nonnegative().optional(),
   metadata: z.record(z.unknown()).optional(),
 });
@@ -252,6 +252,11 @@ export interface ProviderCredentials {
   readonly metadata?: Record<string, unknown> | undefined;
 }
 
+/**
+ * Credential storage interface. Implementations may be in-memory or backed by
+ * a secure persistent store. Values returned by `get` are implementation-defined
+ * (e.g. redacted by {@link SecretCredentialStore}).
+ */
 export interface CredentialStore {
   get(providerId: ProviderId): Promise<ProviderCredentials | undefined>;
   set(credentials: ProviderCredentials): Promise<void>;

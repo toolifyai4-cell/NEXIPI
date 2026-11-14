@@ -187,6 +187,22 @@ describe('SecretCredentialStore', () => {
     const retrieved = await store.get(createProviderId('non-existent'));
     expect(retrieved).toBeUndefined();
   });
+
+  it('should redact secret keys matched by substring', async () => {
+    const providerId = createProviderId('openai');
+    await store.set({
+      providerId,
+      credentials: {
+        myApiKey: 'secret-1',
+        tokenCount: 'not-a-secret-value',
+        normalField: 'visible',
+      },
+    });
+
+    const retrieved = await store.get(providerId);
+    expect(retrieved!.credentials.myApiKey).toBe('[REDACTED]');
+    expect(retrieved!.credentials.normalField).toBe('visible');
+  });
 });
 
 describe('createCredentialStore', () => {
