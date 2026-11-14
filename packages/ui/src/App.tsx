@@ -14,11 +14,21 @@ export function App() {
     handlePromptSelect,
     handleOpenSettings,
     handleKeyDown,
+    handleCancelMessage,
+    handleRetryMessage,
     messagesEndRef,
     welcomePrompts,
   } = useChat();
 
-  const composerDisabled = isLoading;
+  const composerDisabled = isLoading || !modelConfigured;
+
+  const handleCancel = () => {
+    // Find the active streaming message and cancel it
+    const activeMessage = messages.find(m => m.role === 'assistant' && (m.status === 'streaming' || m.status === 'pending'));
+    if (activeMessage) {
+      handleCancelMessage(activeMessage.id);
+    }
+  };
 
   return (
     <div className="nexipi-app">
@@ -32,7 +42,13 @@ export function App() {
           {viewMode === 'welcome' ? (
             <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
           ) : (
-            <ChatArea messages={messages} isLoading={isLoading} messagesEndRef={messagesEndRef} />
+            <ChatArea
+              messages={messages}
+              isLoading={isLoading}
+              messagesEndRef={messagesEndRef}
+              onCancelMessage={handleCancelMessage}
+              onRetryMessage={handleRetryMessage}
+            />
           )}
         </div>
         <Composer
@@ -40,15 +56,9 @@ export function App() {
           onChange={setCurrentInput}
           onSend={sendMessage}
           onKeyDown={handleKeyDown}
-          disabled={composerDisabled}
-          placeholder={
-            isLoading
-              ? 'Waiting for response...'
-              : modelConfigured
-                ? 'Message NexiPi...'
-                : 'Configure an AI model to start chatting'
-          }
+          isLoading={isLoading}
           modelConfigured={modelConfigured}
+          onCancel={handleCancel}
         />
       </main>
       <StatusIndicator

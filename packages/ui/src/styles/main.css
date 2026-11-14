@@ -703,6 +703,156 @@ a:hover {
   height: 16px;
 }
 
+.nexipi-message-status {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.nexipi-message-status.nexipi-status--streaming {
+  background-color: var(--vscode-accent);
+  color: var(--vscode-bg);
+  animation: nexipi-pulse 1.5s infinite ease-in-out;
+}
+
+.nexipi-message-status.nexipi-status--pending {
+  background-color: var(--vscode-warning);
+  color: var(--vscode-bg);
+}
+
+.nexipi-message-status.nexipi-status--failed {
+  background-color: var(--vscode-error);
+  color: var(--vscode-bg);
+}
+
+.nexipi-message-status.nexipi-status--cancelled {
+  background-color: var(--vscode-muted);
+  color: var(--vscode-bg);
+}
+
+.nexipi-message-status.nexipi-status--completed {
+  background-color: var(--vscode-success);
+  color: var(--vscode-bg);
+}
+
+@keyframes nexipi-pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.6;
+  }
+}
+
+.nexipi-message-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--vscode-border);
+}
+
+.nexipi-message-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--vscode-muted);
+  background-color: var(--vscode-input-bg);
+  border: 1px solid var(--vscode-border);
+  transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.nexipi-message-btn:hover {
+  background-color: var(--vscode-button-hover);
+  color: var(--vscode-fg);
+  border-color: var(--vscode-accent);
+}
+
+.nexipi-message-btn:focus-visible {
+  outline: 1px solid var(--vscode-focus);
+  outline-offset: 2px;
+}
+
+.nexipi-message-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nexipi-message-btn--cancel:hover {
+  background-color: var(--vscode-error);
+  color: var(--vscode-bg);
+  border-color: var(--vscode-error);
+}
+
+.nexipi-message-btn--retry:hover {
+  background-color: var(--vscode-success);
+  color: var(--vscode-bg);
+  border-color: var(--vscode-success);
+}
+
+.nexipi-message-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 8px 10px;
+  background-color: rgba(241, 76, 76, 0.1);
+  border: 1px solid var(--vscode-error);
+  border-radius: 4px;
+  font-size: 12px;
+  color: var(--vscode-error);
+}
+
+.nexipi-message-error svg {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+}
+
+.nexipi-error-retryable {
+  font-style: italic;
+  opacity: 0.8;
+}
+
+.nexipi-composer-cancel {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background-color: var(--vscode-error);
+  color: var(--vscode-bg);
+  flex-shrink: 0;
+  transition: background-color 0.1s ease, transform 0.1s ease;
+}
+
+.nexipi-composer-cancel:hover {
+  background-color: #d63d3d;
+  transform: scale(1.02);
+}
+
+.nexipi-composer-cancel:active {
+  transform: scale(0.98);
+}
+
+.nexipi-composer-cancel:focus-visible {
+  outline: 1px solid var(--vscode-focus);
+  outline-offset: 2px;
+}
+
+.nexipi-composer-cancel svg {
+  width: 16px;
+  height: 16px;
+}
+
 /* ==========================================================================
    Status Indicator
    ========================================================================== */

@@ -1,9 +1,8 @@
-export interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-  timestamp: Date;
-}
+import type { Message as SharedMessage, Conversation as SharedConversation, MessageStatus, MessageRole } from '@nexipi/shared';
+
+export interface Message extends SharedMessage {}
+export type MessageStatus = MessageStatus;
+export type MessageRole = MessageRole;
 
 export interface ChatState {
   messages: Message[];
@@ -18,18 +17,21 @@ export interface WelcomePrompt {
   prompt: string;
 }
 
+export interface Conversation extends SharedConversation {}
+
 export interface WebviewMessage {
-  type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready' | 'openSettings';
+  type: 'sendMessage' | 'newChat' | 'promptSelected' | 'ready' | 'openSettings' | 'cancelMessage' | 'retryMessage';
   payload?: unknown;
 }
 
 export interface ExtensionMessage {
-  type: 'info' | 'error' | 'state' | 'settingsOpened' | 'chatCleared';
+  type: 'info' | 'error' | 'state' | 'settingsOpened' | 'chatCleared' | 'streamEvent' | 'messageCreated' | 'messageUpdated';
   payload: unknown;
 }
 
 export interface SendMessagePayload {
   content: string;
+  conversationId?: string;
 }
 
 export interface NewChatPayload {
@@ -44,12 +46,23 @@ export interface OpenSettingsPayload {
   reason: 'user_click' | 'model_status_click';
 }
 
+export interface CancelMessagePayload {
+  messageId: string;
+  conversationId: string;
+}
+
+export interface RetryMessagePayload {
+  messageId: string;
+  conversationId: string;
+}
+
 export interface ExtensionStatePayload {
   messages: Message[];
   currentInput: string;
   viewMode: ViewMode;
   isLoading: boolean;
   modelConfigured: boolean;
+  conversationId?: string;
 }
 
 export interface ExtensionInfoPayload {
@@ -58,6 +71,36 @@ export interface ExtensionInfoPayload {
 
 export interface ExtensionErrorPayload {
   message: string;
+}
+
+export interface StreamEventPayload {
+  event: {
+    type: string;
+    conversationId: string;
+    messageId: string;
+    delta?: string;
+    finishReason?: string;
+    usage?: {
+      promptTokens?: number;
+      completionTokens?: number;
+      totalTokens?: number;
+      cachedTokens?: number;
+    };
+    error?: {
+      code: string;
+      message: string;
+      retryable: boolean;
+      providerErrorCode?: string;
+    };
+  };
+}
+
+export interface MessageCreatedPayload {
+  message: Message;
+}
+
+export interface MessageUpdatedPayload {
+  message: Message;
 }
 
 export interface VsCodeApi {

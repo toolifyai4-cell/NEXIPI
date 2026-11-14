@@ -1,4 +1,6 @@
-export { version } from './version.js';
+export {
+  version,
+} from './version.js';
 
 export interface AgentConfig {
   readonly name: string;
@@ -82,3 +84,34 @@ export {
   type EngineOptions,
   type EngineEvents,
 } from './engine.js';
+
+export {
+  type StreamEventType,
+  type StreamEventMap,
+  type StreamEvent,
+  type StreamStartEvent,
+  type StreamDeltaEvent,
+  type StreamCompleteEvent,
+  type StreamErrorEvent,
+  type StreamCancelEvent,
+  StreamEventSchema,
+  StreamStartEventSchema,
+  StreamDeltaEventSchema,
+  StreamCompleteEventSchema,
+  StreamErrorEventSchema,
+  StreamCancelEventSchema,
+  type StreamEventInput,
+  type StreamEventOutput,
+  createStreamStartEvent,
+  createStreamDeltaEvent,
+  createStreamCompleteEvent,
+  createStreamErrorEvent,
+  createStreamCancelEvent,
+  validateStreamEvent,
+  safeValidateStreamEvent,
+  type StreamingProvider,
+  type NonStreamingProvider,
+  type ProviderExecutor,
+  isStreamingProvider,
+  isNonStreamingProvider,
+} from '@nexipi/shared';

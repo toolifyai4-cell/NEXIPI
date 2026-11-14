@@ -1,12 +1,15 @@
-import type { Message } from '../types';
+import { useMemo } from 'react';
+import type { Message, MessageStatus } from '../types';
 
 interface ChatAreaProps {
   messages: Message[];
   isLoading: boolean;
   messagesEndRef: React.RefObject<HTMLDivElement>;
+  onCancelMessage?: (messageId: string) => void;
+  onRetryMessage?: (messageId: string) => void;
 }
 
-export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps) {
+export function ChatArea({ messages, isLoading, messagesEndRef, onCancelMessage, onRetryMessage }: ChatAreaProps) {
   if (messages.length === 0) {
     return (
       <div className="nexipi-chat-empty" role="status" aria-live="polite">
@@ -33,7 +36,12 @@ export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps)
     <div className="nexipi-chat-area" role="log" aria-live="polite" aria-label="Conversation">
       <div className="nexipi-message-list">
         {messages.map(message => (
-          <MessageBubble key={message.id} message={message} />
+          <MessageBubble
+            key={message.id}
+            message={message}
+            onCancel={onCancelMessage}
+            onRetry={onRetryMessage}
+          />
         ))}
         {isLoading && (
           <div
@@ -57,13 +65,35 @@ export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps)
 
 interface MessageBubbleProps {
   message: Message;
+  onCancel?: (messageId: string) => void;
+  onRetry?: (messageId: string) => void;
 }
 
-function MessageBubble({ message }: MessageBubbleProps) {
-  const timeString = message.timestamp.toLocaleTimeString([], {
-    hour: '2-digit',
-    minute: '2-digit',
-  });
+function MessageBubble({ message, onCancel, onRetry }: MessageBubbleProps) {
+  const timeString = useMemo(() => {
+    return new Date(message.timestamp).toLocaleTimeString([], {
+      hour: '2-digit',
+      minute: '2-digit',
+    });
+  }, [message.timestamp]);
+
+  const statusConfig = useMemo(() => {
+    switch (message.status) {
+      case 'streaming':
+        return { label: 'Streaming', className: 'nexipi-status--streaming' };
+      case 'pending':
+        return { label: 'Pending', className: 'nexipi-status--pending' };
+      case 'failed':
+        return { label: 'Failed', className: 'nexipi-status--failed' };
+      case 'cancelled':
+        return { label: 'Cancelled', className: 'nexipi-status--cancelled' };
+      default:
+        return { label: 'Completed', className: 'nexipi-status--completed' };
+    }
+  }, [message.status]);
+
+  const showCancelButton = message.role === 'assistant' && (message.status === 'streaming' || message.status === 'pending');
+  const showRetryButton = message.role === 'assistant' && (message.status === 'failed' || message.status === 'cancelled');
 
   return (
     <article className={`nexipi-message nexipi-message--${message.role}`} role="listitem">
@@ -84,18 +114,65 @@ function MessageBubble({ message }: MessageBubbleProps) {
       <div className="nexipi-message-content">
         <div className="nexipi-message-header">
           <span className="nexipi-message-role">{message.role === 'user' ? 'You' : 'NexiPi'}</span>
-          <time className="nexipi-message-time" dateTime={message.timestamp.toISOString()}>
+          <time className="nexipi-message-time" dateTime={new Date(message.timestamp).toISOString()}>
             {timeString}
           </time>
+          {(message.status !== 'completed' || message.role === 'assistant') && (
+            <span className={`nexipi-message-status ${statusConfig.className}`} aria-live="polite">
+              {statusConfig.label}
+            </span>
+          )}
         </div>
         <div className="nexipi-message-text">{formatMessage(message.content)}</div>
+        {(showCancelButton || showRetryButton) && (
+          <div className="nexipi-message-actions">
+            {showCancelButton && onCancel && (
+              <button
+                className="nexipi-message-btn nexipi-message-btn--cancel"
+                onClick={() => onCancel(message.id)}
+                aria-label="Stop generation"
+                title="Stop generation"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <rect x="6" y="6" width="12" height="12" rx="2" />
+                </svg>
+              </button>
+            )}
+            {showRetryButton && onRetry && (
+              <button
+                className="nexipi-message-btn nexipi-message-btn--retry"
+                onClick={() => onRetry(message.id)}
+                aria-label="Retry"
+                title="Retry"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+                  <path d="M23 4v6h-6" />
+                  <path d="M1 20v-6h6" />
+                  <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15" />
+                </svg>
+              </button>
+            )}
+          </div>
+        )}
+        {message.status === 'failed' && message.metadata?.error && (
+          <div className="nexipi-message-error" role="alert">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="12" y1="8" x2="12" y2="12" />
+              <line x1="12" y1="16" x2="12.01" y2="16" />
+            </svg>
+            <span>{message.metadata.error.message}</span>
+            {message.metadata.error.retryable && (
+              <span className="nexipi-error-retryable"> (Retryable)</span>
+            )}
+          </div>
+        )}
       </div>
     </article>
   );
 }
 
 function formatMessage(content: string): React.ReactNode {
-  // Simple markdown-like formatting for code blocks and inline code
   const parts = content.split(/(`[^`]+`|```[\s\S]*?```)/g);
 
   return parts.map((part, index) => {

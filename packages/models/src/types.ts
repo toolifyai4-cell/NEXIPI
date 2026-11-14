@@ -1,7 +1,9 @@
 import { z } from 'zod';
+import type { ModelId, UsageStatistics } from '@nexipi/shared';
 
 export type ProviderId = string & { readonly __brand: unique symbol };
-export type ModelId = string & { readonly __brand: unique symbol };
+
+export type { ModelId, UsageStatistics } from '@nexipi/shared';
 
 export function createProviderId(id: string): ProviderId {
   return id as ProviderId;
@@ -205,14 +207,6 @@ export const FinishReasonSchema = z.enum([
   'other',
 ]);
 
-export interface UsageStatistics {
-  readonly promptTokens?: number | undefined;
-  readonly completionTokens?: number | undefined;
-  readonly totalTokens?: number | undefined;
-  readonly cachedTokens?: number | undefined;
-  readonly metadata?: Record<string, unknown> | undefined;
-}
-
 export const UsageStatisticsSchema = z.object({
   promptTokens: z.number().int().nonnegative().optional(),
   completionTokens: z.number().int().nonnegative().optional(),
@@ -275,6 +269,7 @@ export interface ModelProvider {
   validateRequest(request: ModelRequest): Promise<ValidationResult>;
 
   execute(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>;
+  executeStream?(request: ModelRequest, signal?: AbortSignal): AsyncIterable<StreamDeltaEvent | StreamCompleteEvent | StreamErrorEvent>;
 
   healthCheck(): Promise<ProviderHealth>;
 }

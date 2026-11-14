@@ -1,12 +1,16 @@
 import * as vscode from 'vscode';
 import { defaultConfig } from '@nexipi/core';
 import type { Logger, LogLevel } from '@nexipi/shared';
+import { ChatService, createChatService } from '@nexipi/models';
+import { createProviderRegistry } from '@nexipi/models';
+import type { StreamEvent } from '@nexipi/shared';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
   statusBarItem: vscode.StatusBarItem;
   logger: Logger;
   disposables: vscode.Disposable[];
+  chatService: ChatService;
 }
 
 function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Logger {
@@ -59,10 +63,73 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   private _view?: vscode.WebviewView;
   private readonly _extensionUri: vscode.Uri;
   private readonly _logger: Logger;
+  private readonly _chatService: ChatService;
 
-  constructor(extensionUri: vscode.Uri, logger: Logger) {
+  constructor(extensionUri: vscode.Uri, logger: Logger, chatService: ChatService) {
     this._extensionUri = extensionUri;
     this._logger = logger;
+    this._chatService = chatService;
+    this._setupChatServiceListeners();
+  }
+
+  private _setupChatServiceListeners(): void {
+    this._chatService.on('stream:event', ({ event, timestamp }) => {
+      this._sendStreamEvent(event);
+    });
+
+    this._chatService.on('message:created', ({ message, timestamp }) => {
+      this._sendMessageCreated(message);
+    });
+
+    this._chatService.on('message:updated', ({ message, timestamp }) => {
+      this._sendMessageUpdated(message);
+    });
+
+    this._chatService.on('conversation:created', ({ conversation, timestamp }) => {
+      this._logger.debug('Conversation created', { conversationId: conversation.id });
+    });
+
+    this._chatService.on('chat:error', ({ error, conversationId, messageId, timestamp }) => {
+      this._logger.error('Chat error', { conversationId, messageId, error: error.message });
+    });
+  }
+
+  private _sendStreamEvent(event: StreamEvent): void {
+    this._view?.webview.postMessage({
+      type: 'streamEvent',
+      payload: { event },
+    });
+  }
+
+  private _sendMessageCreated(message: { id: string; conversationId: string; role: string; content: string; status: string; timestamp: number; metadata?: Record<string, unknown> }): void {
+    this._view?.webview.postMessage({
+      type: 'messageCreated',
+      payload: { message },
+    });
+  }
+
+  private _sendMessageUpdated(message: { id: string; conversationId: string; role: string; content: string; status: string; timestamp: number; metadata?: Record<string, unknown> }): void {
+    this._view?.webview.postMessage({
+      type: 'messageUpdated',
+      payload: { message },
+    });
+  }
+
+  private _sendInitialState(): void {
+    const modelConfigured = false;
+
+    this._view?.webview.postMessage({
+      type: 'state',
+      payload: {
+        messages: [],
+        currentInput: '',
+        viewMode: 'welcome',
+        isLoading: false,
+        modelConfigured,
+        conversationId: null,
+      },
+    });
+    this._logger.debug('Sent initial state to webview', { modelConfigured });
   }
 
   public resolveWebviewView(
@@ -121,24 +188,6 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
     return text;
   }
 
-  private _sendInitialState(): void {
-    // Model is only configured when a provider, model, and valid credentials are set.
-    // Since model configuration is not yet implemented, default to false.
-    const modelConfigured = false;
-
-    this._view?.webview.postMessage({
-      type: 'state',
-      payload: {
-        messages: [],
-        currentInput: '',
-        viewMode: 'welcome',
-        isLoading: false,
-        modelConfigured,
-      },
-    });
-    this._logger.debug('Sent initial state to webview', { modelConfigured });
-  }
-
   private _onMessage(message: unknown): void {
     if (typeof message !== 'object' || message === null) {
       return;
@@ -150,29 +199,55 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
       switch (msg.type) {
         case 'ready':
           this._logger.debug('Webview ready');
-          // Send initial state including model configuration status
           this._sendInitialState();
           break;
-        case 'sendMessage':
+        case 'sendMessage': {
           this._logger.info('Message from webview', { payload: msg.payload });
-          // In Phase 04, the extension will process the message and send AI response back
-          // For now, acknowledge receipt
-          this._view?.webview.postMessage({
-            type: 'info',
-            payload: { message: 'Message received. AI model integration coming in future phases.' },
-          });
+          const payload = msg.payload as { content: string; conversationId?: string } | undefined;
+          if (!payload?.content) {
+            this._logger.warn('sendMessage: missing content');
+            return;
+          }
+
+          let conversationId = payload.conversationId;
+          if (!conversationId) {
+            const conversation = this._chatService.createConversation();
+            conversationId = conversation.id;
+          }
+
+          try {
+            await this._chatService.sendMessage(conversationId, payload.content);
+          } catch (error) {
+            const err = error instanceof Error ? error : new Error(String(error));
+            this._logger.error('Failed to send message', { error: err.message });
+            this._view?.webview.postMessage({
+              type: 'error',
+              payload: { message: err.message },
+            });
+          }
           break;
-        case 'newChat':
+        }
+        case 'newChat': {
           this._logger.info('New chat requested from webview');
+          const conversation = this._chatService.createConversation();
           this._view?.webview.postMessage({
-            type: 'chatCleared',
-            payload: { timestamp: new Date().toISOString() },
+            type: 'state',
+            payload: {
+              messages: [],
+              currentInput: '',
+              viewMode: 'welcome',
+              isLoading: false,
+              modelConfigured: false,
+              conversationId: conversation.id,
+            },
           });
           break;
-        case 'promptSelected':
+        }
+        case 'promptSelected': {
           this._logger.debug('Prompt selected from webview', { payload: msg.payload });
           break;
-        case 'openSettings':
+        }
+        case 'openSettings': {
           this._logger.info('Open settings requested from webview', { payload: msg.payload });
           try {
             await vscode.commands.executeCommand(
@@ -189,6 +264,27 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             payload: { timestamp: new Date().toISOString() },
           });
           break;
+        }
+        case 'cancelMessage': {
+          const payload = msg.payload as { messageId: string; conversationId: string } | undefined;
+          if (!payload?.messageId || !payload?.conversationId) {
+            this._logger.warn('cancelMessage: missing messageId or conversationId');
+            return;
+          }
+          this._logger.info('Cancel message requested', { messageId: payload.messageId });
+          this._chatService.cancelMessage(payload.messageId);
+          break;
+        }
+        case 'retryMessage': {
+          const payload = msg.payload as { messageId: string; conversationId: string } | undefined;
+          if (!payload?.messageId || !payload?.conversationId) {
+            this._logger.warn('retryMessage: missing messageId or conversationId');
+            return;
+          }
+          this._logger.info('Retry message requested', { messageId: payload.messageId });
+          this._chatService.retryMessage(payload.conversationId, payload.messageId);
+          break;
+        }
         default:
           this._logger.warn('Unknown message type from webview', { type: msg.type });
       }
@@ -288,13 +384,20 @@ export function activate(context: vscode.ExtensionContext): void {
     `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
   );
 
-  const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger);
+  const providerRegistry = createProviderRegistry();
+  const chatService = createChatService({
+    providerRegistry,
+    logger,
+  });
+
+  const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger, chatService);
 
   const nexipiContext: NexiPiContext = {
     outputChannel,
     statusBarItem,
     logger,
     disposables: [],
+    chatService,
   };
 
   const sidebarDisposable = vscode.window.registerWebviewViewProvider(
@@ -323,6 +426,13 @@ export function activate(context: vscode.ExtensionContext): void {
   );
 
   context.subscriptions.push(...nexipiContext.disposables);
+
+  // Dispose chat service on deactivation
+  context.subscriptions.push({
+    dispose: async () => {
+      await chatService.dispose();
+    },
+  });
 
   logger.info('Extension activated successfully');
   updateStatusBar(statusBarItem, 'active');

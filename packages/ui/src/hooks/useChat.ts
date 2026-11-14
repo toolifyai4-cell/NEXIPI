@@ -11,6 +11,11 @@ import type {
   ExtensionStatePayload,
   ExtensionInfoPayload,
   ExtensionErrorPayload,
+  StreamEventPayload,
+  MessageCreatedPayload,
+  MessageUpdatedPayload,
+  CancelMessagePayload,
+  RetryMessagePayload,
 } from '../types';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -34,14 +39,20 @@ const WELCOME_PROMPTS = [
   },
 ];
 
-export function useChat() {
+interface UseChatOptions {
+  onStreamEvent?: (event: StreamEventPayload['event']) => void;
+}
+
+export function useChat(options: UseChatOptions = {}) {
   const [messages, setMessages] = useState<Message[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [currentInput, setCurrentInput] = useState('');
   const [viewMode, setViewMode] = useState<ViewMode>('welcome');
   const [modelConfigured, setModelConfigured] = useState(false);
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const vscodeApiRef = useRef<ReturnType<NonNullable<Window['acquireVsCodeApi']>> | null>(null);
+  const pendingUserMessageRef = useRef<string | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -51,15 +62,24 @@ export function useChat() {
     scrollToBottom();
   }, [messages, scrollToBottom]);
 
-  const addMessage = useCallback((role: Message['role'], content: string) => {
+  const addMessage = useCallback((role: Message['role'], content: string, status: Message['status'] = 'pending', metadata?: Record<string, unknown>) => {
     const message: Message = {
       id: generateId(),
+      conversationId: conversationId ?? generateId(),
       role,
       content,
-      timestamp: new Date(),
+      status,
+      timestamp: Date.now(),
+      metadata,
     };
     setMessages(prev => [...prev, message]);
     return message;
+  }, [conversationId]);
+
+  const updateMessage = useCallback((messageId: string, updates: Partial<Pick<Message, 'content' | 'status' | 'metadata'>>) => {
+    setMessages(prev => prev.map(msg =>
+      msg.id === messageId ? { ...msg, ...updates, metadata: { ...msg.metadata, ...updates.metadata } } : msg
+    ));
   }, []);
 
   const resetLoadingState = useCallback(() => {
@@ -82,12 +102,27 @@ export function useChat() {
             console.debug('[NexiPi] Model configured state updated:', payload.modelConfigured);
             setModelConfigured(payload.modelConfigured);
           }
+          if (payload.conversationId) {
+            setConversationId(payload.conversationId);
+          }
+          if (payload.messages && Array.isArray(payload.messages)) {
+            setMessages(payload.messages);
+          }
+          if (payload.currentInput !== undefined) {
+            setCurrentInput(payload.currentInput);
+          }
+          if (payload.viewMode) {
+            setViewMode(payload.viewMode);
+          }
+          if (payload.isLoading !== undefined) {
+            setIsLoading(payload.isLoading);
+          }
           break;
         }
         case 'info': {
           const payload = message.payload as ExtensionInfoPayload;
           if (payload?.message) {
-            addMessage('assistant', payload.message);
+            addMessage('assistant', payload.message, 'completed');
           }
           resetLoadingState();
           break;
@@ -95,15 +130,104 @@ export function useChat() {
         case 'error': {
           const payload = message.payload as ExtensionErrorPayload;
           if (payload?.message) {
-            addMessage('assistant', `Error: ${payload.message}`);
+            addMessage('assistant', `Error: ${payload.message}`, 'failed');
           }
           resetLoadingState();
           break;
         }
         case 'chatCleared': {
           setMessages([]);
+          setConversationId(null);
+          setCurrentInput('');
+          setIsLoading(false);
           setViewMode('welcome');
-          resetLoadingState();
+          break;
+        }
+        case 'streamEvent': {
+          const payload = message.payload as StreamEventPayload;
+          if (payload?.event) {
+            const { event } = payload;
+            switch (event.type) {
+              case 'stream:start': {
+                updateMessage(event.messageId, { status: 'streaming', content: '' });
+                setIsLoading(true);
+                break;
+              }
+              case 'stream:delta': {
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === event.messageId) {
+                    return { ...msg, content: msg.content + event.delta, status: 'streaming' };
+                  }
+                  return msg;
+                }));
+                break;
+              }
+              case 'stream:complete': {
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === event.messageId) {
+                    return {
+                      ...msg,
+                      status: 'completed',
+                      metadata: {
+                        ...msg.metadata,
+                        usage: event.usage,
+                        finishReason: event.finishReason,
+                      },
+                    };
+                  }
+                  return msg;
+                }));
+                setIsLoading(false);
+                break;
+              }
+              case 'stream:error': {
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === event.messageId) {
+                    return {
+                      ...msg,
+                      status: 'failed',
+                      metadata: {
+                        ...msg.metadata,
+                        error: event.error,
+                      },
+                    };
+                  }
+                  return msg;
+                }));
+                setIsLoading(false);
+                break;
+              }
+              case 'stream:cancel': {
+                setMessages(prev => prev.map(msg => {
+                  if (msg.id === event.messageId) {
+                    return { ...msg, status: 'cancelled' };
+                  }
+                  return msg;
+                }));
+                setIsLoading(false);
+                break;
+              }
+            }
+            options.onStreamEvent?.(event);
+          }
+          break;
+        }
+        case 'messageCreated': {
+          const payload = message.payload as MessageCreatedPayload;
+          if (payload?.message) {
+            setMessages(prev => [...prev, payload.message]);
+          }
+          break;
+        }
+        case 'messageUpdated': {
+          const payload = message.payload as MessageUpdatedPayload;
+          if (payload?.message) {
+            updateMessage(payload.message.id, {
+              content: payload.message.content,
+              status: payload.message.status,
+              metadata: payload.message.metadata,
+            });
+          }
           break;
         }
         case 'settingsOpened': {
@@ -115,7 +239,7 @@ export function useChat() {
           break;
       }
     },
-    [addMessage, resetLoadingState]
+    [addMessage, resetLoadingState, updateMessage, conversationId, options]
   );
 
   useEffect(() => {
@@ -167,25 +291,24 @@ export function useChat() {
     if (!modelConfigured) {
       const userMessage = currentInput.trim();
       setCurrentInput('');
-      addMessage('user', userMessage);
+      addMessage('user', userMessage, 'completed');
       setViewMode('chat');
 
-      // Show error message for missing model
       addMessage(
         'assistant',
-        'No AI model is configured. Open NexiPi settings to configure a model before chatting.'
+        'No AI model is configured. Open NexiPi settings to configure a model before chatting.',
+        'failed'
       );
-      // Do not set isLoading, composer stays enabled
       return;
     }
 
     const userMessage = currentInput.trim();
+    pendingUserMessageRef.current = userMessage;
     setCurrentInput('');
-    addMessage('user', userMessage);
+    addMessage('user', userMessage, 'completed');
     setIsLoading(true);
     setViewMode('chat');
 
-    // Send message to extension host
     const payload: SendMessagePayload = { content: userMessage };
     postMessage({ type: 'sendMessage', payload });
   }, [currentInput, isLoading, modelConfigured, addMessage, postMessage]);
@@ -195,8 +318,9 @@ export function useChat() {
     setCurrentInput('');
     setIsLoading(false);
     setViewMode('welcome');
+    setConversationId(null);
+    pendingUserMessageRef.current = null;
 
-    // Notify extension host
     const payload: NewChatPayload = { timestamp: new Date().toISOString() };
     postMessage({ type: 'newChat', payload });
   }, [postMessage]);
@@ -204,7 +328,6 @@ export function useChat() {
   const handlePromptSelect = useCallback(
     (prompt: string) => {
       setCurrentInput(prompt);
-      // Notify extension host
       const payload: PromptSelectedPayload = { prompt };
       postMessage({ type: 'promptSelected', payload });
     },
@@ -219,14 +342,30 @@ export function useChat() {
     [postMessage]
   );
 
+  const handleCancelMessage = useCallback(
+    (messageId: string) => {
+      if (!conversationId) return;
+      const payload: CancelMessagePayload = { messageId, conversationId };
+      postMessage({ type: 'cancelMessage', payload });
+    },
+    [conversationId, postMessage]
+  );
+
+  const handleRetryMessage = useCallback(
+    (messageId: string) => {
+      if (!conversationId) return;
+      const payload: RetryMessagePayload = { messageId, conversationId };
+      postMessage({ type: 'retryMessage', payload });
+    },
+    [conversationId, postMessage]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // Ctrl+Enter (or Cmd+Enter on Mac) to send
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
         sendMessage();
       }
-      // Shift+Enter inserts newline (default textarea behavior, no action needed)
     },
     [sendMessage]
   );
@@ -242,10 +381,13 @@ export function useChat() {
     setCurrentInput,
     viewMode,
     modelConfigured,
+    conversationId,
     sendMessage,
     handleNewChat,
     handlePromptSelect,
     handleOpenSettings,
+    handleCancelMessage,
+    handleRetryMessage,
     handleKeyDown,
     scrollToBottom,
     messagesEndRef,

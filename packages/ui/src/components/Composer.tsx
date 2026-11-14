@@ -5,9 +5,9 @@ interface ComposerProps {
   onChange: (value: string) => void;
   onSend: () => void;
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
-  disabled: boolean;
-  placeholder: string;
+  isLoading: boolean;
   modelConfigured: boolean;
+  onCancel?: () => void;
 }
 
 export function Composer({
@@ -15,9 +15,9 @@ export function Composer({
   onChange,
   onSend,
   onKeyDown,
-  disabled,
-  placeholder,
+  isLoading,
   modelConfigured,
+  onCancel,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -30,18 +30,20 @@ export function Composer({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!disabled && value.trim()) {
+    if (!isLoading && value.trim()) {
       onSend();
     }
   };
 
-  const handleAttachClick = () => {
-    // Placeholder for future attachment functionality
+  const handleCancel = () => {
+    if (onCancel) {
+      onCancel();
+    }
   };
 
   const getFooterStatus = () => {
-    if (disabled) {
-      return 'Waiting for response...';
+    if (isLoading) {
+      return 'Generating response...';
     }
     if (!modelConfigured) {
       return 'AI model not configured';
@@ -50,7 +52,7 @@ export function Composer({
   };
 
   const getSendButtonTitle = () => {
-    if (disabled) {
+    if (isLoading) {
       return 'Waiting for response...';
     }
     if (!modelConfigured) {
@@ -70,7 +72,6 @@ export function Composer({
         <button
           type="button"
           className="nexipi-composer-btn"
-          onClick={handleAttachClick}
           aria-label="Add context"
           title="Add context (not yet implemented)"
           disabled
@@ -99,8 +100,14 @@ export function Composer({
           value={value}
           onChange={e => onChange(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={disabled}
-          placeholder={placeholder}
+          disabled={isLoading}
+          placeholder={
+            isLoading
+              ? 'Waiting for response...'
+              : modelConfigured
+              ? 'Message NexiPi...'
+              : 'Configure an AI model to start chatting'
+          }
           aria-label="Message input"
           aria-multiline="true"
           rows={1}
@@ -111,23 +118,43 @@ export function Composer({
         <span className="nexipi-composer-status" aria-live="polite" data-testid="composer-status">
           {getFooterStatus()}
         </span>
-        <button
-          type="submit"
-          className="nexipi-composer-send"
-          disabled={disabled || !value.trim()}
-          aria-label="Send message"
-          title={getSendButtonTitle()}
-        >
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            strokeWidth="2"
-            aria-hidden="true"
+        {isLoading ? (
+          <button
+            type="button"
+            className="nexipi-composer-cancel"
+            onClick={handleCancel}
+            aria-label="Stop generation"
+            title="Stop generation"
           >
-            <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
-          </svg>
-        </button>
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <rect x="6" y="6" width="12" height="12" rx="2" />
+            </svg>
+          </button>
+        ) : (
+          <button
+            type="submit"
+            className="nexipi-composer-send"
+            disabled={!value.trim() || !modelConfigured}
+            aria-label="Send message"
+            title={getSendButtonTitle()}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              aria-hidden="true"
+            >
+              <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z" />
+            </svg>
+          </button>
+        )}
       </div>
     </form>
   );

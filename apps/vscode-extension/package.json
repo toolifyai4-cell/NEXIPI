@@ -115,6 +115,7 @@
   },
   "devDependencies": {
     "@nexipi/core": "workspace:*",
+    "@nexipi/models": "workspace:*",
     "@nexipi/shared": "workspace:*",
     "@nexipi/ui": "workspace:*",
     "@types/node": "^20.10.0",
