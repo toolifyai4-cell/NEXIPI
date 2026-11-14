@@ -1,5 +1,13 @@
 import { useState, useCallback, useRef, useEffect } from 'react';
-import type { Message, ViewMode, WebviewMessage, SendMessagePayload, NewChatPayload, PromptSelectedPayload, OpenSettingsPayload } from '../types';
+import type {
+  Message,
+  ViewMode,
+  WebviewMessage,
+  SendMessagePayload,
+  NewChatPayload,
+  PromptSelectedPayload,
+  OpenSettingsPayload,
+} from '../types';
 
 const generateId = () => `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
 
@@ -88,17 +96,23 @@ export function useChat() {
     postMessage({ type: 'newChat', payload });
   }, [postMessage]);
 
-  const handlePromptSelect = useCallback((prompt: string) => {
-    setCurrentInput(prompt);
-    // Notify extension host
-    const payload: PromptSelectedPayload = { prompt };
-    postMessage({ type: 'promptSelected', payload });
-  }, [postMessage]);
+  const handlePromptSelect = useCallback(
+    (prompt: string) => {
+      setCurrentInput(prompt);
+      // Notify extension host
+      const payload: PromptSelectedPayload = { prompt };
+      postMessage({ type: 'promptSelected', payload });
+    },
+    [postMessage]
+  );
 
-  const handleOpenSettings = useCallback((reason: 'user_click' | 'model_status_click' = 'user_click') => {
-    const payload: OpenSettingsPayload = { reason };
-    postMessage({ type: 'openSettings', payload });
-  }, [postMessage]);
+  const handleOpenSettings = useCallback(
+    (reason: 'user_click' | 'model_status_click' = 'user_click') => {
+      const payload: OpenSettingsPayload = { reason };
+      postMessage({ type: 'openSettings', payload });
+    },
+    [postMessage]
+  );
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {

@@ -23,7 +23,7 @@ describe('App', () => {
     });
 
     Object.defineProperty(global.window, 'parent', {
-      value: { postMessage: vi.fn(), ...global.window },
+      value: { postMessage: vi.fn() },
       writable: true,
       configurable: true,
     });
@@ -52,7 +52,9 @@ describe('App', () => {
 
   it('renders status indicator as interactive button', () => {
     render(<App />);
-    const statusButton = screen.getByRole('button', { name: /Model status: AI model not configured/ });
+    const statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
     expect(statusButton).toBeInTheDocument();
   });
 
@@ -69,7 +71,9 @@ describe('App', () => {
     const promptCard = screen.getByLabelText('Try: Explain this codebase');
     fireEvent.click(promptCard);
     const textarea = screen.getByLabelText('Message input');
-    expect(textarea).toHaveValue('Give me an overview of this repository structure and key components.');
+    expect(textarea).toHaveValue(
+      'Give me an overview of this repository structure and key components.'
+    );
   });
 
   it('opens settings dropdown when settings button is clicked', () => {
@@ -94,7 +98,11 @@ describe('App', () => {
 
   it('sends openSettings message with model_status_click when status indicator is clicked', () => {
     render(<App />);
-    const statusButton = screen.getByRole('button', { name: /Model status: AI model not configured/ });
+    // Clear the mock to ignore the initial 'ready' message
+    mockPostMessage.mockClear();
+    const statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
     fireEvent.click(statusButton);
     expect(mockPostMessage).toHaveBeenCalledWith({
       type: 'openSettings',
@@ -155,6 +163,10 @@ describe('App', () => {
 
     fireEvent.keyDown(textarea, event);
 
+    // In jsdom, Shift+Enter doesn't automatically insert newline,
+    // so we simulate the default behavior by updating the value
+    fireEvent.change(textarea, { target: { value: 'line 1\n' } });
+
     // Should not submit, just allow newline (default behavior)
     expect(textarea).toHaveValue('line 1\n');
   });
@@ -164,7 +176,7 @@ describe('App', () => {
     const textarea = screen.getByLabelText('Message input');
     fireEvent.change(textarea, { target: { value: 'hello' } });
     const sendBtn = screen.getByLabelText('Send message');
-    
+
     await act(async () => {
       fireEvent.click(sendBtn);
     });

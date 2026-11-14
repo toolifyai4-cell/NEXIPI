@@ -21,7 +21,11 @@ export function App() {
     <div className="nexipi-app">
       <Header onNewChat={handleNewChat} onSettings={handleOpenSettings} />
       <main className="nexipi-main" role="main">
-        <div className="nexipi-content" role="region" aria-label={viewMode === 'welcome' ? 'Welcome' : 'Conversation'}>
+        <div
+          className="nexipi-content"
+          role="region"
+          aria-label={viewMode === 'welcome' ? 'Welcome' : 'Conversation'}
+        >
           {viewMode === 'welcome' ? (
             <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
           ) : (
@@ -37,7 +41,12 @@ export function App() {
           placeholder={isLoading ? 'Waiting for response...' : 'Message NexiPi...'}
         />
       </main>
-      <StatusIndicator status="disconnected" label="AI model not configured" onClick={handleOpenSettings} />
+      <StatusIndicator
+        status="disconnected"
+        label="AI model not configured"
+        onClick={handleOpenSettings}
+        reason="model_status_click"
+      />
     </div>
   );
 }
