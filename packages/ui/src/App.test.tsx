@@ -132,12 +132,13 @@ describe('App', () => {
     });
   });
 
-  it('composer is disabled when model is not configured', () => {
+  it('composer is enabled when model is not configured (only disabled during loading)', () => {
     render(<App />);
-    // Default modelConfigured is false
+    // Default modelConfigured is false, but composer only disabled during loading
     const textarea = screen.getByLabelText('Message input');
-    expect(textarea).toBeDisabled();
+    expect(textarea).not.toBeDisabled();
     const sendBtn = screen.getByLabelText('Send message');
+    // Send button is disabled when textarea is empty (correct behavior)
     expect(sendBtn).toBeDisabled();
   });
 
@@ -149,19 +150,20 @@ describe('App', () => {
 
   it('composer becomes enabled after receiving model configured state', () => {
     render(<App />);
-    // Initially disabled
+    // Initially disabled (model not configured, but composer only disabled when loading)
     const textarea = screen.getByLabelText('Message input');
-    expect(textarea).toBeDisabled();
+    expect(textarea).not.toBeDisabled();
 
     // Simulate extension sending model configured state
     act(() => {
       simulateExtensionStateMessage(true);
     });
 
-    // Now composer should be enabled
+    // Textarea should still be enabled (composer only disabled when loading)
     expect(textarea).not.toBeDisabled();
     const sendBtn = screen.getByLabelText('Send message');
-    expect(sendBtn).not.toBeDisabled();
+    // Send button is disabled when textarea is empty (correct behavior)
+    expect(sendBtn).toBeDisabled();
     expect(textarea).toHaveAttribute('placeholder', 'Message NexiPi...');
   });
 
@@ -213,7 +215,7 @@ describe('App', () => {
     expect(textarea).toHaveValue('');
 
     // Should show loading indicator (typing indicator)
-    expect(screen.getByRole('status', { name: /loading/i })).toBeInTheDocument();
+    expect(screen.getByRole('status', { name: /waiting for response/i })).toBeInTheDocument();
   });
 
   it('shows error message and keeps composer enabled when sending without model configured', async () => {
@@ -239,9 +241,17 @@ describe('App', () => {
     const textarea = screen.getByLabelText('Message input');
     fireEvent.change(textarea, { target: { value: 'hello' } });
 
-    const sendBtn = screen.getByLabelText('Send message');
+    // Use Ctrl+Enter to send (bypasses disabled button)
+    const event = {
+      key: 'Enter',
+      ctrlKey: true,
+      metaKey: false,
+      preventDefault: vi.fn(),
+      shiftKey: false,
+    } as unknown as React.KeyboardEvent<HTMLTextAreaElement>;
+
     await act(async () => {
-      fireEvent.click(sendBtn);
+      fireEvent.keyDown(textarea, event);
     });
 
     // User message should appear
@@ -252,7 +262,9 @@ describe('App', () => {
     // Error message should appear (use flexible text matcher)
     await waitFor(() => {
       expect(screen.getByText(/No AI model is configured/i)).toBeInTheDocument();
-      expect(screen.getByText(/Open NexiPi settings to configure a model before chatting/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Open NexiPi settings to configure a model before chatting/i)
+      ).toBeInTheDocument();
     });
 
     // Composer should still be enabled (not disabled)
@@ -260,7 +272,7 @@ describe('App', () => {
     expect(textarea).toHaveValue('');
 
     // Should NOT show loading indicator
-    expect(screen.queryByRole('status', { name: /loading/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('status', { name: /waiting for response/i })).not.toBeInTheDocument();
   });
 
   it('Shift+Enter inserts newline in textarea', () => {
@@ -330,7 +342,7 @@ describe('App', () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText('Waiting for response...')).toBeInTheDocument();
+      expect(screen.getByRole('status', { name: /waiting for response/i })).toBeInTheDocument();
     });
 
     // Simulate extension response
@@ -346,7 +358,9 @@ describe('App', () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText('Waiting for response...')).not.toBeInTheDocument();
+      expect(
+        screen.queryByRole('status', { name: /waiting for response/i })
+      ).not.toBeInTheDocument();
     });
     expect(screen.getByText('AI response')).toBeInTheDocument();
     expect(textarea).not.toBeDisabled();

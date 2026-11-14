@@ -18,7 +18,7 @@ export function App() {
     welcomePrompts,
   } = useChat();
 
-  const composerDisabled = isLoading || !modelConfigured;
+  const composerDisabled = isLoading;
 
   return (
     <div className="nexipi-app">

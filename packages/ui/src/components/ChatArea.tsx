@@ -36,7 +36,12 @@ export function ChatArea({ messages, isLoading, messagesEndRef }: ChatAreaProps)
           <MessageBubble key={message.id} message={message} />
         ))}
         {isLoading && (
-          <div className="nexipi-loading-message" role="status" aria-live="polite">
+          <div
+            className="nexipi-loading-message"
+            role="status"
+            aria-live="polite"
+            aria-label="Waiting for response"
+          >
             <div className="nexipi-typing-indicator" aria-hidden="true">
               <span></span>
               <span></span>
