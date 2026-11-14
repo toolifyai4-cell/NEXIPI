@@ -129,7 +129,7 @@ export function createCredentialStore(
   delegate?: CredentialStore,
   logger?: Logger
 ): CredentialStore {
-  const store = delegate ?? new InMemoryCredentialStore({ logger });
+  const store = delegate ?? new InMemoryCredentialStore(logger ? { logger } : {});
   return new SecretCredentialStore(store, logger);
 }
 

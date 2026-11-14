@@ -45,6 +45,7 @@ const PROVIDER_ERROR_CODE_MAP: Record<string, ModelProviderErrorCode> = {
 };
 
 export class ModelProviderError extends EngineError {
+  public override readonly code: ModelProviderErrorCode;
   public readonly providerId: string;
   public readonly modelId?: string;
   public readonly retryable: boolean;
@@ -62,11 +63,19 @@ export class ModelProviderError extends EngineError {
       providerErrorCode?: string;
     }
   ) {
-    super(code, message, { cause: options.cause, context: options.context } as EngineErrorOptions);
+    super(code as unknown as EngineErrorCode, message, {
+      cause: options.cause,
+      context: options.context,
+    });
+    this.code = code;
     this.providerId = options.providerId;
-    this.modelId = options.modelId;
+    if (options.modelId !== undefined) {
+      this.modelId = options.modelId;
+    }
     this.retryable = options.retryable ?? this.isRetryableByDefault(code);
-    this.providerErrorCode = options.providerErrorCode;
+    if (options.providerErrorCode !== undefined) {
+      this.providerErrorCode = options.providerErrorCode;
+    }
 
     Object.setPrototypeOf(this, ModelProviderError.prototype);
   }
@@ -98,14 +107,27 @@ export class ModelProviderError extends EngineError {
     const retryable = ModelProviderError.isRetryableError(code);
     const providerErrorCode = ModelProviderError.extractProviderErrorCode(error);
 
-    return new ModelProviderError(code, message, {
+    const errorOptions: {
+      providerId: string;
+      modelId?: string;
+      cause?: Error;
+      context: Record<string, unknown>;
+      retryable: boolean;
+      providerErrorCode?: string;
+    } = {
       providerId,
-      modelId,
       cause: error instanceof Error ? error : undefined,
       context: { originalMessage: message },
       retryable,
-      providerErrorCode,
-    });
+    };
+    if (modelId !== undefined) {
+      errorOptions.modelId = modelId;
+    }
+    if (providerErrorCode !== undefined) {
+      errorOptions.providerErrorCode = providerErrorCode;
+    }
+
+    return new ModelProviderError(code, message, errorOptions);
   }
 
   private static classifyError(message: string): ModelProviderErrorCode {
@@ -183,41 +205,28 @@ export function isModelProviderError(error: unknown): error is ModelProviderErro
   return error instanceof ModelProviderError;
 }
 
+const MODEL_PROVIDER_ENGINE_CODE_MAP: Record<string, EngineErrorCode> = {
+  [ModelProviderErrorCode.AUTHENTICATION_FAILED]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.INVALID_API_KEY]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.CREDENTIALS_NOT_FOUND]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.CREDENTIALS_INVALID]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.RATE_LIMIT_EXCEEDED]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.QUOTA_EXCEEDED]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.NETWORK_ERROR]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.PROVIDER_UNAVAILABLE]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.TIMEOUT]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.UNSUPPORTED_MODEL]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.MODEL_NOT_FOUND]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.INVALID_REQUEST]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.VALIDATION_FAILED]: EngineErrorCode.INVALID_CONFIGURATION,
+  [ModelProviderErrorCode.CONTEXT_LENGTH_EXCEEDED]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.CONTENT_FILTERED]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.EXECUTION_FAILED]: EngineErrorCode.INTERNAL_ERROR,
+  [ModelProviderErrorCode.PROVIDER_NOT_INITIALIZED]: EngineErrorCode.INTERNAL_ERROR,
+};
+
 export function mapToEngineError(error: ModelProviderError): EngineError {
-  let engineCode: EngineErrorCode;
-  switch (error.code) {
-    case ModelProviderErrorCode.AUTHENTICATION_FAILED:
-    case ModelProviderErrorCode.INVALID_API_KEY:
-    case ModelProviderErrorCode.CREDENTIALS_NOT_FOUND:
-    case ModelProviderErrorCode.CREDENTIALS_INVALID:
-      engineCode = EngineErrorCode.INVALID_CONFIGURATION;
-      break;
-    case ModelProviderErrorCode.RATE_LIMIT_EXCEEDED:
-    case ModelProviderErrorCode.QUOTA_EXCEEDED:
-      engineCode = EngineErrorCode.INTERNAL_ERROR;
-      break;
-    case ModelProviderErrorCode.NETWORK_ERROR:
-    case ModelProviderErrorCode.PROVIDER_UNAVAILABLE:
-    case ModelProviderErrorCode.TIMEOUT:
-      engineCode = EngineErrorCode.INTERNAL_ERROR;
-      break;
-    case ModelProviderErrorCode.UNSUPPORTED_MODEL:
-    case ModelProviderErrorCode.MODEL_NOT_FOUND:
-      engineCode = EngineErrorCode.INVALID_CONFIGURATION;
-      break;
-    case ModelProviderErrorCode.INVALID_REQUEST:
-    case ModelProviderErrorCode.VALIDATION_FAILED:
-      engineCode = EngineErrorCode.INVALID_CONFIGURATION;
-      break;
-    case ModelProviderErrorCode.CONTEXT_LENGTH_EXCEEDED:
-      engineCode = EngineErrorCode.INTERNAL_ERROR;
-      break;
-    case ModelProviderErrorCode.CONTENT_FILTERED:
-      engineCode = EngineErrorCode.INTERNAL_ERROR;
-      break;
-    default:
-      engineCode = EngineErrorCode.INTERNAL_ERROR;
-  }
+  const engineCode = MODEL_PROVIDER_ENGINE_CODE_MAP[error.code] ?? EngineErrorCode.INTERNAL_ERROR;
 
   return createEngineError(engineCode, error.message, {
     cause: error.cause,
