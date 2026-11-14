@@ -146,20 +146,20 @@ describe('SecretCredentialStore', () => {
     },
   });
 
-  it('should redact secret keys on get', async () => {
+  it('should return actual secret values on get', async () => {
     const providerId = createProviderId('openai');
     await store.set(createTestCredentials(providerId));
 
     const retrieved = await store.get(providerId);
     expect(retrieved).toBeDefined();
-    expect(retrieved!.credentials.apiKey).toBe('[REDACTED]');
-    expect(retrieved!.credentials.api_key).toBe('[REDACTED]');
-    expect(retrieved!.credentials.accessToken).toBe('[REDACTED]');
-    expect(retrieved!.credentials.clientSecret).toBe('[REDACTED]');
+    expect(retrieved!.credentials.apiKey).toBe('secret-key-123');
+    expect(retrieved!.credentials.api_key).toBe('another-secret');
+    expect(retrieved!.credentials.accessToken).toBe('token-456');
+    expect(retrieved!.credentials.clientSecret).toBe('client-secret-789');
     expect(retrieved!.credentials.normalField).toBe('visible-value');
-    expect(retrieved!.credentials.nested.secret).toBe('[REDACTED]');
+    expect(retrieved!.credentials.nested.secret).toBe('nested-secret');
     expect(retrieved!.credentials.nested.visible).toBe('nested-visible');
-    expect(retrieved!.credentials.array[0].apiKey).toBe('[REDACTED]');
+    expect(retrieved!.credentials.array[0].apiKey).toBe('array-secret');
     expect(retrieved!.credentials.array[1].normal).toBe('array-visible');
   });
 
@@ -188,7 +188,7 @@ describe('SecretCredentialStore', () => {
     expect(retrieved).toBeUndefined();
   });
 
-  it('should redact secret keys matched by substring', async () => {
+  it('should return actual values including secret-like keys on get', async () => {
     const providerId = createProviderId('openai');
     await store.set({
       providerId,
@@ -200,7 +200,8 @@ describe('SecretCredentialStore', () => {
     });
 
     const retrieved = await store.get(providerId);
-    expect(retrieved!.credentials.myApiKey).toBe('[REDACTED]');
+    expect(retrieved!.credentials.myApiKey).toBe('secret-1');
+    expect(retrieved!.credentials.tokenCount).toBe('not-a-secret-value');
     expect(retrieved!.credentials.normalField).toBe('visible');
   });
 });
@@ -313,7 +314,7 @@ describe('Credential secret redaction', () => {
       },
     });
 
-    const retrieved = await store.get(providerId);
+    const retrieved = await store.getRedacted(providerId);
     expect(retrieved).toBeDefined();
 
     const creds = retrieved!.credentials;

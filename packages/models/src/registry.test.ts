@@ -171,32 +171,112 @@ describe('ProviderRegistry', () => {
   });
 
   describe('unregister', () => {
-    it('should unregister existing provider', () => {
+    it('should unregister existing provider', async () => {
       const provider = createMockProvider();
       registry.register(provider);
 
-      const result = registry.unregister(provider.metadata.id);
+      const result = await registry.unregister(provider.metadata.id);
       expect(result).toBe(true);
       expect(registry.has(provider.metadata.id)).toBe(false);
     });
 
-    it('should return false for non-existent provider', () => {
-      const result = registry.unregister(createProviderId('non-existent'));
+    it('should return false for non-existent provider', async () => {
+      const result = await registry.unregister(createProviderId('non-existent'));
       expect(result).toBe(false);
     });
 
-    it('should remove models from index', () => {
+    it('should remove models from index', async () => {
       const provider = createMockProvider();
       const modelId = createModelId('test-model');
       registry.register(provider);
 
       expect(registry.getModel(provider.metadata.id, modelId)).toBeDefined();
 
-      registry.unregister(provider.metadata.id);
+      await registry.unregister(provider.metadata.id);
       expect(registry.getModel(provider.metadata.id, modelId)).toBeUndefined();
     });
   });
 
+  describe('unregister disposal contract', () => {
+    it('should await provider disposal', async () => {
+      const dispose = vi
+        .fn()
+        .mockImplementation(() => new Promise<void>(resolve => setTimeout(resolve, 10)));
+      const provider = createMockProvider();
+      provider.dispose = dispose;
+      registry.register(provider);
+
+      await registry.unregister(provider.metadata.id);
+      expect(dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('should propagate disposal failures', async () => {
+      const provider = createMockProvider();
+      provider.dispose = vi.fn().mockRejectedValue(new Error('boom'));
+      registry.register(provider);
+
+      await expect(registry.unregister(provider.metadata.id)).rejects.toThrow('boom');
+    });
+
+    it('should not retrieve provider during disposal', async () => {
+      let resolveDispose!: () => void;
+      const disposePromise = new Promise<void>(resolve => {
+        resolveDispose = resolve;
+      });
+      const provider = createMockProvider();
+      provider.dispose = vi.fn().mockReturnValue(disposePromise);
+      registry.register(provider);
+
+      const unregisterPromise = registry.unregister(provider.metadata.id);
+      expect(registry.get(provider.metadata.id)).toBeUndefined();
+      expect(registry.has(provider.metadata.id)).toBe(false);
+
+      resolveDispose();
+      await unregisterPromise;
+    });
+
+    it('should block re-registration while disposal is in progress', async () => {
+      let resolveDispose!: () => void;
+      const disposePromise = new Promise<void>(resolve => {
+        resolveDispose = resolve;
+      });
+      const provider = createMockProvider();
+      provider.dispose = vi.fn().mockReturnValue(disposePromise);
+      registry.register(provider);
+
+      const unregisterPromise = registry.unregister(provider.metadata.id);
+      const newProvider = createMockProvider({
+        metadata: { id: provider.metadata.id, name: 'New', version: '1.0.0' },
+      });
+
+      expect(() => registry.register(newProvider)).toThrow();
+
+      resolveDispose();
+      await unregisterPromise;
+
+      // After disposal completes, registration is allowed again.
+      registry.register(newProvider);
+      expect(registry.has(provider.metadata.id)).toBe(true);
+    });
+
+    it('should not dispose twice on repeated unregister', async () => {
+      const provider = createMockProvider();
+      registry.register(provider);
+
+      const first = registry.unregister(provider.metadata.id);
+      const second = registry.unregister(provider.metadata.id);
+
+      await first;
+      const secondResult = await second;
+      expect(secondResult).toBe(false);
+      expect(provider.dispose).toHaveBeenCalledTimes(1);
+    });
+
+    it('should report unregister result for unknown provider', async () => {
+      const result = await registry.unregister(createProviderId('missing'));
+      expect(result).toBe(false);
+    });
+  });
   describe('get', () => {
     it('should return provider by ID', () => {
       const provider = createMockProvider();

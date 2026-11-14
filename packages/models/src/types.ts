@@ -253,9 +253,9 @@ export interface ProviderCredentials {
 }
 
 /**
- * Credential storage interface. Implementations may be in-memory or backed by
- * a secure persistent store. Values returned by `get` are implementation-defined
- * (e.g. redacted by {@link SecretCredentialStore}).
+ * Credential storage interface. Implementations store and retrieve the actual
+ * credential values. Secret redaction is a logging/diagnostic concern and must
+ * not alter values returned by `get`.
  */
 export interface CredentialStore {
   get(providerId: ProviderId): Promise<ProviderCredentials | undefined>;
@@ -299,7 +299,7 @@ export interface ValidationWarning {
 
 export interface ProviderRegistry {
   register(provider: ModelProvider): void;
-  unregister(providerId: ProviderId): boolean;
+  unregister(providerId: ProviderId): Promise<boolean>;
   get(providerId: ProviderId): ModelProvider | undefined;
   list(): readonly ModelProvider[];
   has(providerId: ProviderId): boolean;

@@ -50,14 +50,15 @@ export class InMemoryCredentialStore implements CredentialStore {
 }
 
 /**
- * A credential store decorator that redacts secret values on retrieval.
+ * A credential store decorator that preserves actual credential values on
+ * retrieval.
  *
- * NOTE: This is NOT an OS-backed secure storage implementation. It wraps a
- * delegate {@link CredentialStore} (typically {@link InMemoryCredentialStore})
- * and returns redacted copies of credentials to prevent accidental secret
- * leakage through logs or error messages. Actual OS-backed secure persistence
- * (e.g. VS Code SecretStorage) is not implemented here; integrate such a
- * store as the delegate when available. No custom encryption is performed.
+ * Storage and retrieval return unredacted values so model providers can use
+ * credentials. Secret redaction is provided separately for logging and
+ * diagnostic output via {@link SecretCredentialStore.redact} (and the logger's
+ * own sanitization). This is NOT an OS-backed secure storage implementation and
+ * performs no custom encryption; integrate a platform-backed store as the
+ * delegate when available.
  */
 export class SecretCredentialStore implements CredentialStore {
   private readonly delegate: CredentialStore;
@@ -88,11 +89,8 @@ export class SecretCredentialStore implements CredentialStore {
   }
 
   async get(providerId: ProviderId): Promise<ProviderCredentials | undefined> {
-    const creds = await this.delegate.get(providerId);
-    if (creds) {
-      return { ...creds, credentials: this.redactSecrets(creds.credentials) };
-    }
-    return undefined;
+    // Return actual stored values; redaction is a diagnostic concern.
+    return await this.delegate.get(providerId);
   }
 
   async set(credentials: ProviderCredentials): Promise<void> {
@@ -105,6 +103,32 @@ export class SecretCredentialStore implements CredentialStore {
 
   async list(): Promise<ProviderId[]> {
     return await this.delegate.list();
+  }
+
+  /**
+   * Return a redacted copy of credentials for logging or diagnostic output.
+   */
+  redact(credentials: ProviderCredentials): ProviderCredentials {
+    return { ...credentials, credentials: this.redactSecrets(credentials.credentials) };
+  }
+
+  /**
+   * Retrieve a redacted copy of credentials for diagnostic purposes.
+   */
+  async getRedacted(providerId: ProviderId): Promise<ProviderCredentials | undefined> {
+    const creds = await this.delegate.get(providerId);
+    if (creds) {
+      return this.redact(creds);
+    }
+    return undefined;
+  }
+
+  redactCredentials(credentials: ProviderCredentials): ProviderCredentials {
+    return this.redact(credentials);
+  }
+
+  redactSecretsValue(credentials: Record<string, unknown>): Record<string, unknown> {
+    return this.redactSecrets(credentials);
   }
 
   private redactSecrets(credentials: Record<string, unknown>): Record<string, unknown> {

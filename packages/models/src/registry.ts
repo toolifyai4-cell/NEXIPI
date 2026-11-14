@@ -10,6 +10,9 @@ import { EngineErrorCode, createEngineError } from '@nexipi/core';
 export class ProviderRegistry {
   private readonly providers: Map<ProviderId, ModelProvider> = new Map();
   private readonly modelIndex: Map<string, ModelMetadata> = new Map();
+  // Tracks providers whose disposal is currently in progress so that
+  // registration and repeated unregistration can observe the lifecycle.
+  private readonly disposing: Map<ProviderId, Promise<void>> = new Map();
 
   register(provider: ModelProvider): void {
     const providerId = provider.metadata.id;
@@ -17,6 +20,12 @@ export class ProviderRegistry {
       throw createEngineError(
         EngineErrorCode.INVALID_CONFIGURATION,
         `Provider with ID '${providerId}' is already registered`
+      );
+    }
+    if (this.disposing.has(providerId)) {
+      throw createEngineError(
+        EngineErrorCode.INVALID_CONFIGURATION,
+        `Provider with ID '${providerId}' is currently being disposed`
       );
     }
 
@@ -41,19 +50,40 @@ export class ProviderRegistry {
     }
   }
 
-  unregister(providerId: ProviderId): boolean {
+  /**
+   * Unregister a provider and await its disposal.
+   *
+   * The provider is removed from the registry before disposal begins, so it
+   * can no longer be retrieved while disposal is in progress. Disposal errors
+   * are propagated to the caller instead of being swallowed. Repeated calls
+   * while disposal is in progress await the same disposal and return false.
+   */
+  async unregister(providerId: ProviderId): Promise<boolean> {
+    const inProgress = this.disposing.get(providerId);
     const provider = this.providers.get(providerId);
+
     if (!provider) {
+      if (inProgress) {
+        await inProgress;
+        return false;
+      }
       return false;
     }
 
     this.removeModelsFromIndex(provider);
-    const deleted = this.providers.delete(providerId);
-    // Best-effort disposal; do not block unregistration on provider cleanup.
-    void provider.dispose().catch(() => {
-      // Swallow disposal errors to avoid unhandled rejections.
+    this.providers.delete(providerId);
+
+    const disposal = (async () => {
+      await provider.dispose();
+    })();
+
+    const tracked = disposal.finally(() => {
+      this.disposing.delete(providerId);
     });
-    return deleted;
+    this.disposing.set(providerId, tracked);
+
+    await tracked;
+    return true;
   }
 
   get(providerId: ProviderId): ModelProvider | undefined {
