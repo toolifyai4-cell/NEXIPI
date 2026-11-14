@@ -122,10 +122,9 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _sendInitialState(): void {
-    const config = vscode.workspace.getConfiguration('nexipi');
-    // Check if any model is configured (for now, we consider it configured if enabled)
-    // In future phases, this will check actual model credentials
-    const modelConfigured = config.get<boolean>('nexipi.enabled', true);
+    // Model is only configured when a provider, model, and valid credentials are set.
+    // Since model configuration is not yet implemented, default to false.
+    const modelConfigured = false;
 
     this._view?.webview.postMessage({
       type: 'state',

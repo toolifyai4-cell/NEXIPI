@@ -7,6 +7,7 @@ interface ComposerProps {
   onKeyDown: (e: React.KeyboardEvent<HTMLTextAreaElement>) => void;
   disabled: boolean;
   placeholder: string;
+  modelConfigured: boolean;
 }
 
 export function Composer({
@@ -16,6 +17,7 @@ export function Composer({
   onKeyDown,
   disabled,
   placeholder,
+  modelConfigured,
 }: ComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -35,6 +37,26 @@ export function Composer({
 
   const handleAttachClick = () => {
     // Placeholder for future attachment functionality
+  };
+
+  const getFooterStatus = () => {
+    if (disabled) {
+      return 'Waiting for response...';
+    }
+    if (!modelConfigured) {
+      return 'AI model not configured';
+    }
+    return 'Ready';
+  };
+
+  const getSendButtonTitle = () => {
+    if (disabled) {
+      return 'Waiting for response...';
+    }
+    if (!modelConfigured) {
+      return 'AI model not configured';
+    }
+    return 'Send message';
   };
 
   return (
@@ -86,15 +108,15 @@ export function Composer({
         />
       </div>
       <div className="nexipi-composer-footer">
-        <span className="nexipi-composer-status" aria-live="polite">
-          {disabled ? 'AI model not configured' : 'Ready'}
+        <span className="nexipi-composer-status" aria-live="polite" data-testid="composer-status">
+          {getFooterStatus()}
         </span>
         <button
           type="submit"
           className="nexipi-composer-send"
           disabled={disabled || !value.trim()}
           aria-label="Send message"
-          title={disabled ? 'AI model not configured' : 'Send message'}
+          title={getSendButtonTitle()}
         >
           <svg
             viewBox="0 0 24 24"

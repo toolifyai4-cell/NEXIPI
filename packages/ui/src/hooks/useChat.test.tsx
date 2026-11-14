@@ -335,4 +335,150 @@ describe('useChat hook', () => {
     expect(result.current.viewMode).toBe('welcome');
     expect(result.current.isLoading).toBe(false);
   });
+
+  // Regression tests for Phase 03 runtime issues
+
+  it('regression: modelConfigured=false, user submits message, loading stays false, error shown, composer enabled', () => {
+    const { result } = renderHook(() => useChat());
+    // Ensure modelConfigured is false (default)
+    expect(result.current.modelConfigured).toBe(false);
+
+    act(() => {
+      result.current.setCurrentInput('hi');
+    });
+    act(() => {
+      result.current.sendMessage();
+    });
+
+    // User message preserved
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[0].role).toBe('user');
+    expect(result.current.messages[0].content).toBe('hi');
+
+    // Missing-model explanation shown
+    expect(result.current.messages[1].role).toBe('assistant');
+    expect(result.current.messages[1].content).toBe(
+      'No AI model is configured. Open NexiPi settings to configure a model before chatting.'
+    );
+
+    // Loading never activated
+    expect(result.current.isLoading).toBe(false);
+
+    // View mode switched to chat
+    expect(result.current.viewMode).toBe('chat');
+
+    // Input cleared
+    expect(result.current.currentInput).toBe('');
+  });
+
+  it('regression: extension error message resets loading state', () => {
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+    act(() => {
+      result.current.setCurrentInput('hello');
+    });
+    act(() => {
+      result.current.sendMessage();
+    });
+    expect(result.current.isLoading).toBe(true);
+
+    // Simulate extension error response
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'error',
+            payload: { message: 'Model request failed' },
+          },
+        })
+      );
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.messages).toHaveLength(2);
+    expect(result.current.messages[1].content).toBe('Error: Model request failed');
+  });
+
+  it('regression: chatCleared message resets loading state', () => {
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+    act(() => {
+      result.current.setCurrentInput('hello');
+    });
+    act(() => {
+      result.current.sendMessage();
+    });
+    expect(result.current.isLoading).toBe(true);
+
+    // Simulate chatCleared from extension
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'chatCleared',
+            payload: { timestamp: new Date().toISOString() },
+          },
+        })
+      );
+    });
+
+    expect(result.current.isLoading).toBe(false);
+    expect(result.current.messages).toEqual([]);
+    expect(result.current.viewMode).toBe('welcome');
+  });
+
+  it('regression: duplicate sendMessage calls while loading are rejected', () => {
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+    act(() => {
+      result.current.setCurrentInput('hello');
+    });
+    act(() => {
+      result.current.sendMessage();
+    });
+    expect(result.current.isLoading).toBe(true);
+    expect(result.current.messages).toHaveLength(1);
+
+    // Try to send again while loading - should be rejected
+    act(() => {
+      result.current.setCurrentInput('second message');
+    });
+    act(() => {
+      result.current.sendMessage();
+    });
+
+    // Should still only have the first message, loading still true
+    expect(result.current.messages).toHaveLength(1);
+    expect(result.current.isLoading).toBe(true);
+  });
+
+  it('regression: modelConfigured state only true when extension sends explicit true', () => {
+    const { result } = renderHook(() => useChat());
+    // Initial state is false
+    expect(result.current.modelConfigured).toBe(false);
+
+    // Simulate extension sending false explicitly
+    act(() => {
+      simulateExtensionStateMessage(false);
+    });
+    expect(result.current.modelConfigured).toBe(false);
+
+    // Simulate extension sending true
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+    expect(result.current.modelConfigured).toBe(true);
+
+    // Simulate extension sending false again
+    act(() => {
+      simulateExtensionStateMessage(false);
+    });
+    expect(result.current.modelConfigured).toBe(false);
+  });
 });

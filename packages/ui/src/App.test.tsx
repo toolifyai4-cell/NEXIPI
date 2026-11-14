@@ -365,4 +365,243 @@ describe('App', () => {
     expect(screen.getByText('AI response')).toBeInTheDocument();
     expect(textarea).not.toBeDisabled();
   });
+
+  // Regression tests for Phase 03 runtime issues
+
+  it('regression: exact screenshot state - modelConfigured=false, user submits hi, no loading, composer enabled, both indicators show unconfigured', async () => {
+    render(<App />);
+    // Ensure modelConfigured is false (default)
+    const textarea = screen.getByLabelText('Message input');
+    expect(textarea).not.toBeDisabled();
+    expect(textarea).toHaveAttribute('placeholder', 'Configure an AI model to start chatting');
+
+    // Status indicator shows disconnected
+    let statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    expect(statusButton).toBeInTheDocument();
+
+    // Composer footer shows "AI model not configured" when not loading
+    expect(screen.getByTestId('composer-status').textContent).toBe('AI model not configured');
+
+    // User submits 'hi' via Ctrl+Enter
+    fireEvent.change(textarea, { target: { value: 'hi' } });
+    const event = {
+      key: 'Enter',
+      ctrlKey: true,
+      metaKey: false,
+      preventDefault: vi.fn(),
+      shiftKey: false,
+    } as unknown as React.KeyboardEvent<HTMLTextAreaElement>;
+
+    await act(async () => {
+      fireEvent.keyDown(textarea, event);
+    });
+
+    // User message remains visible
+    await waitFor(() => {
+      expect(screen.getByText('hi')).toBeInTheDocument();
+    });
+
+    // Error message shown
+    await waitFor(() => {
+      expect(screen.getByText(/No AI model is configured/i)).toBeInTheDocument();
+      expect(
+        screen.getByText(/Open NexiPi settings to configure a model before chatting/i)
+      ).toBeInTheDocument();
+    });
+
+    // Loading indicator NOT shown
+    expect(screen.queryByRole('status', { name: /waiting for response/i })).not.toBeInTheDocument();
+
+    // Composer still enabled (not disabled)
+    expect(textarea).not.toBeDisabled();
+    expect(textarea).toHaveValue('');
+
+    // Placeholder still shows configure model message
+    expect(textarea).toHaveAttribute('placeholder', 'Configure an AI model to start chatting');
+
+    // Status indicator still shows disconnected
+    statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    expect(statusButton).toBeInTheDocument();
+
+    // Composer footer shows "AI model not configured" (model not configured, not loading)
+    expect(screen.getByTestId('composer-status').textContent).toBe('AI model not configured');
+  });
+
+  it('regression: both model status displays (Composer footer and StatusIndicator) show consistent state', async () => {
+    render(<App />);
+
+    // Initially both show unconfigured
+    let statusIndicator = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    expect(statusIndicator).toBeInTheDocument();
+    expect(screen.getByTestId('composer-status').textContent).toBe('AI model not configured');
+
+    // Simulate extension sending model configured
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    // Both should now show configured
+    statusIndicator = screen.getByRole('button', {
+      name: /Model status: AI model configured/,
+    });
+    expect(statusIndicator).toBeInTheDocument();
+
+    // Composer footer should show "Ready" (not loading, model configured)
+    expect(screen.getByTestId('composer-status').textContent).toBe('Ready');
+
+    // Simulate extension sending model unconfigured
+    act(() => {
+      simulateExtensionStateMessage(false);
+    });
+
+    // Both should show unconfigured again
+    statusIndicator = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    expect(statusIndicator).toBeInTheDocument();
+    expect(screen.getByTestId('composer-status').textContent).toBe('AI model not configured');
+  });
+
+  it('regression: loading state shows "Waiting for response..." in Composer footer, not "AI model not configured"', async () => {
+    render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'test' } });
+
+    const sendBtn = screen.getByLabelText('Send message');
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status', { name: /waiting for response/i })).toBeInTheDocument();
+    });
+
+    // Composer footer should show "Waiting for response..." during loading
+    expect(screen.getByText('Waiting for response...')).toBeInTheDocument();
+    expect(screen.queryByText('AI model not configured')).not.toBeInTheDocument();
+
+    // Send button title should be "Waiting for response..."
+    expect(sendBtn).toHaveAttribute('title', 'Waiting for response...');
+  });
+
+  it('regression: Settings menu item sends openSettings message with correct payload', () => {
+    render(<App />);
+    const menuBtn = screen.getByLabelText('Settings');
+    fireEvent.click(menuBtn);
+    const settingsItem = screen.getByRole('menuitem', { name: /Settings/i });
+    fireEvent.click(settingsItem);
+
+    expect(mockPostMessage).toHaveBeenCalledWith({
+      type: 'openSettings',
+      payload: { reason: 'user_click' },
+    });
+  });
+
+  it('regression: StatusIndicator click sends openSettings with model_status_click reason', () => {
+    render(<App />);
+    mockPostMessage.mockClear();
+    const statusButton = screen.getByRole('button', {
+      name: /Model status: AI model not configured/,
+    });
+    fireEvent.click(statusButton);
+
+    expect(mockPostMessage).toHaveBeenCalledWith({
+      type: 'openSettings',
+      payload: { reason: 'model_status_click' },
+    });
+  });
+
+  it('regression: extension error response resets loading and shows error in chat', async () => {
+    render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'test' } });
+
+    const sendBtn = screen.getByLabelText('Send message');
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status', { name: /waiting for response/i })).toBeInTheDocument();
+    });
+
+    // Simulate extension error
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'error',
+            payload: { message: 'Connection failed' },
+          },
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('status', { name: /waiting for response/i })
+      ).not.toBeInTheDocument();
+    });
+
+    expect(screen.getByText('Error: Connection failed')).toBeInTheDocument();
+    expect(textarea).not.toBeDisabled();
+  });
+
+  it('regression: chatCleared from extension resets loading and clears messages', async () => {
+    render(<App />);
+    act(() => {
+      simulateExtensionStateMessage(true);
+    });
+
+    const textarea = screen.getByLabelText('Message input');
+    fireEvent.change(textarea, { target: { value: 'hello' } });
+
+    const sendBtn = screen.getByLabelText('Send message');
+    await act(async () => {
+      fireEvent.click(sendBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByRole('status', { name: /waiting for response/i })).toBeInTheDocument();
+    });
+    expect(screen.getByText('hello')).toBeInTheDocument();
+
+    // Simulate chatCleared from extension
+    act(() => {
+      window.dispatchEvent(
+        new MessageEvent('message', {
+          data: {
+            type: 'chatCleared',
+            payload: { timestamp: new Date().toISOString() },
+          },
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(
+        screen.queryByRole('status', { name: /waiting for response/i })
+      ).not.toBeInTheDocument();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Welcome to NexiPi')).toBeInTheDocument();
+    });
+    expect(screen.queryByText('hello')).not.toBeInTheDocument();
+    expect(textarea).not.toBeDisabled();
+  });
 });

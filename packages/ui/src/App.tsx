@@ -48,6 +48,7 @@ export function App() {
                 ? 'Message NexiPi...'
                 : 'Configure an AI model to start chatting'
           }
+          modelConfigured={modelConfigured}
         />
       </main>
       <StatusIndicator

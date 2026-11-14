@@ -298,7 +298,7 @@ describe('vscode-extension', () => {
         expect.objectContaining({
           type: 'state',
           payload: expect.objectContaining({
-            modelConfigured: true,
+            modelConfigured: false,
             viewMode: 'welcome',
             isLoading: false,
           }),

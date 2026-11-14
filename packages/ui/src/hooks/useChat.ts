@@ -41,6 +41,7 @@ export function useChat() {
   const [viewMode, setViewMode] = useState<ViewMode>('welcome');
   const [modelConfigured, setModelConfigured] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const vscodeApiRef = useRef<ReturnType<NonNullable<Window['acquireVsCodeApi']>> | null>(null);
 
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -72,10 +73,13 @@ export function useChat() {
         return;
       }
 
+      console.debug('[NexiPi] Received extension message:', message.type, message.payload);
+
       switch (message.type) {
         case 'state': {
           const payload = message.payload as ExtensionStatePayload;
           if (payload && typeof payload.modelConfigured === 'boolean') {
+            console.debug('[NexiPi] Model configured state updated:', payload.modelConfigured);
             setModelConfigured(payload.modelConfigured);
           }
           break;
@@ -103,10 +107,11 @@ export function useChat() {
           break;
         }
         case 'settingsOpened': {
-          // Settings opened, no state change needed
+          console.debug('[NexiPi] Settings opened confirmation received');
           break;
         }
         default:
+          console.warn('[NexiPi] Unknown extension message type:', message.type);
           break;
       }
     },
@@ -118,20 +123,43 @@ export function useChat() {
     return () => window.removeEventListener('message', handleExtensionMessage);
   }, [handleExtensionMessage]);
 
-  const postMessage = useCallback((message: WebviewMessage) => {
+  const getVscodeApi = useCallback(() => {
+    if (vscodeApiRef.current) {
+      return vscodeApiRef.current;
+    }
     try {
-      const vscodeApi = window.acquireVsCodeApi?.();
-      if (vscodeApi) {
-        vscodeApi.postMessage(message);
+      const api = window.acquireVsCodeApi?.();
+      if (api) {
+        vscodeApiRef.current = api;
+        console.debug('[NexiPi] VS Code API acquired');
+        return api;
+      }
+    } catch (error) {
+      console.warn('[NexiPi] acquireVsCodeApi failed:', error);
+    }
+    return null;
+  }, []);
+
+  const postMessage = useCallback(
+    (message: WebviewMessage) => {
+      const api = getVscodeApi();
+      if (api) {
+        console.debug('[NexiPi] Sending message via VS Code API:', message.type);
+        api.postMessage(message);
         return;
       }
-    } catch {
-      // acquireVsCodeApi not available or already called
-    }
-    if (window.parent !== window) {
-      window.parent.postMessage(message, '*');
-    }
-  }, []);
+      if (window.parent !== window) {
+        console.debug(
+          '[NexiPi] Sending message via window.parent.postMessage (fallback):',
+          message.type
+        );
+        window.parent.postMessage(message, '*');
+      } else {
+        console.warn('[NexiPi] No messaging channel available, message dropped:', message.type);
+      }
+    },
+    [getVscodeApi]
+  );
 
   const sendMessage = useCallback(() => {
     if (!currentInput.trim() || isLoading) return;
