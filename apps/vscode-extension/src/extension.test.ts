@@ -160,7 +160,7 @@ describe('vscode-extension', () => {
       // Verify command was executed with correct arguments
       expect(mockExecuteCommand).toHaveBeenCalledWith(
         'workbench.action.openSettings',
-        '@ext:nexipi'
+        '@ext:nexipi.nexipi'
       );
     });
 
@@ -185,7 +185,7 @@ describe('vscode-extension', () => {
 
       expect(mockExecuteCommand).toHaveBeenCalledWith(
         'workbench.action.openSettings',
-        '@ext:nexipi'
+        '@ext:nexipi.nexipi'
       );
     });
 

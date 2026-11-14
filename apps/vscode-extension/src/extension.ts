@@ -175,7 +175,10 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
         case 'openSettings':
           this._logger.info('Open settings requested from webview', { payload: msg.payload });
           try {
-            await vscode.commands.executeCommand('workbench.action.openSettings', '@ext:nexipi');
+            await vscode.commands.executeCommand(
+              'workbench.action.openSettings',
+              '@ext:nexipi.nexipi'
+            );
             this._logger.info('Settings opened successfully');
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
