@@ -101,3 +101,629 @@ a:hover {
 ::-webkit-scrollbar-corner {
   background: transparent;
 }
+
+/* ==========================================================================
+   App Layout
+   ========================================================================== */
+
+.nexipi-app {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  width: 100%;
+  background-color: var(--vscode-sideBar-bg);
+  border-right: 1px solid var(--vscode-sideBar-border);
+}
+
+.nexipi-main {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ==========================================================================
+   Header
+   ========================================================================== */
+
+.nexipi-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background-color: var(--vscode-sideBar-bg);
+  border-bottom: 1px solid var(--vscode-sideBar-border);
+  flex-shrink: 0;
+}
+
+.nexipi-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.nexipi-logo {
+  width: 24px;
+  height: 24px;
+  flex-shrink: 0;
+  color: var(--vscode-accent);
+}
+
+.nexipi-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-fg);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nexipi-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.nexipi-icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--vscode-muted);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.nexipi-icon-btn:hover {
+  background-color: var(--vscode-button-hover);
+  color: var(--vscode-fg);
+}
+
+.nexipi-icon-btn:focus-visible {
+  outline: 1px solid var(--vscode-focus);
+  outline-offset: 2px;
+}
+
+.nexipi-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nexipi-menu-wrapper {
+  position: relative;
+}
+
+.nexipi-dropdown {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  margin-top: 4px;
+  min-width: 160px;
+  background-color: var(--vscode-dropdown-background, var(--vscode-sideBar-bg));
+  border: 1px solid var(--vscode-dropdown-border, var(--vscode-border));
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 100;
+  overflow: hidden;
+}
+
+.nexipi-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: left;
+  color: var(--vscode-fg);
+  transition: background-color 0.1s ease;
+}
+
+.nexipi-dropdown-item:hover {
+  background-color: var(--vscode-list-hoverBackground, var(--vscode-button-hover));
+}
+
+.nexipi-dropdown-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--vscode-muted);
+}
+
+/* ==========================================================================
+   Welcome Screen
+   ========================================================================== */
+
+.nexipi-welcome {
+  flex: 1;
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding: 24px 16px 16px;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.nexipi-welcome-content {
+  width: 100%;
+  max-width: 320px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  text-align: center;
+}
+
+.nexipi-welcome-brand {
+  flex-shrink: 0;
+}
+
+.nexipi-logo-large {
+  width: 64px;
+  height: 64px;
+  color: var(--vscode-accent);
+  stroke-width: 1.5;
+}
+
+.nexipi-welcome-title {
+  font-size: 20px;
+  font-weight: 600;
+  color: var(--vscode-fg);
+  line-height: 1.3;
+  margin: 0;
+}
+
+.nexipi-welcome-description {
+  font-size: 13px;
+  color: var(--vscode-muted);
+  line-height: 1.6;
+  margin: 0;
+}
+
+.nexipi-welcome-prompts {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 8px;
+}
+
+.nexipi-prompt-group {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+
+.nexipi-prompt-group-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--vscode-muted);
+}
+
+.nexipi-prompt-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nexipi-prompt-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  background-color: var(--vscode-input-bg);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 6px;
+  text-align: left;
+  transition: border-color 0.1s ease, background-color 0.1s ease, transform 0.1s ease;
+}
+
+.nexipi-prompt-card:hover {
+  border-color: var(--vscode-accent);
+  background-color: var(--vscode-button-hover);
+  transform: translateX(2px);
+}
+
+.nexipi-prompt-card:focus-visible {
+  outline: 1px solid var(--vscode-focus);
+  outline-offset: 2px;
+  border-color: var(--vscode-focus);
+}
+
+.nexipi-prompt-label {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--vscode-fg);
+  line-height: 1.4;
+  flex: 1;
+}
+
+.nexipi-prompt-preview {
+  display: none;
+}
+
+.nexipi-prompt-arrow {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--vscode-muted);
+  margin-top: 2px;
+}
+
+.nexipi-welcome-footer {
+  font-size: 11px;
+  color: var(--vscode-muted);
+  margin-top: 8px;
+}
+
+.nexipi-welcome-footer kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+  font-size: 10px;
+  background-color: var(--vscode-badge-bg);
+  color: var(--vscode-badge-fg);
+  border-radius: 3px;
+  margin: 0 2px;
+}
+
+/* ==========================================================================
+   Chat Area
+   ========================================================================== */
+
+.nexipi-chat-area {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-height: 0;
+}
+
+.nexipi-message-list {
+  flex: 1;
+  overflow-y: auto;
+  overflow-x: hidden;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.nexipi-chat-empty {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  padding: 24px 16px;
+  text-align: center;
+}
+
+.nexipi-empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  max-width: 280px;
+}
+
+.nexipi-empty-icon {
+  width: 48px;
+  height: 48px;
+  color: var(--vscode-muted);
+  opacity: 0.6;
+}
+
+.nexipi-empty-text {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--vscode-fg);
+}
+
+.nexipi-empty-hint {
+  font-size: 12px;
+  color: var(--vscode-muted);
+}
+
+.nexipi-message {
+  display: flex;
+  gap: 8px;
+  animation: nexipi-message-in 0.2s ease-out;
+}
+
+@keyframes nexipi-message-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.nexipi-message-avatar {
+  flex-shrink: 0;
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background-color: var(--vscode-badge-bg);
+  color: var(--vscode-badge-fg);
+  margin-top: 2px;
+}
+
+.nexipi-message-avatar svg {
+  width: 14px;
+  height: 14px;
+}
+
+.nexipi-message-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nexipi-message-header {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 4px;
+}
+
+.nexipi-message-role {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-fg);
+}
+
+.nexipi-message-time {
+  font-size: 10px;
+  color: var(--vscode-muted);
+  white-space: nowrap;
+}
+
+.nexipi-message-text {
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--vscode-fg);
+  word-wrap: break-word;
+}
+
+.nexipi-message-text pre {
+  margin: 8px 0;
+  padding: 10px 12px;
+  background-color: var(--vscode-textCodeBlock-background, #1e1e1e);
+  border-radius: 6px;
+  overflow-x: auto;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.nexipi-message-text code {
+  font-family: var(--vscode-editor-font-family, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
+  font-size: 12px;
+  background-color: var(--vscode-textCodeBlock-background, #1e1e1e);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.nexipi-message-text pre code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+}
+
+.nexipi-loading-message {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.nexipi-typing-indicator {
+  display: flex;
+  gap: 3px;
+  align-items: center;
+}
+
+.nexipi-typing-indicator span {
+  width: 6px;
+  height: 6px;
+  background-color: var(--vscode-muted);
+  border-radius: 50%;
+  animation: nexipi-typing 1.4s infinite ease-in-out;
+}
+
+.nexipi-typing-indicator span:nth-child(2) {
+  animation-delay: 0.2s;
+}
+
+.nexipi-typing-indicator span:nth-child(3) {
+  animation-delay: 0.4s;
+}
+
+@keyframes nexipi-typing {
+  0%, 60%, 100% {
+    transform: scale(1);
+    opacity: 0.4;
+  }
+  30% {
+    transform: scale(1.3);
+    opacity: 1;
+  }
+}
+
+/* ==========================================================================
+   Composer
+   ========================================================================== */
+
+.nexipi-composer {
+  display: flex;
+  flex-direction: column;
+  padding: 8px 12px;
+  background-color: var(--vscode-sideBar-bg);
+  border-top: 1px solid var(--vscode-sideBar-border);
+  flex-shrink: 0;
+}
+
+.nexipi-composer-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.nexipi-composer-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 4px;
+  color: var(--vscode-muted);
+  transition: background-color 0.1s ease, color 0.1s ease;
+}
+
+.nexipi-composer-btn:hover:not(:disabled) {
+  background-color: var(--vscode-button-hover);
+  color: var(--vscode-fg);
+}
+
+.nexipi-composer-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.nexipi-composer-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.nexipi-composer-spacer {
+  flex: 1;
+}
+
+.nexipi-composer-hint {
+  font-size: 11px;
+  color: var(--vscode-muted);
+  white-space: nowrap;
+}
+
+.nexipi-composer-input-wrapper {
+  position: relative;
+  margin-bottom: 6px;
+}
+
+.nexipi-composer-input {
+  width: 100%;
+  min-height: 36px;
+  max-height: 200px;
+  padding: 8px 12px;
+  background-color: var(--vscode-input-bg);
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 6px;
+  color: var(--vscode-input-fg);
+  line-height: 1.5;
+  resize: none;
+  transition: border-color 0.1s ease, box-shadow 0.1s ease;
+}
+
+.nexipi-composer-input:focus {
+  border-color: var(--vscode-focus);
+  box-shadow: 0 0 0 1px var(--vscode-focus);
+  outline: none;
+}
+
+.nexipi-composer-input::placeholder {
+  color: var(--vscode-muted);
+  opacity: 0.7;
+}
+
+.nexipi-composer-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.nexipi-composer-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.nexipi-composer-status {
+  font-size: 11px;
+  color: var(--vscode-muted);
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.nexipi-composer-send {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background-color: var(--vscode-button-bg);
+  color: var(--vscode-button-fg);
+  flex-shrink: 0;
+  transition: background-color 0.1s ease, transform 0.1s ease;
+}
+
+.nexipi-composer-send:hover:not(:disabled) {
+  background-color: var(--vscode-button-hover);
+  transform: scale(1.02);
+}
+
+.nexipi-composer-send:active:not(:disabled) {
+  transform: scale(0.98);
+}
+
+.nexipi-composer-send:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  background-color: var(--vscode-button-bg);
+}
+
+.nexipi-composer-send svg {
+  width: 16px;
+  height: 16px;
+}
+
+/* ==========================================================================
+   Status Indicator
+   ========================================================================== */
+
+.nexipi-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background-color: var(--vscode-sideBar-bg);
+  border-top: 1px solid var(--vscode-sideBar-border);
+  flex-shrink: 0;
+}
+
+.nexipi-status-indicator {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.nexipi-status-label {
+  font-size: 11px;
+  color: var(--vscode-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -34,7 +34,7 @@ export function App() {
               onChange={setCurrentInput}
               onSend={sendMessage}
               onKeyDown={handleKeyDown}
-              disabled={isLoading || !currentInput.trim()}
+              disabled={isLoading}
               placeholder={isLoading ? 'Waiting for response...' : 'Message NexiPi...'}
             />
           </>

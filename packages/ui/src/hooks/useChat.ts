@@ -57,14 +57,9 @@ export function useChat() {
     setIsLoading(true);
     setViewMode('chat');
 
-    // Simulate AI response delay - in Phase 04 this will be replaced with actual AI call
-    setTimeout(() => {
-      addMessage(
-        'assistant',
-        'AI conversation functionality will be implemented in Phase 04. This is a placeholder response.'
-      );
-      setIsLoading(false);
-    }, 1000);
+    // In Phase 04, actual AI response handling will be implemented here.
+    // For now, we keep isLoading true to indicate the request was sent.
+    // The extension will handle the response and update state via postMessage.
   }, [currentInput, isLoading, addMessage]);
 
   const handleNewChat = useCallback(() => {
@@ -80,10 +75,12 @@ export function useChat() {
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === 'Enter' && !e.shiftKey) {
+      // Ctrl+Enter (or Cmd+Enter on Mac) to send
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
         e.preventDefault();
         sendMessage();
       }
+      // Shift+Enter inserts newline (default textarea behavior, no action needed)
     },
     [sendMessage]
   );

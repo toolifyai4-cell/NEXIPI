@@ -1,3 +1,5 @@
+import { useRef, useEffect } from 'react';
+
 interface ComposerProps {
   value: string;
   onChange: (value: string) => void;
@@ -26,7 +28,7 @@ export function Composer({
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!disabled) {
+    if (!disabled && value.trim()) {
       onSend();
     }
   };
@@ -109,5 +111,3 @@ export function Composer({
     </form>
   );
 }
-
-import { useRef, useEffect } from 'react';
