@@ -68,6 +68,14 @@ export {
 } from './logger.js';
 
 export {
+  sanitize,
+  SENSITIVE_KEYS,
+  type SensitiveKey,
+  sanitizeErrorContext,
+  createSanitizedContext,
+} from './sanitize.js';
+
+export {
   EngineStatus,
   Engine,
   createEngine,

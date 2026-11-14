@@ -274,7 +274,7 @@ export interface ModelProvider {
   getModel(modelId: ModelId): ModelMetadata | undefined;
   validateRequest(request: ModelRequest): Promise<ValidationResult>;
 
-  execute(request: ModelRequest): Promise<ModelResponse>;
+  execute(request: ModelRequest, signal?: AbortSignal): Promise<ModelResponse>;
 
   healthCheck(): Promise<ProviderHealth>;
 }

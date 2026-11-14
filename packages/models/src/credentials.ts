@@ -1,5 +1,6 @@
 import type { ProviderId, ProviderCredentials, CredentialStore } from './types.js';
 import type { Logger } from '@nexipi/core';
+import { sanitize } from '@nexipi/core';
 
 export interface InMemoryCredentialStoreOptions {
   logger?: Logger;
@@ -63,25 +64,6 @@ export class InMemoryCredentialStore implements CredentialStore {
 export class SecretCredentialStore implements CredentialStore {
   private readonly delegate: CredentialStore;
   private readonly logger: Logger;
-  private readonly secretKeysArray: string[] = [
-    'apikey',
-    'api_key',
-    'token',
-    'secret',
-    'password',
-    'auth',
-    'credential',
-    'accesstoken',
-    'refreshtoken',
-    'clientsecret',
-    'client_secret',
-    'privatekey',
-    'private_key',
-    'authorization',
-    'bearer',
-    'access_token',
-    'refresh_token',
-  ];
 
   constructor(delegate: CredentialStore, logger?: Logger) {
     this.delegate = delegate;
@@ -132,30 +114,7 @@ export class SecretCredentialStore implements CredentialStore {
   }
 
   private redactSecrets(credentials: Record<string, unknown>): Record<string, unknown> {
-    const redacted: Record<string, unknown> = {};
-    for (const [key, value] of Object.entries(credentials)) {
-      if (this.isSecretKey(key)) {
-        redacted[key] = '[REDACTED]';
-      } else if (value && typeof value === 'object' && !Array.isArray(value)) {
-        redacted[key] = this.redactSecrets(value as Record<string, unknown>);
-      } else if (Array.isArray(value)) {
-        redacted[key] = value.map(v =>
-          v && typeof v === 'object'
-            ? this.redactSecrets(v as Record<string, unknown>)
-            : (v as unknown)
-        );
-      } else {
-        redacted[key] = value;
-      }
-    }
-    return redacted;
-  }
-
-  private isSecretKey(key: string): boolean {
-    const lowerKey = key.toLowerCase();
-    // Match by substring (consistent with core sanitization) so variants such
-    // as "myApiKey" or "apiKeyValue" are also redacted.
-    return this.secretKeysArray.some(secret => lowerKey.includes(secret));
+    return sanitize(credentials) as Record<string, unknown>;
   }
 }
 

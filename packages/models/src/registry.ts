@@ -7,12 +7,20 @@ import type {
 } from './types.js';
 import { EngineErrorCode, createEngineError } from '@nexipi/core';
 
+type DisposalState = 'pending' | 'fulfilled' | 'rejected';
+
+interface DisposalEntry {
+  promise: Promise<void>;
+  state: DisposalState;
+}
+
 export class ProviderRegistry {
   private readonly providers: Map<ProviderId, ModelProvider> = new Map();
   private readonly modelIndex: Map<string, ModelMetadata> = new Map();
-  // Tracks providers whose disposal is currently in progress so that
-  // registration and repeated unregistration can observe the lifecycle.
-  private readonly disposing: Map<ProviderId, Promise<void>> = new Map();
+  // Tracks providers whose disposal is currently in progress or has completed.
+  // The entry persists after settlement to preserve the disposal outcome
+  // (success or failure) for subsequent unregister calls.
+  private readonly disposing: Map<ProviderId, DisposalEntry> = new Map();
 
   register(provider: ModelProvider): void {
     const providerId = provider.metadata.id;
@@ -22,11 +30,22 @@ export class ProviderRegistry {
         `Provider with ID '${providerId}' is already registered`
       );
     }
-    if (this.disposing.has(providerId)) {
+    const disposalEntry = this.disposing.get(providerId);
+    if (disposalEntry && disposalEntry.state === 'pending') {
       throw createEngineError(
         EngineErrorCode.INVALID_CONFIGURATION,
         `Provider with ID '${providerId}' is currently being disposed`
       );
+    }
+    if (disposalEntry && disposalEntry.state === 'rejected') {
+      throw createEngineError(
+        EngineErrorCode.INVALID_CONFIGURATION,
+        `Provider with ID '${providerId}' has failed disposal; cannot re-register`
+      );
+    }
+    // If disposalEntry.state === 'fulfilled', allow re-registration (clean up entry)
+    if (disposalEntry && disposalEntry.state === 'fulfilled') {
+      this.disposing.delete(providerId);
     }
 
     // Validate model uniqueness before mutating any state so a failed
@@ -57,33 +76,55 @@ export class ProviderRegistry {
    * can no longer be retrieved while disposal is in progress. Disposal errors
    * are propagated to the caller instead of being swallowed. Repeated calls
    * while disposal is in progress await the same disposal and return false.
+   * After successful disposal, subsequent calls return false and allow re-registration.
+   * After failed disposal, subsequent calls return false and block re-registration
+   * until the registry is explicitly cleared (not supported) or process restarts.
    */
   async unregister(providerId: ProviderId): Promise<boolean> {
-    const inProgress = this.disposing.get(providerId);
+    const entry = this.disposing.get(providerId);
     const provider = this.providers.get(providerId);
 
     if (!provider) {
-      if (inProgress) {
-        await inProgress;
+      if (entry) {
+        // Disposal in progress or completed (success or failure) - await it
+        try {
+          await entry.promise;
+        } catch {
+          // Swallow error for callers that didn't initiate disposal;
+          // the original caller received the error.
+        }
         return false;
       }
+      // Provider never registered or already fully unregistered
       return false;
     }
 
     this.removeModelsFromIndex(provider);
     this.providers.delete(providerId);
 
+    const entry: DisposalEntry = { promise: Promise.resolve(), state: 'pending' };
     const disposal = (async () => {
       await provider.dispose();
     })();
 
-    const tracked = disposal.finally(() => {
-      this.disposing.delete(providerId);
-    });
-    this.disposing.set(providerId, tracked);
+    entry.promise = disposal.then(
+      () => {
+        entry.state = 'fulfilled';
+      },
+      (error) => {
+        entry.state = 'rejected';
+        throw error;
+      }
+    );
 
-    await tracked;
-    return true;
+    this.disposing.set(providerId, entry);
+
+    try {
+      await entry.promise;
+      return true;
+    } catch (error) {
+      throw error;
+    }
   }
 
   get(providerId: ProviderId): ModelProvider | undefined {

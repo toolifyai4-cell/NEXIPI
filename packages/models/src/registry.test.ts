@@ -277,6 +277,101 @@ describe('ProviderRegistry', () => {
       expect(result).toBe(false);
     });
   });
+
+  describe('cancellation contract', () => {
+    it('should not allow retrieving provider during disposal (prevents new requests)', async () => {
+      let resolveDispose!: () => void;
+      const disposePromise = new Promise<void>(resolve => {
+        resolveDispose = resolve;
+      });
+      const provider = createMockProvider();
+      provider.dispose = vi.fn().mockReturnValue(disposePromise);
+      registry.register(provider);
+
+      const unregisterPromise = registry.unregister(provider.metadata.id);
+
+      // Provider is immediately removed from registry, so no new requests can be started
+      expect(registry.get(provider.metadata.id)).toBeUndefined();
+      expect(registry.has(provider.metadata.id)).toBe(false);
+
+      resolveDispose();
+      await unregisterPromise;
+    });
+
+    it('should allow orchestration layer to pass AbortSignal to execute', async () => {
+      const provider = createMockProvider();
+      registry.register(provider);
+
+      const controller = new AbortController();
+      const signal = controller.signal;
+
+      // The orchestration layer is responsible for passing the signal
+      // Registry doesn't execute requests, but get() provides access to provider
+      const retrieved = registry.get(provider.metadata.id);
+      expect(retrieved).toBeDefined();
+
+      // Simulate orchestration layer calling execute with signal
+      // The mock doesn't implement cancellation, but the contract requires
+      // the signal parameter to be accepted
+      const executePromise = retrieved!.execute(
+        {
+          model: createModelId('test-model'),
+          messages: [{ role: 'user', content: 'test' }],
+        },
+        signal
+      );
+
+      // Verify the signal was passed (mock receives it as second arg)
+      expect(provider.execute).toHaveBeenCalledWith(
+        expect.objectContaining({
+          model: createModelId('test-model'),
+          messages: [{ role: 'user', content: 'test' }],
+        }),
+        signal
+      );
+
+      // The promise resolves normally since mock doesn't implement cancellation
+      // Real provider implementations should respect the signal
+      await expect(executePromise).resolves.toBeDefined();
+    });
+
+    it('should not leave unresolved state when provider unregistered with pending execute', async () => {
+      let executeResolve!: (value: any) => void;
+      const executePromise = new Promise<any>(resolve => {
+        executeResolve = resolve;
+      });
+
+      const provider = createMockProvider();
+      provider.execute = vi.fn().mockReturnValue(executePromise);
+      registry.register(provider);
+
+      const controller = new AbortController();
+      const retrieved = registry.get(provider.metadata.id);
+      const requestPromise = retrieved!.execute(
+        { model: createModelId('test-model'), messages: [{ role: 'user', content: 'test' }] },
+        controller.signal
+      );
+
+      // Unregister while execute is pending
+      const unregisterPromise = registry.unregister(provider.metadata.id);
+
+      // Provider is no longer retrievable for new requests
+      expect(registry.get(provider.metadata.id)).toBeUndefined();
+
+      // Complete the execute (simulating late completion)
+      executeResolve({
+        id: 'late-response',
+        model: createModelId('test-model'),
+        choices: [{ index: 0, message: { role: 'assistant', content: 'late' }, finishReason: 'stop' }],
+        usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
+        finishReason: 'stop',
+      });
+
+      // Both should settle without unhandled rejections
+      await Promise.all([unregisterPromise, requestPromise]);
+    });
+  });
+
   describe('get', () => {
     it('should return provider by ID', () => {
       const provider = createMockProvider();
