@@ -123,6 +123,12 @@ a:hover {
   min-height: 0;
 }
 
+.nexipi-content {
+  flex: 1;
+  overflow: auto;
+  min-height: 0;
+}
+
 /* ==========================================================================
    Header
    ========================================================================== */
@@ -236,13 +242,11 @@ a:hover {
    ========================================================================== */
 
 .nexipi-welcome {
-  flex: 1;
   display: flex;
   justify-content: center;
   align-items: flex-start;
   padding: 24px 16px 16px;
-  overflow-y: auto;
-  overflow-x: hidden;
+  width: 100%;
 }
 
 .nexipi-welcome-content {
