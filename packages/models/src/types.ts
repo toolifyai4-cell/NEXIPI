@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import type { ModelId, UsageStatistics } from '@nexipi/shared';
+import type { ModelId, UsageStatistics, StreamDeltaEvent, StreamCompleteEvent, StreamErrorEvent } from '@nexipi/shared';
 
 export type ProviderId = string & { readonly __brand: unique symbol };
 

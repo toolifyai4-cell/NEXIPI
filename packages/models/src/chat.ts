@@ -73,8 +73,8 @@ export class ChatService {
   private readonly eventEmitter: EventEmitter<ChatServiceEvents>;
   private readonly logger: Logger;
   private readonly providerRegistry: ProviderRegistry;
-  private readonly defaultModel?: ModelId;
-  private readonly defaultProvider?: ProviderId;
+  private readonly defaultModel: ModelId | undefined;
+  private readonly defaultProvider: ProviderId | undefined;
   private readonly maxHistoryLength: number;
   private readonly activeStreams: Map<MessageId, ActiveStream> = new Map();
 
@@ -431,6 +431,9 @@ export class ChatService {
     messageId: MessageId,
     signal: AbortSignal
   ): Promise<void> {
+    if (!provider.executeStream) {
+      throw new Error('Provider does not support streaming');
+    }
     let hasCompleted = false;
     let accumulatedContent = '';
 
@@ -513,7 +516,7 @@ export class ChatService {
       );
 
       this.updateMessage(conversationId, messageId, {
-        content: result.content,
+        content: typeof result.choices[0]?.message.content === 'string' ? result.choices[0].message.content : '',
         status: 'completed',
         metadata: {
           usage: result.usage,

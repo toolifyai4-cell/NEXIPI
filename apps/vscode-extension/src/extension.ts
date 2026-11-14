@@ -3,7 +3,7 @@ import { defaultConfig } from '@nexipi/core';
 import type { Logger, LogLevel } from '@nexipi/shared';
 import { ChatService, createChatService } from '@nexipi/models';
 import { createProviderRegistry } from '@nexipi/models';
-import type { StreamEvent } from '@nexipi/shared';
+import type { StreamEvent, Message, ConversationId, MessageId } from '@nexipi/shared';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -101,14 +101,14 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
     });
   }
 
-  private _sendMessageCreated(message: { id: string; conversationId: string; role: string; content: string; status: string; timestamp: number; metadata?: Record<string, unknown> }): void {
+  private _sendMessageCreated(message: Message): void {
     this._view?.webview.postMessage({
       type: 'messageCreated',
       payload: { message },
     });
   }
 
-  private _sendMessageUpdated(message: { id: string; conversationId: string; role: string; content: string; status: string; timestamp: number; metadata?: Record<string, unknown> }): void {
+  private _sendMessageUpdated(message: Message): void {
     this._view?.webview.postMessage({
       type: 'messageUpdated',
       payload: { message },
@@ -209,14 +209,14 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
 
-          let conversationId = payload.conversationId;
+          let conversationId = payload.conversationId as ConversationId | undefined;
           if (!conversationId) {
             const conversation = this._chatService.createConversation();
             conversationId = conversation.id;
           }
 
           try {
-            await this._chatService.sendMessage(conversationId, payload.content);
+            await this._chatService.sendMessage(conversationId!, payload.content);
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             this._logger.error('Failed to send message', { error: err.message });
