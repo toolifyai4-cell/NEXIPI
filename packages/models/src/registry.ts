@@ -102,29 +102,25 @@ export class ProviderRegistry {
     this.removeModelsFromIndex(provider);
     this.providers.delete(providerId);
 
-    const entry: DisposalEntry = { promise: Promise.resolve(), state: 'pending' };
+    const disposalEntry: DisposalEntry = { promise: Promise.resolve(), state: 'pending' };
     const disposal = (async () => {
       await provider.dispose();
     })();
 
-    entry.promise = disposal.then(
+    disposalEntry.promise = disposal.then(
       () => {
-        entry.state = 'fulfilled';
+        disposalEntry.state = 'fulfilled';
       },
-      (error) => {
-        entry.state = 'rejected';
+      error => {
+        disposalEntry.state = 'rejected';
         throw error;
       }
     );
 
-    this.disposing.set(providerId, entry);
+    this.disposing.set(providerId, disposalEntry);
 
-    try {
-      await entry.promise;
-      return true;
-    } catch (error) {
-      throw error;
-    }
+    await disposalEntry.promise;
+    return true;
   }
 
   get(providerId: ProviderId): ModelProvider | undefined {

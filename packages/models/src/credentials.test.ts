@@ -337,3 +337,223 @@ describe('Credential secret redaction', () => {
     expect(creds.customField).toBe('visible');
   });
 });
+
+describe('Credential secret redaction regression tests', () => {
+  it('should redact nested secrets', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    await store.set({
+      providerId,
+      credentials: {
+        config: {
+          apiKey: 'nested-secret',
+          normal: 'value',
+          deeper: {
+            secret: 'deep-secret',
+          },
+        },
+      },
+    });
+
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    const creds = retrieved!.credentials;
+    expect(creds.config.apiKey).toBe('[REDACTED]');
+    expect(creds.config.normal).toBe('value');
+    expect(creds.config.deeper.secret).toBe('[REDACTED]');
+  });
+
+  it('should redact secrets in arrays', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    await store.set({
+      providerId,
+      credentials: {
+        providers: [
+          { apiKey: 'key1', name: 'provider1' },
+          { token: 'key2', name: 'provider2' },
+        ],
+      },
+    });
+
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    const creds = retrieved!.credentials;
+    expect(creds.providers[0].apiKey).toBe('[REDACTED]');
+    expect(creds.providers[0].name).toBe('provider1');
+    expect(creds.providers[1].token).toBe('[REDACTED]');
+    expect(creds.providers[1].name).toBe('provider2');
+  });
+
+  it('should handle circular references', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    const circular: any = { apiKey: 'secret', normal: 'value' };
+    circular.self = circular;
+
+    await store.set({
+      providerId,
+      credentials: circular,
+    });
+
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    const creds = retrieved!.credentials;
+    expect(creds.apiKey).toBe('[REDACTED]');
+    expect(creds.normal).toBe('value');
+    expect(creds.self).toBe('[CIRCULAR]');
+  });
+
+  it('should redact key variants (camelCase, snake_case, etc.)', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    await store.set({
+      providerId,
+      credentials: {
+        apiKey: 'camelCase',
+        api_key: 'snake_case',
+        accessToken: 'camelCaseToken',
+        access_token: 'snakeCaseToken',
+        clientSecret: 'camelCaseSecret',
+        client_secret: 'snakeCaseSecret',
+        APIKEY: 'UPPER',
+        ApIKeY: 'MiXeD',
+      },
+    });
+
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    const creds = retrieved!.credentials;
+    expect(creds.apiKey).toBe('[REDACTED]');
+    expect(creds.api_key).toBe('[REDACTED]');
+    expect(creds.accessToken).toBe('[REDACTED]');
+    expect(creds.access_token).toBe('[REDACTED]');
+    expect(creds.clientSecret).toBe('[REDACTED]');
+    expect(creds.client_secret).toBe('[REDACTED]');
+    expect(creds.APIKEY).toBe('[REDACTED]');
+    expect(creds.ApIKeY).toBe('[REDACTED]');
+  });
+
+  it('should not mutate original credentials object', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    const originalCredentials = {
+      apiKey: 'secret123',
+      normal: 'value',
+      nested: { secret: 'nested-secret' },
+    };
+    const originalString = JSON.stringify(originalCredentials);
+
+    await store.set({
+      providerId,
+      credentials: originalCredentials,
+    });
+
+    // Get redacted version
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    // Original should not be mutated
+    expect(JSON.stringify(originalCredentials)).toBe(originalString);
+
+    // Underlying store should still have original values
+    const direct = await delegate.get(providerId);
+    expect(direct!.credentials.apiKey).toBe('secret123');
+    expect(direct!.credentials.nested.secret).toBe('nested-secret');
+  });
+
+  it('should preserve non-secret keys in redacted output', async () => {
+    const logger = createLogger({
+      name: 'test',
+      version: '1.0.0',
+      logLevel: 'error',
+      maxConcurrentTasks: 10,
+      taskTimeoutMs: 1000,
+      shutdownTimeoutMs: 1000,
+      enableTelemetry: false,
+    });
+    const delegate = new InMemoryCredentialStore({ logger });
+    const store = new SecretCredentialStore(delegate, logger);
+
+    const providerId = createProviderId('test');
+    await store.set({
+      providerId,
+      credentials: {
+        apiKey: 'secret',
+        userId: 'user-123',
+        timestamp: 1234567890,
+        region: 'us-east-1',
+        endpoint: 'https://api.example.com',
+      },
+    });
+
+    const retrieved = await store.getRedacted(providerId);
+    expect(retrieved).toBeDefined();
+
+    const creds = retrieved!.credentials;
+    expect(creds.apiKey).toBe('[REDACTED]');
+    expect(creds.userId).toBe('user-123');
+    expect(creds.timestamp).toBe(1234567890);
+    expect(creds.region).toBe('us-east-1');
+    expect(creds.endpoint).toBe('https://api.example.com');
+  });
+});

@@ -276,6 +276,137 @@ describe('ProviderRegistry', () => {
       const result = await registry.unregister(createProviderId('missing'));
       expect(result).toBe(false);
     });
+
+    describe('disposal failure semantics', () => {
+      it('should propagate disposal failure to original caller', async () => {
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockRejectedValue(new Error('disposal failed'));
+        registry.register(provider);
+
+        await expect(registry.unregister(provider.metadata.id)).rejects.toThrow('disposal failed');
+      });
+
+      it('should return false for subsequent unregister after disposal failure', async () => {
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockRejectedValue(new Error('disposal failed'));
+        registry.register(provider);
+
+        // First call fails
+        await expect(registry.unregister(provider.metadata.id)).rejects.toThrow('disposal failed');
+
+        // Second call returns false (does not throw)
+        const result = await registry.unregister(provider.metadata.id);
+        expect(result).toBe(false);
+      });
+
+      it('should block re-registration after disposal failure', async () => {
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockRejectedValue(new Error('disposal failed'));
+        registry.register(provider);
+
+        await expect(registry.unregister(provider.metadata.id)).rejects.toThrow('disposal failed');
+
+        const newProvider = createMockProvider({
+          metadata: { id: provider.metadata.id, name: 'New', version: '1.0.0' },
+        });
+
+        expect(() => registry.register(newProvider)).toThrow('failed disposal');
+      });
+
+      it('should allow re-registration after successful disposal', async () => {
+        let resolveDispose!: () => void;
+        const disposePromise = new Promise<void>(resolve => {
+          resolveDispose = resolve;
+        });
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockReturnValue(disposePromise);
+        registry.register(provider);
+
+        const unregisterPromise = registry.unregister(provider.metadata.id);
+        resolveDispose();
+        await unregisterPromise;
+
+        const newProvider = createMockProvider({
+          metadata: { id: provider.metadata.id, name: 'New', version: '1.0.0' },
+        });
+
+        // Should not throw after successful disposal
+        registry.register(newProvider);
+        expect(registry.has(provider.metadata.id)).toBe(true);
+      });
+
+      it('should handle concurrent unregister calls during disposal', async () => {
+        let resolveDispose!: () => void;
+        const disposePromise = new Promise<void>(resolve => {
+          resolveDispose = resolve;
+        });
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockReturnValue(disposePromise);
+        registry.register(provider);
+
+        // Start multiple concurrent unregister calls
+        const promises = [
+          registry.unregister(provider.metadata.id),
+          registry.unregister(provider.metadata.id),
+          registry.unregister(provider.metadata.id),
+        ];
+
+        resolveDispose();
+        const results = await Promise.all(promises);
+
+        // Exactly one should return true (the one that initiated disposal)
+        // Others should return false
+        const trueCount = results.filter(r => r === true).length;
+        const falseCount = results.filter(r => r === false).length;
+        expect(trueCount).toBe(1);
+        expect(falseCount).toBe(2);
+        expect(provider.dispose).toHaveBeenCalledTimes(1);
+      });
+
+      it('should handle concurrent unregister calls when disposal fails', async () => {
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockRejectedValue(new Error('disposal failed'));
+        registry.register(provider);
+
+        // Start multiple concurrent unregister calls
+        const promises = [
+          registry.unregister(provider.metadata.id),
+          registry.unregister(provider.metadata.id),
+          registry.unregister(provider.metadata.id),
+        ];
+
+        // All should settle - at least one rejects, others return false
+        const results = await Promise.allSettled(promises);
+        const rejected = results.filter(r => r.status === 'rejected');
+        const fulfilled = results.filter(r => r.status === 'fulfilled');
+
+        expect(rejected.length).toBeGreaterThanOrEqual(1);
+        expect(fulfilled.length).toBeGreaterThanOrEqual(1);
+        for (const r of fulfilled) {
+          expect(r.value).toBe(false);
+        }
+        expect(provider.dispose).toHaveBeenCalledTimes(1);
+      });
+
+      it('should preserve registry consistency after failed disposal', async () => {
+        const provider = createMockProvider();
+        provider.dispose = vi.fn().mockRejectedValue(new Error('disposal failed'));
+        registry.register(provider);
+
+        await expect(registry.unregister(provider.metadata.id)).rejects.toThrow('disposal failed');
+
+        // Provider should be removed from registry
+        expect(registry.has(provider.metadata.id)).toBe(false);
+        expect(registry.get(provider.metadata.id)).toBeUndefined();
+        expect(registry.listModels(provider.metadata.id)).toHaveLength(0);
+
+        // But disposal failure should be remembered (blocks re-registration)
+        const newProvider = createMockProvider({
+          metadata: { id: provider.metadata.id, name: 'New', version: '1.0.0' },
+        });
+        expect(() => registry.register(newProvider)).toThrow('failed disposal');
+      });
+    });
   });
 
   describe('cancellation contract', () => {
@@ -362,7 +493,9 @@ describe('ProviderRegistry', () => {
       executeResolve({
         id: 'late-response',
         model: createModelId('test-model'),
-        choices: [{ index: 0, message: { role: 'assistant', content: 'late' }, finishReason: 'stop' }],
+        choices: [
+          { index: 0, message: { role: 'assistant', content: 'late' }, finishReason: 'stop' },
+        ],
         usage: { promptTokens: 1, completionTokens: 1, totalTokens: 2 },
         finishReason: 'stop',
       });

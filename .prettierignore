@@ -1,0 +1,9 @@
+# Kilo internal state files
+.kilo/agent-manager.json
+
+# Other files to ignore
+node_modules/
+dist/
+build/
+*.log
+*.map
