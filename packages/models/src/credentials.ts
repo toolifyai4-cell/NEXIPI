@@ -1,5 +1,5 @@
 import type { ProviderId, ProviderCredentials, CredentialStore } from './types.js';
-import { createLogger, type Logger } from '@nexipi/core';
+import type { Logger } from '@nexipi/core';
 
 export interface InMemoryCredentialStoreOptions {
   logger?: Logger;
@@ -109,8 +109,10 @@ export class SecretCredentialStore implements CredentialStore {
       } else if (value && typeof value === 'object' && !Array.isArray(value)) {
         redacted[key] = this.redactSecrets(value as Record<string, unknown>);
       } else if (Array.isArray(value)) {
-        redacted[key] = value.map((v) =>
-          v && typeof v === 'object' ? this.redactSecrets(v as Record<string, unknown>) : v
+        redacted[key] = value.map(v =>
+          v && typeof v === 'object'
+            ? this.redactSecrets(v as Record<string, unknown>)
+            : (v as unknown)
         );
       } else {
         redacted[key] = value;
@@ -173,8 +175,6 @@ export class CredentialManager {
   }
 }
 
-export function createCredentialManager(
-  options: CredentialManagerOptions = {}
-): CredentialManager {
+export function createCredentialManager(options: CredentialManagerOptions = {}): CredentialManager {
   return new CredentialManager(options);
 }

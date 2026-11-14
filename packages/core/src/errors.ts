@@ -76,12 +76,12 @@ export type EngineErrorOptions = {
   context?: Record<string, unknown> | undefined;
 };
 
-export class EngineError extends Error {
-  public readonly code: EngineErrorCode;
+export class EngineError<TCode extends string = EngineErrorCode> extends Error {
+  public readonly code: TCode;
   public override readonly cause?: Error | undefined;
   public readonly context?: Record<string, unknown> | undefined;
 
-  constructor(code: EngineErrorCode, message: string, options?: EngineErrorOptions) {
+  constructor(code: TCode, message: string, options?: EngineErrorOptions) {
     super(message);
     this.name = 'EngineError';
     this.code = code;

@@ -4,9 +4,8 @@ import type {
   ModelId,
   ModelMetadata,
   ValidationResult,
-  ValidationError,
 } from './types.js';
-import { EngineError, EngineErrorCode, createEngineError } from '@nexipi/core';
+import { EngineErrorCode, createEngineError } from '@nexipi/core';
 
 export class ProviderRegistry {
   private readonly providers: Map<ProviderId, ModelProvider> = new Map();

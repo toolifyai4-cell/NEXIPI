@@ -281,9 +281,13 @@ describe('mapToEngineError', () => {
   const modelId = createProviderId('gpt-4');
 
   it('should map authentication errors to INVALID_CONFIGURATION', () => {
-    const error = new ModelProviderError(ModelProviderErrorCode.AUTHENTICATION_FAILED, 'Auth failed', {
-      providerId,
-    });
+    const error = new ModelProviderError(
+      ModelProviderErrorCode.AUTHENTICATION_FAILED,
+      'Auth failed',
+      {
+        providerId,
+      }
+    );
     const engineError = mapToEngineError(error);
 
     expect(isEngineError(engineError)).toBe(true);
@@ -299,9 +303,13 @@ describe('mapToEngineError', () => {
   });
 
   it('should map rate limit to INTERNAL_ERROR', () => {
-    const error = new ModelProviderError(ModelProviderErrorCode.RATE_LIMIT_EXCEEDED, 'Rate limited', {
-      providerId,
-    });
+    const error = new ModelProviderError(
+      ModelProviderErrorCode.RATE_LIMIT_EXCEEDED,
+      'Rate limited',
+      {
+        providerId,
+      }
+    );
     const engineError = mapToEngineError(error);
     expect(engineError.code).toBe(EngineErrorCode.INTERNAL_ERROR);
   });
@@ -315,9 +323,13 @@ describe('mapToEngineError', () => {
   });
 
   it('should map provider unavailable to INTERNAL_ERROR', () => {
-    const error = new ModelProviderError(ModelProviderErrorCode.PROVIDER_UNAVAILABLE, 'Unavailable', {
-      providerId,
-    });
+    const error = new ModelProviderError(
+      ModelProviderErrorCode.PROVIDER_UNAVAILABLE,
+      'Unavailable',
+      {
+        providerId,
+      }
+    );
     const engineError = mapToEngineError(error);
     expect(engineError.code).toBe(EngineErrorCode.INTERNAL_ERROR);
   });
@@ -345,17 +357,25 @@ describe('mapToEngineError', () => {
   });
 
   it('should map invalid request to INVALID_CONFIGURATION', () => {
-    const error = new ModelProviderError(ModelProviderErrorCode.INVALID_REQUEST, 'Invalid request', {
-      providerId,
-    });
+    const error = new ModelProviderError(
+      ModelProviderErrorCode.INVALID_REQUEST,
+      'Invalid request',
+      {
+        providerId,
+      }
+    );
     const engineError = mapToEngineError(error);
     expect(engineError.code).toBe(EngineErrorCode.INVALID_CONFIGURATION);
   });
 
   it('should map validation failed to INVALID_CONFIGURATION', () => {
-    const error = new ModelProviderError(ModelProviderErrorCode.VALIDATION_FAILED, 'Validation failed', {
-      providerId,
-    });
+    const error = new ModelProviderError(
+      ModelProviderErrorCode.VALIDATION_FAILED,
+      'Validation failed',
+      {
+        providerId,
+      }
+    );
     const engineError = mapToEngineError(error);
     expect(engineError.code).toBe(EngineErrorCode.INVALID_CONFIGURATION);
   });

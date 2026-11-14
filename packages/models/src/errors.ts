@@ -1,4 +1,4 @@
-import { EngineError, EngineErrorCode, createEngineError, type EngineErrorOptions } from '@nexipi/core';
+import { EngineError, EngineErrorCode, createEngineError } from '@nexipi/core';
 
 export enum ModelProviderErrorCode {
   AUTHENTICATION_FAILED = 'AUTHENTICATION_FAILED',
@@ -23,29 +23,29 @@ export enum ModelProviderErrorCode {
 const PROVIDER_ERROR_CODE_MAP: Record<string, ModelProviderErrorCode> = {
   'authentication failed': ModelProviderErrorCode.AUTHENTICATION_FAILED,
   'invalid api key': ModelProviderErrorCode.INVALID_API_KEY,
-  'unauthorized': ModelProviderErrorCode.AUTHENTICATION_FAILED,
+  unauthorized: ModelProviderErrorCode.AUTHENTICATION_FAILED,
   'rate limit': ModelProviderErrorCode.RATE_LIMIT_EXCEEDED,
   'too many requests': ModelProviderErrorCode.RATE_LIMIT_EXCEEDED,
-  'network': ModelProviderErrorCode.NETWORK_ERROR,
-  'connection': ModelProviderErrorCode.NETWORK_ERROR,
-  'econnrefused': ModelProviderErrorCode.NETWORK_ERROR,
-  'etimedout': ModelProviderErrorCode.TIMEOUT,
-  'timeout': ModelProviderErrorCode.TIMEOUT,
-  'unavailable': ModelProviderErrorCode.PROVIDER_UNAVAILABLE,
+  network: ModelProviderErrorCode.NETWORK_ERROR,
+  connection: ModelProviderErrorCode.NETWORK_ERROR,
+  econnrefused: ModelProviderErrorCode.NETWORK_ERROR,
+  etimedout: ModelProviderErrorCode.TIMEOUT,
+  timeout: ModelProviderErrorCode.TIMEOUT,
+  'timed out': ModelProviderErrorCode.TIMEOUT,
+  unavailable: ModelProviderErrorCode.PROVIDER_UNAVAILABLE,
   'service unavailable': ModelProviderErrorCode.PROVIDER_UNAVAILABLE,
   'unsupported model': ModelProviderErrorCode.UNSUPPORTED_MODEL,
-  'model not found': ModelProviderErrorCode.MODEL_NOT_FOUND,
+  'model not found': ModelProviderErrorCode.UNSUPPORTED_MODEL,
   'invalid request': ModelProviderErrorCode.INVALID_REQUEST,
   'bad request': ModelProviderErrorCode.INVALID_REQUEST,
   'context length': ModelProviderErrorCode.CONTEXT_LENGTH_EXCEEDED,
   'max tokens': ModelProviderErrorCode.CONTEXT_LENGTH_EXCEEDED,
-  'quota': ModelProviderErrorCode.QUOTA_EXCEEDED,
+  quota: ModelProviderErrorCode.QUOTA_EXCEEDED,
   'content filter': ModelProviderErrorCode.CONTENT_FILTERED,
   'content policy': ModelProviderErrorCode.CONTENT_FILTERED,
 };
 
-export class ModelProviderError extends EngineError {
-  public override readonly code: ModelProviderErrorCode;
+export class ModelProviderError extends EngineError<ModelProviderErrorCode> {
   public readonly providerId: string;
   public readonly modelId?: string;
   public readonly retryable: boolean;
@@ -57,17 +57,18 @@ export class ModelProviderError extends EngineError {
     options: {
       providerId: string;
       modelId?: string;
-      cause?: Error;
+      cause?: Error | undefined;
       context?: Record<string, unknown>;
       retryable?: boolean;
       providerErrorCode?: string;
     }
   ) {
-    super(code as unknown as EngineErrorCode, message, {
+    super(code, message, {
       cause: options.cause,
       context: options.context,
     });
-    this.code = code;
+    Object.setPrototypeOf(this, ModelProviderError.prototype);
+    this.name = 'ModelProviderError';
     this.providerId = options.providerId;
     if (options.modelId !== undefined) {
       this.modelId = options.modelId;
@@ -76,8 +77,6 @@ export class ModelProviderError extends EngineError {
     if (options.providerErrorCode !== undefined) {
       this.providerErrorCode = options.providerErrorCode;
     }
-
-    Object.setPrototypeOf(this, ModelProviderError.prototype);
   }
 
   private isRetryableByDefault(code: ModelProviderErrorCode): boolean {
@@ -92,11 +91,7 @@ export class ModelProviderError extends EngineError {
     }
   }
 
-  static fromError(
-    error: unknown,
-    providerId: string,
-    modelId?: string
-  ): ModelProviderError {
+  static fromError(error: unknown, providerId: string, modelId?: string): ModelProviderError {
     if (error instanceof ModelProviderError) {
       return error;
     }
@@ -110,7 +105,7 @@ export class ModelProviderError extends EngineError {
     const errorOptions: {
       providerId: string;
       modelId?: string;
-      cause?: Error;
+      cause?: Error | undefined;
       context: Record<string, unknown>;
       retryable: boolean;
       providerErrorCode?: string;

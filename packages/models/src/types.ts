@@ -196,7 +196,14 @@ export type ModelChoiceOutput = z.output<typeof ModelChoiceSchema>;
 
 export type FinishReason = 'stop' | 'length' | 'tool_calls' | 'content_filter' | 'error' | 'other';
 
-export const FinishReasonSchema = z.enum(['stop', 'length', 'tool_calls', 'content_filter', 'error', 'other']);
+export const FinishReasonSchema = z.enum([
+  'stop',
+  'length',
+  'tool_calls',
+  'content_filter',
+  'error',
+  'other',
+]);
 
 export interface UsageStatistics {
   readonly promptTokens: number;
@@ -276,13 +283,13 @@ export interface ValidationResult {
 export interface ValidationError {
   readonly code: string;
   readonly message: string;
-  readonly path?: readonly (string | number)[] | undefined;
+  readonly path?: ReadonlyArray<string | number> | undefined;
 }
 
 export interface ValidationWarning {
   readonly code: string;
   readonly message: string;
-  readonly path?: readonly (string | number)[] | undefined;
+  readonly path?: ReadonlyArray<string | number> | undefined;
 }
 
 export interface ProviderRegistry {

@@ -11,10 +11,7 @@ export {
   mapToEngineError,
 } from './errors.js';
 
-export {
-  ProviderRegistry,
-  createProviderRegistry,
-} from './registry.js';
+export { ProviderRegistry, createProviderRegistry } from './registry.js';
 
 export {
   InMemoryCredentialStore,

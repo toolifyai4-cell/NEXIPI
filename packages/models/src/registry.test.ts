@@ -14,13 +14,16 @@ import {
 } from './types.js';
 import { EngineErrorCode, isEngineError } from '@nexipi/core';
 
-function createMockProvider(overrides: Partial<{
-  metadata: ProviderMetadata;
-  models: ModelMetadata[];
-  health: ProviderHealth;
-  validateResult: ValidationResult;
-  executeResult: ModelResponse;
-}> = {}): ModelProvider {
+function createMockProvider(
+  overrides: Partial<{
+    metadata: ProviderMetadata;
+    models: ModelMetadata[];
+    health: ProviderHealth;
+    validateResult: ValidationResult;
+    executeResult: ModelResponse;
+    healthCheck: ReturnType<typeof vi.fn>;
+  }> = {}
+): ModelProvider {
   const providerId = overrides.metadata?.id ?? createProviderId('test-provider');
   const modelId = createModelId('test-model');
 
@@ -48,13 +51,11 @@ function createMockProvider(overrides: Partial<{
     },
     initialize: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn().mockResolvedValue(undefined),
-    listModels: vi.fn().mockResolvedValue(defaultModels),
-    getModel: vi.fn().mockImplementation((id: string) =>
-      defaultModels.find((m) => m.modelId === id)
-    ),
-    validateRequest: vi.fn().mockResolvedValue(
-      overrides.validateResult ?? { valid: true, errors: [] }
-    ),
+    listModels: vi.fn().mockReturnValue(defaultModels),
+    getModel: vi.fn().mockImplementation((id: string) => defaultModels.find(m => m.modelId === id)),
+    validateRequest: vi
+      .fn()
+      .mockResolvedValue(overrides.validateResult ?? { valid: true, errors: [] }),
     execute: vi.fn().mockResolvedValue(
       overrides.executeResult ?? {
         id: 'resp-1',
@@ -66,13 +67,15 @@ function createMockProvider(overrides: Partial<{
         finishReason: 'stop',
       }
     ),
-    healthCheck: vi.fn().mockResolvedValue(
-      overrides.health ?? {
-        status: 'healthy',
-        lastChecked: Date.now(),
-        latencyMs: 100,
-      }
-    ),
+    healthCheck:
+      overrides.healthCheck ??
+      vi.fn().mockResolvedValue(
+        overrides.health ?? {
+          status: 'healthy',
+          lastChecked: Date.now(),
+          latencyMs: 100,
+        }
+      ),
   };
 }
 
@@ -98,9 +101,6 @@ describe('ProviderRegistry', () => {
 
       registry.register(provider1);
       expect(() => registry.register(provider2)).toThrow();
-
-      const error = registry.register(provider1) as never;
-      // The error should be an EngineError
     });
 
     it('should throw EngineError with correct code for duplicate', () => {
@@ -250,14 +250,50 @@ describe('ProviderRegistry', () => {
       const provider1 = createMockProvider({
         metadata: { id: createProviderId('p1'), name: 'P1', version: '1.0.0' },
         models: [
-          { providerId: createProviderId('p1'), modelId: createModelId('m1'), displayName: 'M1', contextWindow: 100, capabilities: { streaming: false, toolCalling: false, vision: false, inputModalities: ['text'], outputModalities: ['text'] } },
-          { providerId: createProviderId('p1'), modelId: createModelId('m2'), displayName: 'M2', contextWindow: 100, capabilities: { streaming: false, toolCalling: false, vision: false, inputModalities: ['text'], outputModalities: ['text'] } },
+          {
+            providerId: createProviderId('p1'),
+            modelId: createModelId('m1'),
+            displayName: 'M1',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
+          {
+            providerId: createProviderId('p1'),
+            modelId: createModelId('m2'),
+            displayName: 'M2',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
         ],
       });
       const provider2 = createMockProvider({
         metadata: { id: createProviderId('p2'), name: 'P2', version: '1.0.0' },
         models: [
-          { providerId: createProviderId('p2'), modelId: createModelId('m3'), displayName: 'M3', contextWindow: 100, capabilities: { streaming: false, toolCalling: false, vision: false, inputModalities: ['text'], outputModalities: ['text'] } },
+          {
+            providerId: createProviderId('p2'),
+            modelId: createModelId('m3'),
+            displayName: 'M3',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
         ],
       });
 
@@ -271,8 +307,32 @@ describe('ProviderRegistry', () => {
     it('should return models for specific provider', () => {
       const provider = createMockProvider({
         models: [
-          { providerId: createProviderId('p1'), modelId: createModelId('m1'), displayName: 'M1', contextWindow: 100, capabilities: { streaming: false, toolCalling: false, vision: false, inputModalities: ['text'], outputModalities: ['text'] } },
-          { providerId: createProviderId('p1'), modelId: createModelId('m2'), displayName: 'M2', contextWindow: 100, capabilities: { streaming: false, toolCalling: false, vision: false, inputModalities: ['text'], outputModalities: ['text'] } },
+          {
+            providerId: createProviderId('p1'),
+            modelId: createModelId('m1'),
+            displayName: 'M1',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
+          {
+            providerId: createProviderId('p1'),
+            modelId: createModelId('m2'),
+            displayName: 'M2',
+            contextWindow: 100,
+            capabilities: {
+              streaming: false,
+              toolCalling: false,
+              vision: false,
+              inputModalities: ['text'],
+              outputModalities: ['text'],
+            },
+          },
         ],
       });
 
@@ -324,18 +384,22 @@ describe('ProviderRegistry', () => {
     it('should handle concurrent register and unregister', async () => {
       const providers = Array.from({ length: 10 }, (_, i) =>
         createMockProvider({
-          metadata: { id: createProviderId(`provider-${i}`), name: `Provider ${i}`, version: '1.0.0' },
+          metadata: {
+            id: createProviderId(`provider-${i}`),
+            name: `Provider ${i}`,
+            version: '1.0.0',
+          },
         })
       );
 
-      await Promise.all(providers.map((p) => Promise.resolve(registry.register(p))));
+      await Promise.all(providers.map(p => Promise.resolve(registry.register(p))));
 
       expect(registry.list()).toHaveLength(10);
 
       const unregisterResults = await Promise.all(
-        providers.map((p) => Promise.resolve(registry.unregister(p.metadata.id)))
+        providers.map(p => Promise.resolve(registry.unregister(p.metadata.id)))
       );
-      expect(unregisterResults.every((r) => r === true)).toBe(true);
+      expect(unregisterResults.every(r => r === true)).toBe(true);
       expect(registry.list()).toHaveLength(0);
     });
 
@@ -349,7 +413,7 @@ describe('ProviderRegistry', () => {
         )
       );
 
-      expect(results.every((m) => m !== undefined)).toBe(true);
+      expect(results.every(m => m !== undefined)).toBe(true);
     });
   });
 });
