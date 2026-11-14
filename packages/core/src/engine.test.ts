@@ -25,6 +25,16 @@ function createTestEngine(overrides: Partial<EngineOptions> = {}): Engine {
   });
 }
 
+function createDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve: resolve!, reject: reject! };
+}
+
 describe('engine', () => {
   let engine: Engine;
 
@@ -480,20 +490,26 @@ describe('engine', () => {
     });
 
     it('should mark task as FAILED on timeout but executor continues', async () => {
+      const executorFinished = createDeferred<void>();
       let executorCompleted = false;
       const task = engine.createTask('test', { input: 'hello' });
       await expect(
         engine.executeTask(task, async () => {
-          await new Promise(resolve => setTimeout(resolve, 2000));
+          await executorFinished.promise;
           executorCompleted = true;
           return { output: 'done' };
         })
       ).rejects.toThrow();
 
-      await new Promise(resolve => setTimeout(resolve, 2100));
-      expect(executorCompleted).toBe(true);
+      // Task should have timed out and been marked FAILED
       const updatedTask = engine.getTask(task.id);
       expect(updatedTask?.status).toBe(TaskStatus.FAILED);
+
+      // Now complete the executor
+      executorFinished.resolve();
+      // Wait a bit for the executor to actually complete
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(executorCompleted).toBe(true);
     });
 
     it('should not allow executing task not in queue', async () => {

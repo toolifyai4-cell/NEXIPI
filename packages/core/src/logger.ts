@@ -1,5 +1,6 @@
 import type { Logger as SharedLogger, LogLevel } from '@nexipi/shared';
 import type { EngineConfig } from './config.js';
+import { sanitize } from './sanitize.js';
 
 export type Logger = SharedLogger;
 
@@ -10,52 +11,10 @@ const LOG_LEVELS: Record<LogLevel, number> = {
   error: 3,
 };
 
-const SENSITIVE_KEYS = [
-  'apiKey',
-  'api_key',
-  'token',
-  'secret',
-  'password',
-  'auth',
-  'credential',
-  'accessToken',
-  'refreshToken',
-  'apikey',
-];
-
 function sanitizeMeta(meta?: Record<string, unknown>): Record<string, unknown> | undefined {
   if (!meta) {
     return undefined;
   }
-  const seen = new WeakSet<object>();
-
-  function sanitize(value: unknown): unknown {
-    if (value === null) {
-      return null;
-    }
-    if (typeof value !== 'object') {
-      return value;
-    }
-    if (seen.has(value)) {
-      return '[CIRCULAR]';
-    }
-    seen.add(value);
-
-    if (Array.isArray(value)) {
-      return value.map(sanitize);
-    }
-    const sanitized: Record<string, unknown> = {};
-    for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-      const lowerKey = key.toLowerCase();
-      if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
-        sanitized[key] = '[REDACTED]';
-      } else {
-        sanitized[key] = sanitize(val);
-      }
-    }
-    return sanitized;
-  }
-
   return sanitize(meta) as Record<string, unknown>;
 }
 

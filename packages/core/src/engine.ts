@@ -22,6 +22,7 @@ import {
   createTaskQueue,
   TaskStatus,
 } from './tasks.js';
+import { sanitize } from './sanitize.js';
 
 export enum EngineStatus {
   UNINITIALIZED = 'UNINITIALIZED',
@@ -523,44 +524,6 @@ export class Engine {
   }
 
   private sanitizeConfig(config: EngineConfig): Record<string, unknown> {
-    const SENSITIVE_KEYS = [
-      'apiKey',
-      'api_key',
-      'token',
-      'secret',
-      'password',
-      'auth',
-      'credential',
-      'accessToken',
-      'refreshToken',
-      'apikey',
-      'clientSecret',
-      'client_secret',
-      'privateKey',
-      'private_key',
-      'authorization',
-      'bearer',
-    ];
-
-    function sanitize(value: unknown): unknown {
-      if (value === null || typeof value !== 'object') {
-        return value;
-      }
-      if (Array.isArray(value)) {
-        return value.map(sanitize);
-      }
-      const sanitized: Record<string, unknown> = {};
-      for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-        const lowerKey = key.toLowerCase();
-        if (SENSITIVE_KEYS.some(s => lowerKey.includes(s))) {
-          sanitized[key] = '[REDACTED]';
-        } else {
-          sanitized[key] = sanitize(val);
-        }
-      }
-      return sanitized;
-    }
-
     return sanitize(config) as Record<string, unknown>;
   }
 }
