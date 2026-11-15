@@ -81,6 +81,11 @@ interface PendingRequest {
   reject: (error: Error) => void;
 }
 
+interface ActiveRequestInfo {
+  conversationId: ConversationId;
+  messageId: MessageId;
+}
+
 export class ChatService {
   private readonly conversations: Map<ConversationId, Conversation> = new Map();
   private readonly messages: Map<ConversationId, Map<MessageId, Message>> = new Map();
@@ -93,7 +98,10 @@ export class ChatService {
   private readonly concurrencyPolicy: ConcurrencyPolicy;
   private readonly activeStreams: Map<MessageId, ActiveStream> = new Map();
   private readonly requestQueue: Map<ConversationId, PendingRequest[]> = new Map();
-  private readonly currentRequestId: Map<ConversationId, string> = new Map();
+  /** Tracks all active requests by requestId for request-scoped validation */
+  private readonly activeRequests: Map<string, ActiveRequestInfo> = new Map();
+  /** Tracks the primary request per conversation (for queue/cancel-previous policies) */
+  private readonly primaryRequestId: Map<ConversationId, string> = new Map();
   private _isDisposed = false;
 
   constructor(options: ChatServiceOptions = {}) {
@@ -212,7 +220,7 @@ export class ChatService {
     }
 
     this.cancelActiveStream(conversationId);
-    this.currentRequestId.delete(conversationId);
+    this.primaryRequestId.delete(conversationId);
     this.clearRequestQueue(conversationId);
 
     this.conversations.delete(conversationId);
@@ -352,10 +360,10 @@ export class ChatService {
     }
 
     const requestId = this.generateRequestId();
-    const currentRequestId = this.currentRequestId.get(conversationId);
+    const primaryRequestId = this.primaryRequestId.get(conversationId);
 
     // Handle concurrency based on policy
-    if (currentRequestId) {
+    if (primaryRequestId) {
       switch (this.concurrencyPolicy) {
         case 'cancel-previous': {
           // Cancel the currently active stream for this conversation
@@ -363,7 +371,7 @@ export class ChatService {
           this.clearRequestQueue(conversationId);
           this.logger.info('Cancelled previous request due to new request', {
             conversationId,
-            previousRequestId: currentRequestId,
+            previousRequestId: primaryRequestId,
             newRequestId: requestId,
           });
           break;
@@ -382,25 +390,39 @@ export class ChatService {
           });
         }
         case 'allow-all': {
-          // Allow all requests to run concurrently
+          // Allow all requests to run concurrently - no blocking
           break;
         }
       }
     }
 
-    this.currentRequestId.set(conversationId, requestId);
+    // Register this request as active
+    this.activeRequests.set(requestId, { conversationId, messageId: '' as MessageId });
+    // For queue/cancel-previous, this becomes the primary request
+    if (this.concurrencyPolicy !== 'allow-all') {
+      this.primaryRequestId.set(conversationId, requestId);
+    }
 
     const userMessage = this.addMessage(conversationId, 'user', content, 'completed');
     if (!userMessage) {
-      this.currentRequestId.delete(conversationId);
+      this.activeRequests.delete(requestId);
+      if (this.primaryRequestId.get(conversationId) === requestId) {
+        this.primaryRequestId.delete(conversationId);
+      }
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Failed to create user message');
     }
 
     const assistantMessage = this.addMessage(conversationId, 'assistant', '', 'pending');
     if (!assistantMessage) {
-      this.currentRequestId.delete(conversationId);
+      this.activeRequests.delete(requestId);
+      if (this.primaryRequestId.get(conversationId) === requestId) {
+        this.primaryRequestId.delete(conversationId);
+      }
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Failed to create assistant message');
     }
+
+    // Update the active request info with the actual messageId
+    this.activeRequests.set(requestId, { conversationId, messageId: assistantMessage.id });
 
     this.updateMessage(conversationId, assistantMessage.id, { status: 'streaming' });
 
@@ -426,8 +448,9 @@ export class ChatService {
       .then(() => {
         if (!this._isDisposed) {
           this.activeStreams.delete(assistantMessage.id);
-          if (this.currentRequestId.get(conversationId) === requestId) {
-            this.currentRequestId.delete(conversationId);
+          this.activeRequests.delete(requestId);
+          if (this.primaryRequestId.get(conversationId) === requestId) {
+            this.primaryRequestId.delete(conversationId);
             this.processNextRequest(conversationId);
           }
         }
@@ -435,8 +458,9 @@ export class ChatService {
       .catch(error => {
         if (!this._isDisposed) {
           this.activeStreams.delete(assistantMessage.id);
-          if (this.currentRequestId.get(conversationId) === requestId) {
-            this.currentRequestId.delete(conversationId);
+          this.activeRequests.delete(requestId);
+          if (this.primaryRequestId.get(conversationId) === requestId) {
+            this.primaryRequestId.delete(conversationId);
             this.processNextRequest(conversationId);
           }
           if (!controller.signal.aborted) {
@@ -447,6 +471,9 @@ export class ChatService {
               error: error instanceof Error ? error.message : String(error),
             });
           }
+        } else {
+          // Service is disposed - ensure message is marked as cancelled
+          this.updateMessage(conversationId, assistantMessage.id, { status: 'cancelled' });
         }
       });
 
@@ -568,9 +595,9 @@ export class ChatService {
         });
       }
     } catch (error) {
-      // Validate that this request is still current before handling error
-      if (this.currentRequestId.get(conversationId) !== requestId) {
-        this.logger.debug('Ignoring error from stale request', { conversationId, requestId });
+      // Validate that this request is still active (not cancelled/superseded)
+      if (!this.activeRequests.has(requestId)) {
+        this.logger.debug('Ignoring error from cancelled/superseded request', { conversationId, requestId });
         return;
       }
 
@@ -639,9 +666,9 @@ export class ChatService {
     let accumulatedContent = '';
 
     for await (const event of provider.executeStream(request, signal)) {
-      // Validate request is still current before processing
-      if (this.currentRequestId.get(conversationId) !== requestId) {
-        this.logger.debug('Ignoring event from stale request', {
+      // Validate request is still active before processing
+      if (!this.activeRequests.has(requestId)) {
+        this.logger.debug('Ignoring event from cancelled/superseded request', {
           conversationId,
           requestId,
           eventType: event.type,
@@ -749,9 +776,9 @@ export class ChatService {
     try {
       const result = await Promise.race([resultPromise, timeoutPromise]);
 
-      // Validate request is still current before processing result
-      if (this.currentRequestId.get(conversationId) !== requestId) {
-        this.logger.debug('Ignoring result from stale request', { conversationId, requestId });
+      // Validate request is still active before processing result
+      if (!this.activeRequests.has(requestId)) {
+        this.logger.debug('Ignoring result from cancelled/superseded request', { conversationId, requestId });
         return;
       }
 
@@ -854,6 +881,7 @@ export class ChatService {
       if (stream.conversationId === conversationId) {
         stream.controller.abort();
         this.activeStreams.delete(messageId);
+        this.activeRequests.delete(stream.requestId);
         this.logger.info('Active stream cancelled', {
           conversationId,
           messageId,
@@ -877,6 +905,7 @@ export class ChatService {
     if (stream) {
       stream.controller.abort();
       this.activeStreams.delete(messageId);
+      this.activeRequests.delete(stream.requestId);
       this.logger.info('Message stream cancelled', { messageId, requestId: stream.requestId });
       // Emit stream:cancel event
       this.eventEmitter.emit('stream:event', {
@@ -884,9 +913,9 @@ export class ChatService {
         timestamp: Date.now(),
       });
       this.updateMessage(stream.conversationId, messageId, { status: 'cancelled' });
-      // If this was the current request, process next in queue
-      if (this.currentRequestId.get(stream.conversationId) === stream.requestId) {
-        this.currentRequestId.delete(stream.conversationId);
+      // If this was the primary request, process next in queue
+      if (this.primaryRequestId.get(stream.conversationId) === stream.requestId) {
+        this.primaryRequestId.delete(stream.conversationId);
         this.processNextRequest(stream.conversationId);
       }
       return true;
@@ -969,7 +998,9 @@ export class ChatService {
       });
     }
     this.activeStreams.clear();
-    this.currentRequestId.clear();
+    // NOTE: Do NOT clear activeRequests or primaryRequestId here - they are needed
+    // for the catch blocks in executeStream to validate the request is still active.
+    // They will be cleared after all abort promises settle.
     // Reject all queued requests
     for (const queue of this.requestQueue.values()) {
       for (const req of queue) {
@@ -984,6 +1015,9 @@ export class ChatService {
       for (const info of streamInfos) {
         this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
       }
+      // Now clear tracking maps after all streams have settled
+      this.activeRequests.clear();
+      this.primaryRequestId.clear();
     });
   }
 }
