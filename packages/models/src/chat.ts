@@ -54,13 +54,31 @@ export interface ChatServiceOptions {
   defaultProvider?: ProviderId;
   logger?: Logger;
   maxHistoryLength?: number;
+  /** Concurrency policy for multiple requests in the same conversation */
+  concurrencyPolicy?: 'queue' | 'cancel-previous' | 'allow-all';
 }
+
+type ConcurrencyPolicy = 'queue' | 'cancel-previous' | 'allow-all';
 
 interface ActiveStream {
   controller: AbortController;
   conversationId: ConversationId;
   messageId: MessageId;
   promise: Promise<void>;
+  requestId: string;
+}
+
+interface PendingRequest {
+  conversationId: ConversationId;
+  userContent: string;
+  options: {
+    model?: ModelId;
+    provider?: ProviderId;
+    parameters?: GenerationParameters;
+    systemPrompt?: string;
+  };
+  resolve: (messageId: MessageId) => void;
+  reject: (error: Error) => void;
 }
 
 export class ChatService {
@@ -72,7 +90,11 @@ export class ChatService {
   private readonly defaultModel: ModelId | undefined;
   private readonly defaultProvider: ProviderId | undefined;
   private readonly maxHistoryLength: number;
+  private readonly concurrencyPolicy: ConcurrencyPolicy;
   private readonly activeStreams: Map<MessageId, ActiveStream> = new Map();
+  private readonly requestQueue: Map<ConversationId, PendingRequest[]> = new Map();
+  private readonly currentRequestId: Map<ConversationId, string> = new Map();
+  private isDisposed = false;
 
   constructor(options: ChatServiceOptions = {}) {
     this.providerRegistry = options.providerRegistry ?? createProviderRegistry();
@@ -90,6 +112,7 @@ export class ChatService {
         enableTelemetry: false,
       });
     this.maxHistoryLength = options.maxHistoryLength ?? 100;
+    this.concurrencyPolicy = options.concurrencyPolicy ?? 'cancel-previous';
     this.eventEmitter = new EventEmitter<ChatServiceEvents>({
       onListenerError: (error, eventName) => {
         this.logger.error(`Listener error for event ${eventName}`, { error: error.message });
@@ -107,6 +130,39 @@ export class ChatService {
 
   getProviderRegistry(): ProviderRegistry {
     return this.providerRegistry;
+  }
+
+  /** Get the current concurrency policy */
+  getConcurrencyPolicy(): ConcurrencyPolicy {
+    return this.concurrencyPolicy;
+  }
+
+  /** Check if the service has been disposed */
+  isDisposed(): boolean {
+    return this.isDisposed;
+  }
+
+  private generateRequestId(): string {
+    return `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+  }
+
+  private getRequestQueue(conversationId: ConversationId): PendingRequest[] {
+    let queue = this.requestQueue.get(conversationId);
+    if (!queue) {
+      queue = [];
+      this.requestQueue.set(conversationId, queue);
+    }
+    return queue;
+  }
+
+  private clearRequestQueue(conversationId: ConversationId): void {
+    const queue = this.requestQueue.get(conversationId);
+    if (queue) {
+      for (const req of queue) {
+        req.reject(new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Request cancelled due to new request'));
+      }
+      this.requestQueue.delete(conversationId);
+    }
   }
 
   createConversation(title: string = 'New Conversation'): Conversation {
@@ -279,25 +335,66 @@ export class ChatService {
       systemPrompt?: string;
     } = {}
   ): Promise<MessageId> {
+    if (this.isDisposed) {
+      throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'ChatService has been disposed');
+    }
+
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
-      // Handle missing conversation gracefully - create a failed assistant message
-      // in a temporary conversation context, but since we can't, we throw for
-      // truly invalid conversation IDs (programming errors) while allowing
-      // runtime config errors to be handled in executeStream.
       throw new EngineError(
         EngineErrorCode.INVALID_CONFIGURATION,
         `Conversation ${conversationId} not found`
       );
     }
 
+    const requestId = this.generateRequestId();
+    const currentRequestId = this.currentRequestId.get(conversationId);
+
+    // Handle concurrency based on policy
+    if (currentRequestId) {
+      switch (this.concurrencyPolicy) {
+        case 'cancel-previous': {
+          // Cancel the currently active stream for this conversation
+          this.cancelActiveStream(conversationId);
+          this.clearRequestQueue(conversationId);
+          this.logger.info('Cancelled previous request due to new request', {
+            conversationId,
+            previousRequestId: currentRequestId,
+            newRequestId: requestId,
+          });
+          break;
+        }
+        case 'queue': {
+          // Queue the new request
+          return new Promise<MessageId>((resolve, reject) => {
+            const queue = this.getRequestQueue(conversationId);
+            queue.push({
+              conversationId,
+              userContent: content,
+              options,
+              resolve,
+              reject,
+            });
+          });
+        }
+        case 'allow-all': {
+          // Allow all requests to run concurrently
+          break;
+        }
+      }
+    }
+
+    this.currentRequestId.set(conversationId, requestId);
+
     const userMessage = this.addMessage(conversationId, 'user', content, 'completed');
     if (!userMessage) {
+      this.currentRequestId.delete(conversationId);
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Failed to create user message');
     }
 
     const assistantMessage = this.addMessage(conversationId, 'assistant', '', 'pending');
     if (!assistantMessage) {
+      this.currentRequestId.delete(conversationId);
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Failed to create assistant message');
     }
 
@@ -308,7 +405,8 @@ export class ChatService {
       conversationId,
       assistantMessage.id,
       controller.signal,
-      options
+      options,
+      requestId
     );
 
     const activeStream: ActiveStream = {
@@ -316,25 +414,50 @@ export class ChatService {
       conversationId,
       messageId: assistantMessage.id,
       promise: streamPromise,
+      requestId,
     };
     this.activeStreams.set(assistantMessage.id, activeStream);
 
     streamPromise
       .then(() => {
-        this.activeStreams.delete(assistantMessage.id);
+        if (!this.isDisposed) {
+          this.activeStreams.delete(assistantMessage.id);
+          if (this.currentRequestId.get(conversationId) === requestId) {
+            this.currentRequestId.delete(conversationId);
+            this.processNextRequest(conversationId);
+          }
+        }
       })
       .catch(error => {
-        this.activeStreams.delete(assistantMessage.id);
-        if (!controller.signal.aborted) {
-          this.logger.error('Stream execution failed', {
-            conversationId,
-            messageId: assistantMessage.id,
-            error: error instanceof Error ? error.message : String(error),
-          });
+        if (!this.isDisposed) {
+          this.activeStreams.delete(assistantMessage.id);
+          if (this.currentRequestId.get(conversationId) === requestId) {
+            this.currentRequestId.delete(conversationId);
+            this.processNextRequest(conversationId);
+          }
+          if (!controller.signal.aborted) {
+            this.logger.error('Stream execution failed', {
+              conversationId,
+              messageId: assistantMessage.id,
+              requestId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
         }
       });
 
     return assistantMessage.id;
+  }
+
+  private processNextRequest(conversationId: ConversationId): void {
+    const queue = this.requestQueue.get(conversationId);
+    if (queue && queue.length > 0) {
+      const nextRequest = queue.shift()!;
+      // Fire and forget - the sendMessage will handle the promise
+      this.sendMessage(conversationId, nextRequest.userContent, nextRequest.options)
+        .then(nextRequest.resolve)
+        .catch(nextRequest.reject);
+    }
   }
 
   private async executeStream(
@@ -346,7 +469,8 @@ export class ChatService {
       provider?: ProviderId;
       parameters?: GenerationParameters;
       systemPrompt?: string;
-    }
+    },
+    requestId: string
   ): Promise<void> {
     const providerId = options.provider ?? this.defaultProvider;
     const modelId = options.model ?? this.defaultModel;
@@ -399,6 +523,7 @@ export class ChatService {
     this.logger.info('Executing model request', {
       conversationId,
       messageId,
+      requestId,
       providerId,
       modelId,
       messageCount: messages.length,
@@ -414,14 +539,15 @@ export class ChatService {
       const supportsStreaming = typeof provider.executeStream === 'function';
 
       if (supportsStreaming) {
-        await this.executeStreamingProvider(provider, request, conversationId, messageId, signal);
+        await this.executeStreamingProvider(provider, request, conversationId, messageId, signal, requestId);
       } else if (typeof provider.execute === 'function') {
         await this.executeNonStreamingProvider(
           provider,
           request,
           conversationId,
           messageId,
-          signal
+          signal,
+          requestId
         );
       } else {
         this.handleStreamError(conversationId, messageId, {
@@ -431,6 +557,12 @@ export class ChatService {
         });
       }
     } catch (error) {
+      // Validate that this request is still current before handling error
+      if (this.currentRequestId.get(conversationId) !== requestId) {
+        this.logger.debug('Ignoring error from stale request', { conversationId, requestId });
+        return;
+      }
+
       const isAbortError =
         signal.aborted ||
         error instanceof DOMException ||
@@ -444,7 +576,7 @@ export class ChatService {
           error.code === 'ABORT_ERR');
 
       if (isAbortError) {
-        this.logger.info('Stream cancelled', { conversationId, messageId });
+        this.logger.info('Stream cancelled', { conversationId, messageId, requestId });
         this.eventEmitter.emit('stream:event', {
           event: createStreamCancelEvent(conversationId, messageId),
           timestamp: Date.now(),
@@ -454,6 +586,7 @@ export class ChatService {
         this.logger.error('Stream execution error', {
           conversationId,
           messageId,
+          requestId,
           error: error instanceof Error ? error.message : String(error),
         });
         this.handleStreamError(conversationId, messageId, {
@@ -470,7 +603,8 @@ export class ChatService {
     request: ModelRequest,
     conversationId: ConversationId,
     messageId: MessageId,
-    signal: AbortSignal
+    signal: AbortSignal,
+    requestId: string
   ): Promise<void> {
     if (!provider.executeStream) {
       throw new Error('Provider does not support streaming');
@@ -479,6 +613,12 @@ export class ChatService {
     let accumulatedContent = '';
 
     for await (const event of provider.executeStream(request, signal)) {
+      // Validate request is still current before processing
+      if (this.currentRequestId.get(conversationId) !== requestId) {
+        this.logger.debug('Ignoring event from stale request', { conversationId, requestId, eventType: event.type });
+        return;
+      }
+
       if (signal.aborted) {
         throw new DOMException('Aborted', 'AbortError');
       }
@@ -536,7 +676,8 @@ export class ChatService {
     request: ModelRequest,
     conversationId: ConversationId,
     messageId: MessageId,
-    signal: AbortSignal
+    signal: AbortSignal,
+    requestId: string
   ): Promise<void> {
     this.updateMessage(conversationId, messageId, { status: 'streaming' });
 
@@ -547,6 +688,12 @@ export class ChatService {
 
     try {
       const result = await Promise.race([resultPromise, timeoutPromise]);
+
+      // Validate request is still current before processing result
+      if (this.currentRequestId.get(conversationId) !== requestId) {
+        this.logger.debug('Ignoring result from stale request', { conversationId, requestId });
+        return;
+      }
 
       if (signal.aborted) {
         throw new DOMException('Aborted', 'AbortError');
@@ -647,9 +794,18 @@ export class ChatService {
       if (stream.conversationId === conversationId) {
         stream.controller.abort();
         this.activeStreams.delete(messageId);
-        this.logger.info('Active stream cancelled', { conversationId, messageId });
+        this.logger.info('Active stream cancelled', { conversationId, messageId, requestId: stream.requestId });
+        // Update message status to cancelled
+        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+        // Emit stream:cancel event
+        this.eventEmitter.emit('stream:event', {
+          event: createStreamCancelEvent(conversationId, messageId),
+          timestamp: Date.now(),
+        });
       }
     }
+    // Clear any queued requests for this conversation
+    this.clearRequestQueue(conversationId);
   }
 
   cancelMessage(messageId: MessageId): boolean {
@@ -657,13 +813,18 @@ export class ChatService {
     if (stream) {
       stream.controller.abort();
       this.activeStreams.delete(messageId);
-      this.logger.info('Message stream cancelled', { messageId });
+      this.logger.info('Message stream cancelled', { messageId, requestId: stream.requestId });
       // Emit stream:cancel event
       this.eventEmitter.emit('stream:event', {
         event: createStreamCancelEvent(stream.conversationId, messageId),
         timestamp: Date.now(),
       });
       this.updateMessage(stream.conversationId, messageId, { status: 'cancelled' });
+      // If this was the current request, process next in queue
+      if (this.currentRequestId.get(stream.conversationId) === stream.requestId) {
+        this.currentRequestId.delete(stream.conversationId);
+        this.processNextRequest(stream.conversationId);
+      }
       return true;
     }
     return false;
