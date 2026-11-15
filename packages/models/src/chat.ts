@@ -301,6 +301,8 @@ export class ChatService {
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Failed to create assistant message');
     }
 
+    this.updateMessage(conversationId, assistantMessage.id, { status: 'streaming' });
+
     const controller = new AbortController();
     const streamPromise = this.executeStream(
       conversationId,
@@ -316,8 +318,6 @@ export class ChatService {
       promise: streamPromise,
     };
     this.activeStreams.set(assistantMessage.id, activeStream);
-
-    this.updateMessage(conversationId, assistantMessage.id, { status: 'streaming' });
 
     streamPromise
       .then(() => {
@@ -431,7 +431,13 @@ export class ChatService {
         });
       }
     } catch (error) {
-      if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+      const isAbortError =
+        signal.aborted ||
+        error instanceof DOMException ||
+        (error as any)?.name === 'AbortError' ||
+        (error as any)?.code === 'ABORT_ERR';
+
+      if (isAbortError) {
         this.logger.info('Stream cancelled', { conversationId, messageId });
         this.eventEmitter.emit('stream:event', {
           event: createStreamCancelEvent(conversationId, messageId),

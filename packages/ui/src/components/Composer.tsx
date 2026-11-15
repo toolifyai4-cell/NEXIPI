@@ -43,7 +43,7 @@ export function Composer({
 
   const getFooterStatus = () => {
     if (isLoading) {
-      return 'Generating response...';
+      return 'Waiting for response...';
     }
     if (!modelConfigured) {
       return 'AI model not configured';
