@@ -110,6 +110,129 @@ function createMockNonStreamingProvider(
   };
 }
 
+// Helper to create a streaming mock that properly handles AbortSignal
+// Yields initial delta, then polls for abort signal, then throws AbortError
+function createAbortableStreamingMock(
+  onAbort?: () => void
+): ModelProvider['executeStream'] {
+  return vi.fn().mockImplementation(async function* (request, signal) {
+    // Yield first delta
+    yield {
+      type: 'stream:delta',
+      conversationId: '',
+      messageId: '',
+      delta: 'Start ',
+      timestamp: Date.now(),
+    };
+
+    // Poll for abort signal - keeps generator alive until abort
+    while (!signal.aborted) {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    }
+
+    if (onAbort) onAbort();
+    // Throw Error with AbortError name - more reliably caught than DOMException
+    const error = new Error('Aborted');
+    error.name = 'AbortError';
+    throw error;
+  });
+}
+
+// Helper to create a streaming mock that completes after a promise resolves
+function createCompletableStreamingMock(
+  completePromise: Promise<void>,
+  shouldError = false
+): ModelProvider['executeStream'] {
+  return vi.fn().mockReturnValue(
+    (async function* () {
+      yield {
+        type: 'stream:delta',
+        conversationId: '',
+        messageId: '',
+        delta: 'Start ',
+        timestamp: Date.now(),
+      };
+      await completePromise;
+      if (shouldError) {
+        yield {
+          type: 'stream:error',
+          conversationId: '',
+          messageId: '',
+          error: { code: 'ERROR', message: 'Failed', retryable: true },
+          timestamp: Date.now(),
+        };
+      } else {
+        yield {
+          type: 'stream:complete',
+          conversationId: '',
+          messageId: '',
+          finishReason: 'stop',
+          timestamp: Date.now(),
+        };
+      }
+    })()
+  );
+}
+
+// Helper for mocks that yield multiple deltas then complete
+function createMultiDeltaMock(
+  deltas: string[],
+  completePromise: Promise<void>
+): ModelProvider['executeStream'] {
+  return vi.fn().mockReturnValue(
+    (async function* () {
+      for (const delta of deltas) {
+        yield {
+          type: 'stream:delta',
+          conversationId: '',
+          messageId: '',
+          delta,
+          timestamp: Date.now(),
+        };
+      }
+      await completePromise;
+      yield {
+        type: 'stream:complete',
+        conversationId: '',
+        messageId: '',
+        finishReason: 'stop',
+        timestamp: Date.now(),
+      };
+    })()
+  );
+}
+
+// Helper for mocks that wait for abort after each yield
+function createAbortCheckingMock(
+  deltas: string[],
+  completePromise: Promise<void>
+): ModelProvider['executeStream'] {
+  return vi.fn().mockImplementation(async function* (request, signal) {
+    for (const delta of deltas) {
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+      yield {
+        type: 'stream:delta',
+        conversationId: '',
+        messageId: '',
+        delta,
+        timestamp: Date.now(),
+      };
+      // Check abort after each yield
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    }
+    await completePromise;
+    if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+    yield {
+      type: 'stream:complete',
+      conversationId: '',
+      messageId: '',
+      finishReason: 'stop',
+      timestamp: Date.now(),
+    };
+  });
+}
+
 describe('ChatService', () => {
   let chatService: ChatService;
   let providerRegistry: ReturnType<typeof createProviderRegistry>;
@@ -610,25 +733,7 @@ describe('ChatService', () => {
         resolveComplete = resolve;
       });
 
-      mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
-        (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          await completePromise;
-          yield {
-            type: 'stream:complete',
-            conversationId: '',
-            messageId: '',
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          };
-        })()
-      );
+      mockStreamingProvider.executeStream = createCompletableStreamingMock(completePromise);
 
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -647,25 +752,7 @@ describe('ChatService', () => {
         resolveComplete = resolve;
       });
 
-      mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
-        (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          await completePromise;
-          yield {
-            type: 'stream:complete',
-            conversationId: '',
-            messageId: '',
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          };
-        })()
-      );
+      mockStreamingProvider.executeStream = createCompletableStreamingMock(completePromise);
 
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -693,18 +780,7 @@ describe('ChatService', () => {
       const cancelListener = vi.fn();
       chatService.on('stream:event', cancelListener);
 
-      mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
-        (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          await completePromise;
-        })()
-      );
+      mockStreamingProvider.executeStream = createCompletableStreamingMock(completePromise);
 
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -1006,21 +1082,10 @@ describe('ChatService', () => {
 
   describe('Dispose', () => {
     it('should cancel all active streams on dispose', async () => {
-      mockStreamingProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          while (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new DOMException('Aborted', 'AbortError');
-        });
+      let abortTriggered = false;
+      mockStreamingProvider.executeStream = createAbortableStreamingMock(() => {
+        abortTriggered = true;
+      });
 
       const conversationId = chatService.createConversation('Dispose Test').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -1031,24 +1096,14 @@ describe('ChatService', () => {
 
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
       expect(finalMessage?.status).toBe('cancelled');
+      expect(abortTriggered).toBe(true);
     });
 
     it('should handle disposal while stream is active (regression test 1)', async () => {
-      mockStreamingProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          while (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new DOMException('Aborted', 'AbortError');
-        });
+      let abortTriggered = false;
+      mockStreamingProvider.executeStream = createAbortableStreamingMock(() => {
+        abortTriggered = true;
+      });
 
       const conversationId = chatService.createConversation('Dispose Active').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -1059,24 +1114,14 @@ describe('ChatService', () => {
 
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
       expect(finalMessage?.status).toBe('cancelled');
+      expect(abortTriggered).toBe(true);
     });
 
     it('should handle provider throwing AbortError after disposal begins (regression test 2)', async () => {
-      mockStreamingProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          while (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new DOMException('Aborted', 'AbortError');
-        });
+      let abortTriggered = false;
+      mockStreamingProvider.executeStream = createAbortableStreamingMock(() => {
+        abortTriggered = true;
+      });
 
       const conversationId = chatService.createConversation('Dispose AbortError').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -1087,18 +1132,13 @@ describe('ChatService', () => {
 
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
       expect(finalMessage?.status).toBe('cancelled');
+      expect(abortTriggered).toBe(true);
     });
 
     it('should handle provider throwing unrelated error (regression test 3)', async () => {
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
           throw new Error('Provider network error');
         })()
       );
@@ -1116,29 +1156,9 @@ describe('ChatService', () => {
 
     it('should handle provider resolving after cancellation (regression test 4)', async () => {
       let resolveComplete: () => void;
-      const completePromise = new Promise<void>(resolve => {
-        resolveComplete = resolve;
-      });
+      const completePromise = new Promise<void>(resolve => { resolveComplete = resolve; });
 
-      mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
-        (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          await completePromise;
-          yield {
-            type: 'stream:complete',
-            conversationId: '',
-            messageId: '',
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          };
-        })()
-      );
+      mockStreamingProvider.executeStream = createCompletableStreamingMock(completePromise);
 
       const conversationId = chatService.createConversation('Dispose Late Complete').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -1153,21 +1173,10 @@ describe('ChatService', () => {
     });
 
     it('should handle repeated disposal (regression test 5)', async () => {
-      mockStreamingProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'Start',
-            timestamp: Date.now(),
-          };
-          while (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new DOMException('Aborted', 'AbortError');
-        });
+      let abortTriggered = false;
+      mockStreamingProvider.executeStream = createAbortableStreamingMock(() => {
+        abortTriggered = true;
+      });
 
       const conversationId = chatService.createConversation('Repeated Dispose').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -1191,23 +1200,23 @@ describe('ChatService', () => {
       });
 
       let requestCount = 0;
+      let abortTriggered1 = false;
+      let abortTriggered2 = false;
 
-      mockStreamingProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: `Req${thisRequest} `,
-            timestamp: Date.now(),
-          };
-          while (!signal.aborted) {
-            await new Promise(resolve => setTimeout(resolve, 10));
-          }
-          throw new DOMException('Aborted', 'AbortError');
-        });
+      mockStreamingProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+
+        while (!signal.aborted) {
+          await new Promise(resolve => setTimeout(resolve, 10));
+        }
+
+        if (thisRequest === 1) abortTriggered1 = true;
+        else abortTriggered2 = true;
+        const error = new Error('Aborted');
+        error.name = 'AbortError';
+        throw error;
+      });
 
       const conversationId = service.createConversation('Multi Request Dispose').id;
       const msgId1 = await service.sendMessage(conversationId, 'Test 1');
@@ -1224,6 +1233,30 @@ describe('ChatService', () => {
       expect(service.isDisposed()).toBe(true);
 
       await service.dispose();
+    });
+
+    it('should distinguish genuine provider error from intentional cancellation during disposal', async () => {
+      let resolveComplete: () => void;
+      const completePromise = new Promise<void>(resolve => { resolveComplete = resolve; });
+
+      mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
+        (async function* () {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
+          await completePromise;
+          throw new Error('Genuine provider error after dispose');
+        })()
+      );
+
+      const conversationId = chatService.createConversation('Dispose Genuine Error').id;
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      await chatService.dispose();
+      resolveComplete!();
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
+      expect(finalMessage?.status).toBe('cancelled');
     });
   });
 
@@ -1256,52 +1289,24 @@ describe('ChatService', () => {
 
       let resolveFirst: () => void;
       let resolveSecond: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
-      const secondPromise = new Promise<void>(resolve => {
-        resolveSecond = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
-      allowAllProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          if (thisRequest === 1) {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'First ',
-              timestamp: Date.now(),
-            };
-            await firstPromise;
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } else {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Second ',
-              timestamp: Date.now(),
-            };
-            await secondPromise;
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          }
-        });
+      allowAllProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Second ', timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await allowAllService.sendMessage(conversationId, 'First');
       const msgId2 = await allowAllService.sendMessage(conversationId, 'Second');
@@ -1330,48 +1335,25 @@ describe('ChatService', () => {
       const conversationId = allowAllService.createConversation('Independent Requests').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      let resolveSecond: () => void;
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
-      allowAllProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          if (thisRequest === 1) {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'First ',
-              timestamp: Date.now(),
-            };
-            await firstPromise;
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } else {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Second ',
-              timestamp: Date.now(),
-            };
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          }
-        });
+      allowAllProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Second ', timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await allowAllService.sendMessage(conversationId, 'First');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -1395,6 +1377,7 @@ describe('ChatService', () => {
       expect(stillStreamingMsg2?.status).toBe('streaming');
 
       resolveFirst!();
+      resolveSecond!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
       const finalMsg2 = allowAllService.getMessage(conversationId, msgId2);
@@ -1406,66 +1389,26 @@ describe('ChatService', () => {
 
       let resolveFirst: () => void;
       let resolveSecond: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
-      const secondPromise = new Promise<void>(resolve => {
-        resolveSecond = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
-      allowAllProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          if (thisRequest === 1) {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Request1-Part1 ',
-              timestamp: Date.now(),
-            };
-            await firstPromise;
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Request1-Part2',
-              timestamp: Date.now(),
-            };
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } else {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Request2-Part1 ',
-              timestamp: Date.now(),
-            };
-            await secondPromise;
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Request2-Part2',
-              timestamp: Date.now(),
-            };
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          }
-        });
+      allowAllProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Request1-Part1 ', timestamp: Date.now() };
+          await firstPromise;
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Request1-Part2', timestamp: Date.now() };
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Request2-Part1 ', timestamp: Date.now() };
+          await secondPromise;
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Request2-Part2', timestamp: Date.now() };
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await allowAllService.sendMessage(conversationId, 'First');
       const msgId2 = await allowAllService.sendMessage(conversationId, 'Second');
@@ -1488,48 +1431,25 @@ describe('ChatService', () => {
       const conversationId = allowAllService.createConversation('Completion Isolation').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      let resolveSecond: () => void;
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
-      allowAllProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          if (thisRequest === 1) {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'First ',
-              timestamp: Date.now(),
-            };
-            await firstPromise;
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } else {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Second ',
-              timestamp: Date.now(),
-            };
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          }
-        });
+      allowAllProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Second ', timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await allowAllService.sendMessage(conversationId, 'First');
       const msgId2 = await allowAllService.sendMessage(conversationId, 'Second');
@@ -1541,6 +1461,7 @@ describe('ChatService', () => {
       const msg2 = allowAllService.getMessage(conversationId, msgId2);
       expect(msg2?.status).toBe('streaming');
 
+      resolveSecond!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
       const finalMsg1 = allowAllService.getMessage(conversationId, msgId1);
@@ -1553,48 +1474,24 @@ describe('ChatService', () => {
       const conversationId = allowAllService.createConversation('Error Isolation').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      let resolveSecond: () => void;
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
-      allowAllProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          const thisRequest = ++requestCount;
-          if (thisRequest === 1) {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'First ',
-              timestamp: Date.now(),
-            };
-            await firstPromise;
-            yield {
-              type: 'stream:error',
-              conversationId: '',
-              messageId: '',
-              error: { code: 'ERROR', message: 'Failed', retryable: true },
-              timestamp: Date.now(),
-            };
-          } else {
-            yield {
-              type: 'stream:delta',
-              conversationId: '',
-              messageId: '',
-              delta: 'Second ',
-              timestamp: Date.now(),
-            };
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          }
-        });
+      allowAllProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+          await firstPromise;
+          yield { type: 'stream:error', conversationId: '', messageId: '', error: { code: 'ERROR', message: 'Failed', retryable: true }, timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Second ', timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await allowAllService.sendMessage(conversationId, 'First');
       const msgId2 = await allowAllService.sendMessage(conversationId, 'Second');
@@ -1603,6 +1500,7 @@ describe('ChatService', () => {
       resolveFirst!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      resolveSecond!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
       const finalMsg1 = allowAllService.getMessage(conversationId, msgId1);
@@ -1642,15 +1540,9 @@ describe('ChatService', () => {
       let resolveFirst: () => void;
       let resolveSecond: () => void;
       let resolveThird: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
-      const secondPromise = new Promise<void>(resolve => {
-        resolveSecond = resolve;
-      });
-      const thirdPromise = new Promise<void>(resolve => {
-        resolveThird = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
+      const thirdPromise = new Promise<void>(resolve => { resolveThird = resolve; });
 
       const executionOrder: number[] = [];
       let requestCount = 0;
@@ -1658,52 +1550,60 @@ describe('ChatService', () => {
       queueProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
         const thisRequest = ++requestCount;
         executionOrder.push(thisRequest);
-        yield {
-          type: 'stream:delta',
-          conversationId: '',
-          messageId: '',
-          delta: `Req${thisRequest} `,
-          timestamp: Date.now(),
-        };
-        if (thisRequest === 1) await firstPromise;
-        else if (thisRequest === 2) await secondPromise;
-        else await thirdPromise;
-        yield {
-          type: 'stream:complete',
-          conversationId: '',
-          messageId: '',
-          finishReason: 'stop',
-          timestamp: Date.now(),
-        };
+        if (thisRequest === 1) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else if (thisRequest === 2) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          await thirdPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
       });
 
+      // First request executes immediately
       const msgId1 = await queueService.sendMessage(conversationId, 'First');
       await new Promise(resolve => setTimeout(resolve, 10));
 
       expect(queueService.getMessage(conversationId, msgId1)?.status).toBe('streaming');
 
+      // Second request gets queued
       const p2 = queueService.sendMessage(conversationId, 'Second');
       await new Promise(resolve => setTimeout(resolve, 10));
 
-      const messages = queueService.getMessages(conversationId);
-      const assistantMessages = messages.filter(m => m.role === 'assistant');
-      expect(assistantMessages.length).toBe(2);
-      const msgId2 = assistantMessages[1].id;
-      expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('pending');
-
+      // Third request gets queued
       const p3 = queueService.sendMessage(conversationId, 'Third');
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      // At this point, only first message exists (streaming), others are queued
+      const messages = queueService.getMessages(conversationId);
+      const assistantMessages = messages.filter(m => m.role === 'assistant');
+      expect(assistantMessages.length).toBe(1); // Only first assistant message created so far
 
       resolveFirst!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Second request should now be executing
+      const messagesAfterFirst = queueService.getMessages(conversationId);
+      const assistantMessagesAfterFirst = messagesAfterFirst.filter(m => m.role === 'assistant');
+      expect(assistantMessagesAfterFirst.length).toBe(2);
+      const msgId2 = assistantMessagesAfterFirst[1].id;
       expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('streaming');
 
       resolveSecond!();
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Third request should now be executing
       const messagesAfterSecond = queueService.getMessages(conversationId);
       const assistantMessagesAfterSecond = messagesAfterSecond.filter(m => m.role === 'assistant');
+      expect(assistantMessagesAfterSecond.length).toBe(3);
       const msgId3 = assistantMessagesAfterSecond[2].id;
       expect(queueService.getMessage(conversationId, msgId3)?.status).toBe('streaming');
 
@@ -1723,27 +1623,14 @@ describe('ChatService', () => {
       const conversationId = queueService.createConversation('Queue Cancel').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
 
       queueProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'First ',
-            timestamp: Date.now(),
-          };
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
           await firstPromise;
-          yield {
-            type: 'stream:complete',
-            conversationId: '',
-            messageId: '',
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          };
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
         })()
       );
 
@@ -1752,27 +1639,49 @@ describe('ChatService', () => {
 
       expect(queueService.getMessage(conversationId, msgId1)?.status).toBe('streaming');
 
+      // Queue second request
       const p2 = queueService.sendMessage(conversationId, 'Second');
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      // Third request also queued
+      const p3 = queueService.sendMessage(conversationId, 'Third');
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Only first assistant message exists
       const messages = queueService.getMessages(conversationId);
       const assistantMessages = messages.filter(m => m.role === 'assistant');
-      expect(assistantMessages.length).toBe(2);
-      const msgId2 = assistantMessages[1].id;
-      expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('pending');
-
-      const cancelled = queueService.cancelMessage(msgId2);
-      expect(cancelled).toBe(true);
-
-      await new Promise(resolve => setTimeout(resolve, 10));
-      expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('cancelled');
-      expect(queueService.getMessage(conversationId, msgId1)?.status).toBe('streaming');
+      expect(assistantMessages.length).toBe(1);
 
       resolveFirst!();
       await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Second request now executing
+      const messagesAfterFirst = queueService.getMessages(conversationId);
+      const assistantMessagesAfterFirst = messagesAfterFirst.filter(m => m.role === 'assistant');
+      expect(assistantMessagesAfterFirst.length).toBe(2);
+      const msgId2 = assistantMessagesAfterFirst[1].id;
+      expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('streaming');
+
+      // Cancel the second request (now executing)
+      const cancelled = queueService.cancelMessage(msgId2);
+      expect(cancelled).toBe(true);
+      expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('cancelled');
       expect(queueService.getMessage(conversationId, msgId1)?.status).toBe('completed');
 
+      // Third request should now execute
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const messagesAfterSecond = queueService.getMessages(conversationId);
+      const assistantMessagesAfterSecond = messagesAfterSecond.filter(m => m.role === 'assistant');
+      expect(assistantMessagesAfterSecond.length).toBe(3);
+      const msgId3 = assistantMessagesAfterSecond[2].id;
+      expect(queueService.getMessage(conversationId, msgId3)?.status).toBe('streaming');
+
+      // Complete third - it has no blocking promise so completes immediately
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(queueService.getMessage(conversationId, msgId3)?.status).toBe('completed');
+
       await p2;
+      await p3;
     });
 
     it('should not permanently block queue on failed request', async () => {
@@ -1781,29 +1690,13 @@ describe('ChatService', () => {
       let requestCount = 0;
       queueProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
         const thisRequest = ++requestCount;
-        yield {
-          type: 'stream:delta',
-          conversationId: '',
-          messageId: '',
-          delta: `Req${thisRequest} `,
-          timestamp: Date.now(),
-        };
         if (thisRequest === 1) {
-          yield {
-            type: 'stream:error',
-            conversationId: '',
-            messageId: '',
-            error: { code: 'ERROR', message: 'Failed', retryable: true },
-            timestamp: Date.now(),
-          };
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          yield { type: 'stream:error', conversationId: '', messageId: '', error: { code: 'ERROR', message: 'Failed', retryable: true }, timestamp: Date.now() };
         } else {
-          yield {
-            type: 'stream:complete',
-            conversationId: '',
-            messageId: '',
-            finishReason: 'stop',
-            timestamp: Date.now(),
-          };
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
         }
       });
 
@@ -1818,8 +1711,10 @@ describe('ChatService', () => {
       const failedMsg = queueService.getMessage(conversationId, msgId1);
       expect(failedMsg?.status).toBe('failed');
 
+      // Second request should now be executing
       const messages = queueService.getMessages(conversationId);
       const assistantMessages = messages.filter(m => m.role === 'assistant');
+      expect(assistantMessages.length).toBe(2);
       const msgId2 = assistantMessages[1].id;
       expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('streaming');
 
@@ -1858,36 +1753,21 @@ describe('ChatService', () => {
       const conversationId = cancelPreviousService.createConversation('Cancel Previous').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
 
       let firstCompleted = false;
 
-      cancelPreviousProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'First ',
-            timestamp: Date.now(),
-          };
-          try {
-            await firstPromise;
-            firstCompleted = true;
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } catch {
-            throw new DOMException('Aborted', 'AbortError');
-          }
-        });
+      cancelPreviousProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+        try {
+          await firstPromise;
+          firstCompleted = true;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } catch {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+      });
 
       const msgId1 = await cancelPreviousService.sendMessage(conversationId, 'First');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -1904,42 +1784,22 @@ describe('ChatService', () => {
       const conversationId = cancelPreviousService.createConversation('Late Chunks').id;
 
       let resolveFirst: () => void;
-      const firstPromise = new Promise<void>(resolve => {
-        resolveFirst = resolve;
-      });
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
 
-      cancelPreviousProvider.executeStream = vi
-        .fn()
-        .mockImplementation(async function* (request, signal) {
-          yield {
-            type: 'stream:delta',
-            conversationId: '',
-            messageId: '',
-            delta: 'First-Part1 ',
-            timestamp: Date.now(),
-          };
-          try {
-            await firstPromise;
-            if (!signal.aborted) {
-              yield {
-                type: 'stream:delta',
-                conversationId: '',
-                messageId: '',
-                delta: 'First-Part2-LATE ',
-                timestamp: Date.now(),
-              };
-            }
-            yield {
-              type: 'stream:complete',
-              conversationId: '',
-              messageId: '',
-              finishReason: 'stop',
-              timestamp: Date.now(),
-            };
-          } catch {
-            throw new DOMException('Aborted', 'AbortError');
+      cancelPreviousProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First-Part1 ', timestamp: Date.now() };
+        try {
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          // This late chunk should not be processed because request was cancelled
+          if (!signal.aborted) {
+            yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First-Part2-LATE ', timestamp: Date.now() };
           }
-        });
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } catch {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+      });
 
       const msgId1 = await cancelPreviousService.sendMessage(conversationId, 'First');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -1953,6 +1813,39 @@ describe('ChatService', () => {
       const finalMsg1 = cancelPreviousService.getMessage(conversationId, msgId1);
       expect(finalMsg1?.status).toBe('cancelled');
       expect(finalMsg1?.content).toBe('First-Part1 ');
+    });
+
+    it('should handle conversation deletion during execution', async () => {
+      const conversationId = cancelPreviousService.createConversation('Delete During Exec').id;
+
+      let resolveFirst: () => void;
+      const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+
+      cancelPreviousProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
+        try {
+          await firstPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } catch {
+          throw new DOMException('Aborted', 'AbortError');
+        }
+      });
+
+      const msgId1 = await cancelPreviousService.sendMessage(conversationId, 'First');
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Delete conversation while request is executing
+      const deleted = cancelPreviousService.deleteConversation(conversationId);
+      expect(deleted).toBe(true);
+
+      // The stream should be cancelled
+      await new Promise(resolve => setTimeout(resolve, 10));
+      resolveFirst!();
+      await new Promise(resolve => setTimeout(resolve, 10));
+
+      // Conversation should be gone
+      expect(cancelPreviousService.getConversation(conversationId)).toBeUndefined();
     });
   });
 });

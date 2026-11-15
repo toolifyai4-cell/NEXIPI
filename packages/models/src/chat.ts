@@ -66,6 +66,8 @@ interface ActiveStream {
   messageId: MessageId;
   promise: Promise<void>;
   requestId: string;
+  /** Tracks if this stream was intentionally cancelled (by user or disposal) */
+  intentionallyCancelled: boolean;
 }
 
 interface PendingRequest {
@@ -441,6 +443,7 @@ export class ChatService {
       messageId: assistantMessage.id,
       promise: streamPromise,
       requestId,
+      intentionallyCancelled: false,
     };
     this.activeStreams.set(assistantMessage.id, activeStream);
 
@@ -456,7 +459,11 @@ export class ChatService {
         }
       })
       .catch(error => {
-        if (!this._isDisposed) {
+        // Check if this stream was intentionally cancelled
+        const stream = this.activeStreams.get(assistantMessage.id);
+        const intentionallyCancelled = stream?.intentionallyCancelled ?? false;
+
+        if (!this._isDisposed && !intentionallyCancelled) {
           this.activeStreams.delete(assistantMessage.id);
           this.activeRequests.delete(requestId);
           if (this.primaryRequestId.get(conversationId) === requestId) {
@@ -472,7 +479,7 @@ export class ChatService {
             });
           }
         } else {
-          // Service is disposed - ensure message is marked as cancelled
+          // Service is disposed or intentionally cancelled - ensure message is marked as cancelled
           this.updateMessage(conversationId, assistantMessage.id, { status: 'cancelled' });
         }
       });
@@ -604,21 +611,7 @@ export class ChatService {
         return;
       }
 
-      // If service is disposed, treat abort as intentional cancellation
-      if (this._isDisposed) {
-        this.logger.info('Stream cancelled due to disposal', {
-          conversationId,
-          messageId,
-          requestId,
-        });
-        this.eventEmitter.emit('stream:event', {
-          event: createStreamCancelEvent(conversationId, messageId),
-          timestamp: Date.now(),
-        });
-        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
-        return;
-      }
-
+      // Check for abort errors FIRST - these always result in cancelled status
       const isAbortError =
         signal.aborted ||
         error instanceof DOMException ||
@@ -638,19 +631,51 @@ export class ChatService {
           timestamp: Date.now(),
         });
         this.updateMessage(conversationId, messageId, { status: 'cancelled' });
-      } else {
-        this.logger.error('Stream execution error', {
+        return;
+      }
+
+      // Check current message status - if already cancelled, don't overwrite
+      const currentMessage = this.getMessage(conversationId, messageId);
+      if (currentMessage?.status === 'cancelled') {
+        this.logger.debug('Message already cancelled, ignoring error', {
           conversationId,
           messageId,
           requestId,
-          error: error instanceof Error ? error.message : String(error),
         });
-        this.handleStreamError(conversationId, messageId, {
-          code: 'EXECUTION_FAILED',
-          message: error instanceof Error ? error.message : String(error),
-          retryable: true,
-        });
+        return;
       }
+
+      // Check if this stream was intentionally cancelled (by user or disposal)
+      const stream = this.activeStreams.get(messageId);
+      const intentionallyCancelled = stream?.intentionallyCancelled ?? false;
+
+      // If intentionally cancelled, treat as cancellation regardless of error type
+      if (intentionallyCancelled) {
+        this.logger.info('Stream cancelled intentionally', {
+          conversationId,
+          messageId,
+          requestId,
+        });
+        this.eventEmitter.emit('stream:event', {
+          event: createStreamCancelEvent(conversationId, messageId),
+          timestamp: Date.now(),
+        });
+        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+        return;
+      }
+
+      // Genuine provider error - mark as failed
+      this.logger.error('Stream execution error', {
+        conversationId,
+        messageId,
+        requestId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.handleStreamError(conversationId, messageId, {
+        code: 'EXECUTION_FAILED',
+        message: error instanceof Error ? error.message : String(error),
+        retryable: true,
+      });
     }
   }
 
@@ -739,7 +764,11 @@ export class ChatService {
       const currentMessage = this.getMessage(conversationId, messageId);
       const alreadyCancelled = currentMessage?.status === 'cancelled';
 
-      if (signal.aborted || this._isDisposed) {
+      // Check if this stream was intentionally cancelled
+      const stream = this.activeStreams.get(messageId);
+      const intentionallyCancelled = stream?.intentionallyCancelled ?? false;
+
+      if (signal.aborted || intentionallyCancelled) {
         this.logger.info('Stream cancelled (generator completed after abort)', {
           conversationId,
           messageId,
@@ -885,6 +914,7 @@ export class ChatService {
   cancelActiveStream(conversationId: ConversationId): void {
     for (const [messageId, stream] of this.activeStreams.entries()) {
       if (stream.conversationId === conversationId) {
+        stream.intentionallyCancelled = true;
         stream.controller.abort();
         this.activeStreams.delete(messageId);
         this.activeRequests.delete(stream.requestId);
@@ -909,6 +939,7 @@ export class ChatService {
   cancelMessage(messageId: MessageId): boolean {
     const stream = this.activeStreams.get(messageId);
     if (stream) {
+      stream.intentionallyCancelled = true;
       stream.controller.abort();
       this.activeStreams.delete(messageId);
       this.activeRequests.delete(stream.requestId);
@@ -986,27 +1017,30 @@ export class ChatService {
       conversationId: ConversationId;
       messageId: MessageId;
       requestId: string;
+      intentionallyCancelled: boolean;
     }> = [];
+    // First, mark all streams as cancelled and update message status
     for (const stream of this.activeStreams.values()) {
-      stream.controller.abort();
-      abortPromises.push(stream.promise.catch(() => {}));
-      streamInfos.push({
-        conversationId: stream.conversationId,
-        messageId: stream.messageId,
-        requestId: stream.requestId,
-      });
-      // Immediately update status to cancelled for intentional disposal
+      stream.intentionallyCancelled = true;
+      // Update message status BEFORE aborting, so catch handlers see 'cancelled' status
       this.updateMessage(stream.conversationId, stream.messageId, { status: 'cancelled' });
       this.logger.info('Stream cancelled due to disposal', {
         conversationId: stream.conversationId,
         messageId: stream.messageId,
         requestId: stream.requestId,
       });
+      streamInfos.push({
+        conversationId: stream.conversationId,
+        messageId: stream.messageId,
+        requestId: stream.requestId,
+        intentionallyCancelled: true,
+      });
     }
-    this.activeStreams.clear();
-    // NOTE: Do NOT clear activeRequests or primaryRequestId here - they are needed
-    // for the catch blocks in executeStream to validate the request is still active.
-    // They will be cleared after all abort promises settle.
+    // Now abort all streams - this will trigger generators to throw
+    for (const stream of this.activeStreams.values()) {
+      stream.controller.abort();
+      abortPromises.push(stream.promise.catch(() => {}));
+    }
     // Reject all queued requests
     for (const queue of this.requestQueue.values()) {
       for (const req of queue) {
@@ -1022,6 +1056,7 @@ export class ChatService {
         this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
       }
       // Now clear tracking maps after all streams have settled
+      this.activeStreams.clear();
       this.activeRequests.clear();
       this.primaryRequestId.clear();
     });
