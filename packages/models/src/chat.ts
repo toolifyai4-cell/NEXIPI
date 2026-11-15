@@ -597,7 +597,10 @@ export class ChatService {
     } catch (error) {
       // Validate that this request is still active (not cancelled/superseded)
       if (!this.activeRequests.has(requestId)) {
-        this.logger.debug('Ignoring error from cancelled/superseded request', { conversationId, requestId });
+        this.logger.debug('Ignoring error from cancelled/superseded request', {
+          conversationId,
+          requestId,
+        });
         return;
       }
 
@@ -778,7 +781,10 @@ export class ChatService {
 
       // Validate request is still active before processing result
       if (!this.activeRequests.has(requestId)) {
-        this.logger.debug('Ignoring result from cancelled/superseded request', { conversationId, requestId });
+        this.logger.debug('Ignoring result from cancelled/superseded request', {
+          conversationId,
+          requestId,
+        });
         return;
       }
 
