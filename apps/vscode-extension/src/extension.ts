@@ -61,16 +61,22 @@ function updateStatusBar(
 
 class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   public static readonly viewType = 'nexipi.sidebar';
-  private _view?: vscode.WebviewView;
+  private _view: vscode.WebviewView | undefined;
   private readonly _extensionUri: vscode.Uri;
   private readonly _logger: Logger;
   private readonly _chatService: ChatService;
+  private _isDisposed = false;
 
   constructor(extensionUri: vscode.Uri, logger: Logger, chatService: ChatService) {
     this._extensionUri = extensionUri;
     this._logger = logger;
     this._chatService = chatService;
     this._setupChatServiceListeners();
+  }
+
+  /** Check if the webview is disposed */
+  isDisposed(): boolean {
+    return this._isDisposed;
   }
 
   private _setupChatServiceListeners(): void {
@@ -99,30 +105,48 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   private _sendStreamEvent(event: StreamEvent): void {
-    void this._view?.webview.postMessage({
+    if (this._isDisposed || !this._view) {
+      this._logger.debug('Dropping stream event - webview disposed or not available', {
+        eventType: event.type,
+      });
+      return;
+    }
+    void this._view.webview.postMessage({
       type: 'streamEvent',
       payload: { event },
     });
   }
 
   private _sendMessageCreated(message: Message): void {
-    void this._view?.webview.postMessage({
+    if (this._isDisposed || !this._view) {
+      this._logger.debug('Dropping messageCreated - webview disposed or not available');
+      return;
+    }
+    void this._view.webview.postMessage({
       type: 'messageCreated',
       payload: { message },
     });
   }
 
   private _sendMessageUpdated(message: Message): void {
-    void this._view?.webview.postMessage({
+    if (this._isDisposed || !this._view) {
+      this._logger.debug('Dropping messageUpdated - webview disposed or not available');
+      return;
+    }
+    void this._view.webview.postMessage({
       type: 'messageUpdated',
       payload: { message },
     });
   }
 
   private _sendInitialState(): void {
+    if (this._isDisposed || !this._view) {
+      this._logger.debug('Dropping initial state - webview disposed or not available');
+      return;
+    }
     const modelConfigured = false;
 
-    void this._view?.webview.postMessage({
+    void this._view.webview.postMessage({
       type: 'state',
       payload: {
         messages: [],
@@ -142,6 +166,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
     _token: vscode.CancellationToken
   ): void {
     this._view = webviewView;
+    this._isDisposed = false;
 
     webviewView.webview.options = {
       enableScripts: true,
@@ -151,6 +176,15 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
     webviewView.webview.html = this._getHtmlForWebview(webviewView.webview);
 
     webviewView.webview.onDidReceiveMessage(message => this._onMessage(message), undefined, []);
+
+    // Handle webview disposal
+    webviewView.onDidDispose(() => {
+      this._logger.info('Webview disposed');
+      this._isDisposed = true;
+      this._view = undefined;
+      // Cancel any active streams for this webview
+      // Note: We don't dispose the chat service here as it's shared
+    });
 
     this._logger.info('Sidebar webview resolved');
   }
@@ -234,17 +268,19 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
         case 'newChat': {
           this._logger.info('New chat requested from webview');
           const conversation = this._chatService.createConversation();
-          void this._view?.webview.postMessage({
-            type: 'state',
-            payload: {
-              messages: [],
-              currentInput: '',
-              viewMode: 'welcome',
-              isLoading: false,
-              modelConfigured: false,
-              conversationId: conversation.id,
-            },
-          });
+          if (!this._isDisposed && this._view) {
+            void this._view.webview.postMessage({
+              type: 'state',
+              payload: {
+                messages: [],
+                currentInput: '',
+                viewMode: 'welcome',
+                isLoading: false,
+                modelConfigured: false,
+                conversationId: conversation.id,
+              },
+            });
+          }
           break;
         }
         case 'promptSelected': {
@@ -263,10 +299,12 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             const err = error instanceof Error ? error : new Error(String(error));
             this._logger.error('Failed to open settings', { error: err.message });
           }
-          void this._view?.webview.postMessage({
-            type: 'settingsOpened',
-            payload: { timestamp: new Date().toISOString() },
-          });
+          if (!this._isDisposed && this._view) {
+            void this._view.webview.postMessage({
+              type: 'settingsOpened',
+              payload: { timestamp: new Date().toISOString() },
+            });
+          }
           break;
         }
         case 'cancelMessage': {
@@ -299,7 +337,11 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
   }
 
   public postMessage(message: unknown): void {
-    void this._view?.webview.postMessage(message);
+    if (this._isDisposed || !this._view) {
+      this._logger.debug('Dropping postMessage - webview disposed or not available');
+      return;
+    }
+    void this._view.webview.postMessage(message);
   }
 }
 

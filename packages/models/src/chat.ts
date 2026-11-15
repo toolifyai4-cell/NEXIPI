@@ -94,7 +94,7 @@ export class ChatService {
   private readonly activeStreams: Map<MessageId, ActiveStream> = new Map();
   private readonly requestQueue: Map<ConversationId, PendingRequest[]> = new Map();
   private readonly currentRequestId: Map<ConversationId, string> = new Map();
-  private isDisposed = false;
+  private _isDisposed = false;
 
   constructor(options: ChatServiceOptions = {}) {
     this.providerRegistry = options.providerRegistry ?? createProviderRegistry();
@@ -139,7 +139,7 @@ export class ChatService {
 
   /** Check if the service has been disposed */
   isDisposed(): boolean {
-    return this.isDisposed;
+    return this._isDisposed;
   }
 
   private generateRequestId(): string {
@@ -159,7 +159,9 @@ export class ChatService {
     const queue = this.requestQueue.get(conversationId);
     if (queue) {
       for (const req of queue) {
-        req.reject(new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Request cancelled due to new request'));
+        req.reject(
+          new EngineError(EngineErrorCode.INTERNAL_ERROR, 'Request cancelled due to new request')
+        );
       }
       this.requestQueue.delete(conversationId);
     }
@@ -210,6 +212,8 @@ export class ChatService {
     }
 
     this.cancelActiveStream(conversationId);
+    this.currentRequestId.delete(conversationId);
+    this.clearRequestQueue(conversationId);
 
     this.conversations.delete(conversationId);
     this.messages.delete(conversationId);
@@ -335,7 +339,7 @@ export class ChatService {
       systemPrompt?: string;
     } = {}
   ): Promise<MessageId> {
-    if (this.isDisposed) {
+    if (this._isDisposed) {
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'ChatService has been disposed');
     }
 
@@ -420,7 +424,7 @@ export class ChatService {
 
     streamPromise
       .then(() => {
-        if (!this.isDisposed) {
+        if (!this._isDisposed) {
           this.activeStreams.delete(assistantMessage.id);
           if (this.currentRequestId.get(conversationId) === requestId) {
             this.currentRequestId.delete(conversationId);
@@ -429,7 +433,7 @@ export class ChatService {
         }
       })
       .catch(error => {
-        if (!this.isDisposed) {
+        if (!this._isDisposed) {
           this.activeStreams.delete(assistantMessage.id);
           if (this.currentRequestId.get(conversationId) === requestId) {
             this.currentRequestId.delete(conversationId);
@@ -539,7 +543,14 @@ export class ChatService {
       const supportsStreaming = typeof provider.executeStream === 'function';
 
       if (supportsStreaming) {
-        await this.executeStreamingProvider(provider, request, conversationId, messageId, signal, requestId);
+        await this.executeStreamingProvider(
+          provider,
+          request,
+          conversationId,
+          messageId,
+          signal,
+          requestId
+        );
       } else if (typeof provider.execute === 'function') {
         await this.executeNonStreamingProvider(
           provider,
@@ -563,13 +574,28 @@ export class ChatService {
         return;
       }
 
+      // If service is disposed, treat abort as intentional cancellation
+      if (this._isDisposed) {
+        this.logger.info('Stream cancelled due to disposal', {
+          conversationId,
+          messageId,
+          requestId,
+        });
+        this.eventEmitter.emit('stream:event', {
+          event: createStreamCancelEvent(conversationId, messageId),
+          timestamp: Date.now(),
+        });
+        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+        return;
+      }
+
       const isAbortError =
         signal.aborted ||
         error instanceof DOMException ||
         (error !== null &&
           typeof error === 'object' &&
           'name' in error &&
-          error.name === 'AbortError') ||
+          (error.name === 'AbortError' || error.name === 'CancellationError')) ||
         (error !== null &&
           typeof error === 'object' &&
           'code' in error &&
@@ -615,7 +641,21 @@ export class ChatService {
     for await (const event of provider.executeStream(request, signal)) {
       // Validate request is still current before processing
       if (this.currentRequestId.get(conversationId) !== requestId) {
-        this.logger.debug('Ignoring event from stale request', { conversationId, requestId, eventType: event.type });
+        this.logger.debug('Ignoring event from stale request', {
+          conversationId,
+          requestId,
+          eventType: event.type,
+        });
+        return;
+      }
+
+      // If service is disposed, stop processing events
+      if (this._isDisposed) {
+        this.logger.debug('Ignoring event - service disposed', {
+          conversationId,
+          requestId,
+          eventType: event.type,
+        });
         return;
       }
 
@@ -663,11 +703,31 @@ export class ChatService {
       }
     }
 
-    if (!hasCompleted && !signal.aborted) {
-      this.updateMessage(conversationId, messageId, {
-        content: accumulatedContent,
-        status: 'completed',
-      });
+    // Handle case where generator completes without explicit completion event
+    // (e.g., when signal is aborted and generator exits cleanly or throws AbortError)
+    if (!hasCompleted) {
+      const currentMessage = this.getMessage(conversationId, messageId);
+      const alreadyCancelled = currentMessage?.status === 'cancelled';
+
+      if (signal.aborted || this._isDisposed) {
+        this.logger.info('Stream cancelled (generator completed after abort)', {
+          conversationId,
+          messageId,
+          requestId,
+        });
+        if (!alreadyCancelled) {
+          this.eventEmitter.emit('stream:event', {
+            event: createStreamCancelEvent(conversationId, messageId),
+            timestamp: Date.now(),
+          });
+          this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+        }
+      } else {
+        this.updateMessage(conversationId, messageId, {
+          content: accumulatedContent,
+          status: 'completed',
+        });
+      }
     }
   }
 
@@ -794,7 +854,11 @@ export class ChatService {
       if (stream.conversationId === conversationId) {
         stream.controller.abort();
         this.activeStreams.delete(messageId);
-        this.logger.info('Active stream cancelled', { conversationId, messageId, requestId: stream.requestId });
+        this.logger.info('Active stream cancelled', {
+          conversationId,
+          messageId,
+          requestId: stream.requestId,
+        });
         // Update message status to cancelled
         this.updateMessage(conversationId, messageId, { status: 'cancelled' });
         // Emit stream:cancel event
@@ -881,15 +945,46 @@ export class ChatService {
   }
 
   dispose(): Promise<void> {
+    this._isDisposed = true;
     const abortPromises: Array<Promise<void>> = [];
+    const streamInfos: Array<{
+      conversationId: ConversationId;
+      messageId: MessageId;
+      requestId: string;
+    }> = [];
     for (const stream of this.activeStreams.values()) {
       stream.controller.abort();
       abortPromises.push(stream.promise.catch(() => {}));
+      streamInfos.push({
+        conversationId: stream.conversationId,
+        messageId: stream.messageId,
+        requestId: stream.requestId,
+      });
+      // Immediately update status to cancelled for intentional disposal
+      this.updateMessage(stream.conversationId, stream.messageId, { status: 'cancelled' });
+      this.logger.info('Stream cancelled due to disposal', {
+        conversationId: stream.conversationId,
+        messageId: stream.messageId,
+        requestId: stream.requestId,
+      });
     }
     this.activeStreams.clear();
+    this.currentRequestId.clear();
+    // Reject all queued requests
+    for (const queue of this.requestQueue.values()) {
+      for (const req of queue) {
+        req.reject(new EngineError(EngineErrorCode.INTERNAL_ERROR, 'ChatService disposed'));
+      }
+    }
+    this.requestQueue.clear();
     this.eventEmitter.removeAllListeners();
     this.logger.info('ChatService disposed');
-    return Promise.all(abortPromises).then(() => {});
+    // Ensure all cancelled streams have correct status after promises settle (fallback)
+    return Promise.all(abortPromises).then(() => {
+      for (const info of streamInfos) {
+        this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
+      }
+    });
   }
 }
 

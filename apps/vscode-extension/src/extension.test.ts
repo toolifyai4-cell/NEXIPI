@@ -131,6 +131,7 @@ describe('vscode-extension', () => {
             toString: () => `vscode-webview://${uri}`,
           })),
         },
+        onDidDispose: vi.fn(),
       };
     });
 
