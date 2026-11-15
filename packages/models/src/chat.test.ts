@@ -168,17 +168,22 @@ describe('ChatService', () => {
 
     it('should list conversations sorted by updatedAt descending', () => {
       const conv1 = chatService.createConversation('First');
-      const conv2 = chatService.createConversation('Second');
+      // Small delay to ensure different timestamps
+      return new Promise<void>(resolve => setTimeout(resolve, 1)).then(() => {
+        const conv2 = chatService.createConversation('Second');
 
-      const list = chatService.listConversations();
+        const list = chatService.listConversations();
 
-      expect(list).toHaveLength(2);
-      expect(list[0].id).toBe(conv2.id);
-      expect(list[1].id).toBe(conv1.id);
+        expect(list).toHaveLength(2);
+        expect(list[0].id).toBe(conv2.id);
+        expect(list[1].id).toBe(conv1.id);
+      });
     });
 
-    it('should update conversation title', () => {
+    it('should update conversation title', async () => {
       const conversation = chatService.createConversation('Original');
+      // Small delay to ensure timestamp difference
+      await new Promise(resolve => setTimeout(resolve, 1));
       const updated = chatService.updateConversationTitle(conversation.id, 'Updated');
 
       expect(updated).toBeDefined();
@@ -358,7 +363,7 @@ describe('ChatService', () => {
 
     it('should detect loading state correctly', () => {
       const conversation = chatService.createConversation('Loading Test');
-      chatService.addMessage(conversation.id, 'user', 'Hello');
+      chatService.addMessage(conversation.id, 'user', 'Hello', 'completed');
 
       let state = chatService.getConversationState(conversation.id);
       expect(state?.isLoading).toBe(false);
@@ -569,9 +574,17 @@ describe('ChatService', () => {
 
     it('should work with non-streaming provider', async () => {
       mockNonStreamingProvider.execute = vi.fn().mockResolvedValue({
-        content: 'Non-streaming response',
-        finishReason: 'stop',
+        id: 'response-1',
+        model: modelId,
+        choices: [
+          {
+            index: 0,
+            message: { role: 'assistant', content: 'Non-streaming response' },
+            finishReason: 'stop',
+          },
+        ],
         usage: { promptTokens: 5, completionTokens: 10, totalTokens: 15 },
+        finishReason: 'stop',
       });
 
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
@@ -721,7 +734,7 @@ describe('ChatService', () => {
       chatService.addMessage(conversationId, 'user', 'Original question');
     });
 
-    it('should retry failed message', async () => {
+it('should retry failed message', async () => {
       const failedMessage = chatService.addMessage(conversationId, 'assistant', 'Error', 'failed');
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
@@ -742,8 +755,8 @@ describe('ChatService', () => {
         })()
       );
 
-      const newMessageId = chatService.retryMessage(conversationId, failedMessage!.id);
-      await new Promise(resolve => setTimeout(resolve, 50));
+      const newMessageId = await chatService.retryMessage(conversationId, failedMessage!.id);
+      await new Promise(resolve => setTimeout(resolve, 100));
 
       expect(newMessageId).toBeDefined();
       const newMessage = chatService.getMessage(conversationId, newMessageId!);
@@ -783,66 +796,66 @@ describe('ChatService', () => {
       expect(newMessageId).toBeDefined();
     });
 
-    it('should return undefined for completed message', () => {
+    it('should return undefined for completed message', async () => {
       const completedMessage = chatService.addMessage(
         conversationId,
         'assistant',
         'Done',
         'completed'
       );
-      const newMessageId = chatService.retryMessage(conversationId, completedMessage!.id);
+      const newMessageId = await chatService.retryMessage(conversationId, completedMessage!.id);
       expect(newMessageId).toBeUndefined();
     });
 
-    it('should return undefined for streaming message', () => {
+    it('should return undefined for streaming message', async () => {
       const streamingMessage = chatService.addMessage(
         conversationId,
         'assistant',
         'Generating',
         'streaming'
       );
-      const newMessageId = chatService.retryMessage(conversationId, streamingMessage!.id);
+      const newMessageId = await chatService.retryMessage(conversationId, streamingMessage!.id);
       expect(newMessageId).toBeUndefined();
     });
 
-    it('should return undefined for user message', () => {
+    it('should return undefined for user message', async () => {
       const userMessage = chatService.addMessage(conversationId, 'user', 'Question');
-      const newMessageId = chatService.retryMessage(conversationId, userMessage!.id);
+      const newMessageId = await chatService.retryMessage(conversationId, userMessage!.id);
       expect(newMessageId).toBeUndefined();
     });
 
-    it('should return undefined for non-existent message', () => {
-      const newMessageId = chatService.retryMessage(conversationId, 'non-existent' as any);
+    it('should return undefined for non-existent message', async () => {
+      const newMessageId = await chatService.retryMessage(conversationId, 'non-existent' as any);
       expect(newMessageId).toBeUndefined();
     });
   });
 
   describe('Error handling', () => {
-    let conversationId: any;
-
-    beforeEach(() => {
-      conversationId = chatService.createConversation('Error Test').id;
-    });
-
     it('should throw when conversation not found', async () => {
       await expect(chatService.sendMessage('non-existent' as any, 'Test')).rejects.toThrow();
     });
 
     it('should handle missing provider', async () => {
       const service = createChatService({ defaultModel: modelId }); // No defaultProvider
-      await expect(service.sendMessage(conversationId, 'Test')).rejects.not.toThrow();
+      const testConvId = service.createConversation('Test').id;
+      const assistantMessageId = await service.sendMessage(testConvId, 'Test');
+      // Wait for async error handling to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      const messages = service.getMessages(conversationId);
-      const assistantMsg = messages.find(m => m.role === 'assistant');
+      const messages = service.getMessages(testConvId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
       expect(assistantMsg?.status).toBe('failed');
     });
 
     it('should handle missing model', async () => {
       const service = createChatService({ defaultProvider: providerId }); // No defaultModel
-      await expect(service.sendMessage(conversationId, 'Test')).rejects.not.toThrow();
+      const testConvId = service.createConversation('Test').id;
+      const assistantMessageId = await service.sendMessage(testConvId, 'Test');
+      // Wait for async error handling to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      const messages = service.getMessages(conversationId);
-      const assistantMsg = messages.find(m => m.role === 'assistant');
+      const messages = service.getMessages(testConvId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
       expect(assistantMsg?.status).toBe('failed');
     });
 
@@ -853,11 +866,13 @@ describe('ChatService', () => {
         defaultProvider: createProviderId('non-existent'),
         defaultModel: modelId,
       });
+      const testConvId = service.createConversation('Test').id;
+      const assistantMessageId = await service.sendMessage(testConvId, 'Test');
+      // Wait for async error handling to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      await expect(service.sendMessage(conversationId, 'Test')).rejects.not.toThrow();
-
-      const messages = service.getMessages(conversationId);
-      const assistantMsg = messages.find(m => m.role === 'assistant');
+      const messages = service.getMessages(testConvId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
       expect(assistantMsg?.status).toBe('failed');
     });
 
@@ -868,11 +883,13 @@ describe('ChatService', () => {
         defaultProvider: providerId,
         defaultModel: createModelId('non-existent-model'),
       });
+      const testConvId = service.createConversation('Test').id;
+      const assistantMessageId = await service.sendMessage(testConvId, 'Test');
+      // Wait for async error handling to complete
+      await new Promise(resolve => setTimeout(resolve, 100));
 
-      await expect(service.sendMessage(conversationId, 'Test')).rejects.not.toThrow();
-
-      const messages = service.getMessages(conversationId);
-      const assistantMsg = messages.find(m => m.role === 'assistant');
+      const messages = service.getMessages(testConvId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
       expect(assistantMsg?.status).toBe('failed');
     });
   });
@@ -886,11 +903,11 @@ describe('ChatService', () => {
     });
 
     it('should build model messages from conversation history', async () => {
-      chatService.addMessage(conversationId, 'user', 'First');
+      chatService.addMessage(conversationId, 'user', 'First', 'completed');
       chatService.addMessage(conversationId, 'assistant', 'First response', 'completed');
-      chatService.addMessage(conversationId, 'user', 'Second');
+      chatService.addMessage(conversationId, 'user', 'Second', 'completed');
       chatService.addMessage(conversationId, 'assistant', 'Second response', 'completed');
-      chatService.addMessage(conversationId, 'user', 'Third');
+      chatService.addMessage(conversationId, 'user', 'Third', 'completed');
 
       let capturedRequest: any;
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
@@ -918,7 +935,8 @@ describe('ChatService', () => {
       expect(mockStreamingProvider.executeStream).toHaveBeenCalled();
       const call = mockStreamingProvider.executeStream.mock.calls[0];
       capturedRequest = call[0];
-      expect(capturedRequest.messages).toHaveLength(5); // system + 4 messages (2 user, 2 assistant)
+      // system + 5 messages (3 user, 2 assistant) = 6
+      expect(capturedRequest.messages).toHaveLength(6);
     });
 
     it('should respect maxHistoryLength', async () => {
@@ -928,10 +946,11 @@ describe('ChatService', () => {
         defaultModel: modelId,
         maxHistoryLength: 2,
       });
+      const testConvId = service.createConversation('History Test').id;
 
       for (let i = 0; i < 10; i++) {
-        service.addMessage(conversationId, 'user', `Question ${i}`);
-        service.addMessage(conversationId, 'assistant', `Answer ${i}`, 'completed');
+        service.addMessage(testConvId, 'user', `Question ${i}`, 'completed');
+        service.addMessage(testConvId, 'assistant', `Answer ${i}`, 'completed');
       }
 
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
@@ -953,7 +972,7 @@ describe('ChatService', () => {
         })()
       );
 
-      await service.sendMessage(conversationId, 'Final');
+      await service.sendMessage(testConvId, 'Final');
       await new Promise(resolve => setTimeout(resolve, 50));
 
       const call = mockStreamingProvider.executeStream.mock.calls[0];
@@ -1012,16 +1031,28 @@ describe('ChatService', () => {
             delta: 'Start',
             timestamp: Date.now(),
           };
-          await completePromise;
+          // Yield empty deltas periodically to allow abort signal to be checked
+          while (true) {
+            await new Promise(r => setTimeout(r, 10));
+            yield {
+              type: 'stream:delta',
+              conversationId: '',
+              messageId: '',
+              delta: '',
+              timestamp: Date.now(),
+            };
+            await completePromise;
+          }
         })()
       );
 
       const conversationId = chatService.createConversation('Dispose Test').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       await chatService.dispose();
       resolveComplete!();
+      await new Promise(resolve => setTimeout(resolve, 50));
 
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
       expect(finalMessage?.status).toBe('cancelled');

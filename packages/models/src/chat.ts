@@ -281,6 +281,10 @@ export class ChatService {
   ): Promise<MessageId> {
     const conversation = this.conversations.get(conversationId);
     if (!conversation) {
+      // Handle missing conversation gracefully - create a failed assistant message
+      // in a temporary conversation context, but since we can't, we throw for
+      // truly invalid conversation IDs (programming errors) while allowing
+      // runtime config errors to be handled in executeStream.
       throw new EngineError(
         EngineErrorCode.INVALID_CONFIGURATION,
         `Conversation ${conversationId} not found`
@@ -440,7 +444,11 @@ export class ChatService {
           messageId,
           error: error instanceof Error ? error.message : String(error),
         });
-        throw error;
+        this.handleStreamError(conversationId, messageId, {
+          code: 'EXECUTION_FAILED',
+          message: error instanceof Error ? error.message : String(error),
+          retryable: true,
+        });
       }
     }
   }
@@ -532,6 +540,14 @@ export class ChatService {
         throw new DOMException('Aborted', 'AbortError');
       }
 
+      // ModelResponse has choices array with message.content per the provider contract
+      const content =
+        result.choices && result.choices.length > 0
+          ? typeof result.choices[0]?.message.content === 'string'
+            ? result.choices[0].message.content
+            : ''
+          : '';
+
       const completeEvent = createStreamCompleteEvent(
         conversationId,
         messageId,
@@ -540,10 +556,7 @@ export class ChatService {
       );
 
       this.updateMessage(conversationId, messageId, {
-        content:
-          typeof result.choices[0]?.message.content === 'string'
-            ? result.choices[0].message.content
-            : '',
+        content,
         status: 'completed',
         metadata: {
           usage: result.usage,
@@ -633,6 +646,12 @@ export class ChatService {
       stream.controller.abort();
       this.activeStreams.delete(messageId);
       this.logger.info('Message stream cancelled', { messageId });
+      // Emit stream:cancel event
+      this.eventEmitter.emit('stream:event', {
+        event: createStreamCancelEvent(stream.conversationId, messageId),
+        timestamp: Date.now(),
+      });
+      this.updateMessage(stream.conversationId, messageId, { status: 'cancelled' });
       return true;
     }
     return false;
@@ -688,15 +707,16 @@ export class ChatService {
     }
   }
 
-  dispose(): void {
+  dispose(): Promise<void> {
+    const abortPromises: Promise<void>[] = [];
     for (const stream of this.activeStreams.values()) {
       stream.controller.abort();
+      abortPromises.push(stream.promise.catch(() => {}));
     }
     this.activeStreams.clear();
-    this.conversations.clear();
-    this.messages.clear();
     this.eventEmitter.removeAllListeners();
     this.logger.info('ChatService disposed');
+    return Promise.all(abortPromises).then(() => {});
   }
 }
 

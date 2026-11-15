@@ -250,7 +250,7 @@ export interface NonStreamingProvider {
 export type ProviderExecutor = StreamingProvider | NonStreamingProvider;
 
 export function isStreamingProvider(provider: ProviderExecutor): provider is StreamingProvider {
-  return typeof (provider as StreamingProvider).executeStream === 'function';
+  return provider !== null && typeof (provider as StreamingProvider).executeStream === 'function';
 }
 
 export function isNonStreamingProvider(
