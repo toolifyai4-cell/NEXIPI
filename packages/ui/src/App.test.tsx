@@ -490,8 +490,9 @@ describe('App', () => {
     expect(screen.getByText('Waiting for response...')).toBeInTheDocument();
     expect(screen.queryByText('AI model not configured')).not.toBeInTheDocument();
 
-    // Send button title should be "Waiting for response..."
-    expect(sendBtn).toHaveAttribute('title', 'Waiting for response...');
+    // Cancel button should be shown with "Stop generation" title during loading
+    const cancelBtn = screen.getByLabelText('Stop generation');
+    expect(cancelBtn).toHaveAttribute('title', 'Stop generation');
   });
 
   it('regression: Settings menu item sends openSettings message with correct payload', () => {

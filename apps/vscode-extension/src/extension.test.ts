@@ -219,7 +219,7 @@ describe('vscode-extension', () => {
       );
     });
 
-    it('should handle sendMessage and respond with info message', async () => {
+    it('should handle sendMessage and send messageCreated/messageUpdated events', async () => {
       extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
@@ -238,17 +238,27 @@ describe('vscode-extension', () => {
 
       messageHandler({ type: 'sendMessage', payload: { content: 'test message' } });
 
-      expect(mockWebviewView.webview.postMessage).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'info',
-          payload: expect.objectContaining({
-            message: expect.stringContaining('Message received'),
-          }),
-        })
-      );
+      // Wait for async message processing
+      await new Promise(resolve => setTimeout(resolve, 50));
+
+      const calls = mockWebviewView.webview.postMessage.mock.calls;
+      // Should send messageCreated for user message
+      expect(
+        calls.some(
+          call => call[0].type === 'messageCreated' && call[0].payload.message.role === 'user'
+        )
+      ).toBe(true);
+      // Should send messageCreated for assistant message
+      expect(
+        calls.some(
+          call => call[0].type === 'messageCreated' && call[0].payload.message.role === 'assistant'
+        )
+      ).toBe(true);
+      // Should send messageUpdated for assistant status changes
+      expect(calls.some(call => call[0].type === 'messageUpdated')).toBe(true);
     });
 
-    it('should handle newChat message and respond with chatCleared', async () => {
+    it('should handle newChat message and send state update', async () => {
       extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
@@ -267,10 +277,16 @@ describe('vscode-extension', () => {
 
       messageHandler({ type: 'newChat', payload: { timestamp: '2024-01-01T00:00:00.000Z' } });
 
+      // Should send state update with welcome view mode
       expect(mockWebviewView.webview.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
-          type: 'chatCleared',
-          payload: expect.objectContaining({ timestamp: expect.any(String) }),
+          type: 'state',
+          payload: expect.objectContaining({
+            viewMode: 'welcome',
+            messages: [],
+            currentInput: '',
+            isLoading: false,
+          }),
         })
       );
     });

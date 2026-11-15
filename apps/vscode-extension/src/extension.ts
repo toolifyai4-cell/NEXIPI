@@ -286,7 +286,7 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
           this._logger.info('Retry message requested', { messageId: payload.messageId });
-          this._chatService.retryMessage(
+          void this._chatService.retryMessage(
             payload.conversationId as ConversationId,
             payload.messageId as MessageId
           );

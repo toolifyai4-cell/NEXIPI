@@ -434,8 +434,14 @@ export class ChatService {
       const isAbortError =
         signal.aborted ||
         error instanceof DOMException ||
-        (error as any)?.name === 'AbortError' ||
-        (error as any)?.code === 'ABORT_ERR';
+        (error !== null &&
+          typeof error === 'object' &&
+          'name' in error &&
+          error.name === 'AbortError') ||
+        (error !== null &&
+          typeof error === 'object' &&
+          'code' in error &&
+          error.code === 'ABORT_ERR');
 
       if (isAbortError) {
         this.logger.info('Stream cancelled', { conversationId, messageId });
@@ -714,7 +720,7 @@ export class ChatService {
   }
 
   dispose(): Promise<void> {
-    const abortPromises: Promise<void>[] = [];
+    const abortPromises: Array<Promise<void>> = [];
     for (const stream of this.activeStreams.values()) {
       stream.controller.abort();
       abortPromises.push(stream.promise.catch(() => {}));

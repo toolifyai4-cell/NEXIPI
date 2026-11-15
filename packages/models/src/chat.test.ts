@@ -734,7 +734,7 @@ describe('ChatService', () => {
       chatService.addMessage(conversationId, 'user', 'Original question');
     });
 
-it('should retry failed message', async () => {
+    it('should retry failed message', async () => {
       const failedMessage = chatService.addMessage(conversationId, 'assistant', 'Error', 'failed');
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
@@ -902,7 +902,7 @@ it('should retry failed message', async () => {
       conversationId = chatService.createConversation('History Test').id;
     });
 
-it('should build model messages from conversation history', async () => {
+    it('should build model messages from conversation history', async () => {
       chatService.addMessage(conversationId, 'user', 'First', 'completed');
       chatService.addMessage(conversationId, 'assistant', 'First response', 'completed');
       chatService.addMessage(conversationId, 'user', 'Second', 'completed');
@@ -1018,32 +1018,34 @@ it('should build model messages from conversation history', async () => {
   describe('Dispose', () => {
     it('should cancel all active streams on dispose', async () => {
       // Mock that yields indefinitely until the signal is aborted
-      mockStreamingProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
-        yield {
-          type: 'stream:delta',
-          conversationId: '',
-          messageId: '',
-          delta: 'Start',
-          timestamp: Date.now(),
-        };
-        // Yield empty deltas until the signal is aborted
-        while (!signal.aborted) {
-          await new Promise(r => setTimeout(r, 10));
+      mockStreamingProvider.executeStream = vi
+        .fn()
+        .mockImplementation(async function* (request, signal) {
           yield {
             type: 'stream:delta',
             conversationId: '',
             messageId: '',
-            delta: '',
+            delta: 'Start',
             timestamp: Date.now(),
           };
-        }
-        // Generator exits naturally when signal is aborted
-        // Note: The for-await loop in executeStreamingProvider completes normally
-        // when the generator exits, rather than throwing AbortError.
-        // The message status remains 'streaming' from the last delta.
-        // This is a known limitation - explicit cancellation via cancelMessage
-        // properly sets status to 'cancelled' (tested in Cancellation tests).
-      });
+          // Yield empty deltas until the signal is aborted
+          while (!signal.aborted) {
+            await new Promise(r => setTimeout(r, 10));
+            yield {
+              type: 'stream:delta',
+              conversationId: '',
+              messageId: '',
+              delta: '',
+              timestamp: Date.now(),
+            };
+          }
+          // Generator exits naturally when signal is aborted
+          // Note: The for-await loop in executeStreamingProvider completes normally
+          // when the generator exits, rather than throwing AbortError.
+          // The message status remains 'streaming' from the last delta.
+          // This is a known limitation - explicit cancellation via cancelMessage
+          // properly sets status to 'cancelled' (tested in Cancellation tests).
+        });
 
       const conversationId = chatService.createConversation('Dispose Test').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
