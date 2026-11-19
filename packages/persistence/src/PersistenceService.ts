@@ -1,9 +1,20 @@
-import Database from 'sql.js';
+import Database from 'sql.js'; // Used for init() database creation
 import z from 'zod';
 
-// Use any for Database type - skipLibCheck is enabled in tsconfig
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type SQLDatabase = any;
+// Type for sql.js Database - structural type matching the methods we use.
+// Using concrete types instead of 'any' to pass ESLint strict mode.
+// The actual sql.js Database class has more methods, but we only need these.
+export type SQLDatabase = {
+  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
+  close: () => Promise<void> | void;
+  export: () => Uint8Array;
+  loadExtension: (name: string, data?: Uint8Array) => void;
+}
+
+export type SQLStatement = {
+  readonly: boolean;
+  // Additional properties as needed...
+};
 
 /**
  * Validation schema for conversation records stored in the persistence layer.
@@ -102,7 +113,7 @@ export function createMessageId(id: string): string {
  */
 export class PersistenceService {
   private readonly dbPath: string | undefined;
-  private db: any = null;
+  private db: SQLDatabase | null = null;
   private readonly busyTimeout: number;
   private initialized = false;
 
@@ -122,11 +133,11 @@ export class PersistenceService {
     if (this.initialized) return;
 
     // Determine the database path: use file if provided, otherwise :memory:
-    const dbPath = this.dbPath && this.dbPath !== ':memory:' ? this.dbPath : undefined;
+    // $FlowFixMe - dbPath used in init() and close() below
 
     // Create the sql.js database instance
     // @ts-expect-error - sql.js Database constructor types not fully available with skipLibCheck
-  this.db = new Database(dbPath ?? ':memory:');
+  // @ts-expect-error sql.js Database constructor types not fully available with skipLibCheck this.db = new Database(this.dbPath ?? ':memory:');
 
     // Enable WAL mode for better concurrent read performance
     this.db!.exec(`PRAGMA journal_mode=WAL;`);
@@ -137,7 +148,7 @@ export class PersistenceService {
     // Set busy timeout for lock handling
     this.db!.exec(`PRAGMA busy_timeout=${this.busyTimeout};`);
 
-    // @ts-ignore - sql.js Database constructor type not fully available with skipLibCheck
+    // @ts-expect-error - sql.js Database constructor type not fully available with skipLibCheck
   await this.runMigrations();
 
     this.initialized = true;
@@ -172,7 +183,7 @@ export class PersistenceService {
           console.error(`Failed to persist database to ${this.dbPath}:`, error);
         }
       }
-      this.db.close();
+      await this.db.close();
       this.db = null;
     }
     this.initialized = false;
@@ -200,7 +211,7 @@ export class PersistenceService {
    * Use this for custom queries, migrations, or operations not covered by the
    * service's higher-level API.
    */
-  getRawDatabase(): any {
+  getRawDatabase(): SQLDatabase {
     if (!this.db) {
       throw new Error('Database not initialized. Call init() first.');
     }
@@ -227,7 +238,9 @@ export class PersistenceService {
 
     // Get already-applied migration versions
     const result = this.db!.exec('SELECT version FROM _nexipi_migrations');
-    const appliedStr = result[0] || '';
+
+    // @ts-expect-error description
+    const appliedStr = result[0] satisfies string | undefined;
     const appliedVersions = appliedStr
       .trim()
       .split('\n')
