@@ -1,14 +1,23 @@
-import Database from 'sql.js'; // Used for init() database creation
-import z from 'zod';
+// sql.js types - use the @types/sql.js definitions
+// The Database class constructor takes ArrayLike<number> | null (bytes for DB file, or null for in-memory)
+// close() returns void, not Promise<void>
+// exec() returns SQLStatement | SQLStatement[] | void
+// export() returns Uint8Array
+import 'sql.js'; // Import types side-effect only; actual DB instantiated via new Database()
 
 // Type for sql.js Database - structural type matching the methods we use.
 // Using concrete types instead of 'any' to pass ESLint strict mode.
 // The actual sql.js Database class has more methods, but we only need these.
 export type SQLDatabase = {
-  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
-  close: () => Promise<void> | void;
+  exec: (sql: string, params?: unknown[]) => SQLResultSetRowArray | SQLResultSetRowArray[] | void;
+  close: () => void;
   export: () => Uint8Array;
   loadExtension: (name: string, data?: Uint8Array) => void;
+}
+
+export type SQLResultSetRowArray = {
+  [index: number]: unknown;
+  column_names?: string[];
 }
 
 export type SQLStatement = {
@@ -239,8 +248,10 @@ export class PersistenceService {
     // Get already-applied migration versions
     const result = this.db!.exec('SELECT version FROM _nexipi_migrations');
 
-    // @ts-expect-error description
-    const appliedStr = result[0] satisfies string | undefined;
+    // Note: sql.js exec() returns SQLResultSetRowArray[]. The first element is a row,
+            // and we access the first column value to get the migration version string.
+    const result = this.db!.exec('SELECT version FROM _nexipi_migrations') as SQLResultSetRowArray[];
+    const appliedStr = result[0]?.[0] as string | undefined;
     const appliedVersions = appliedStr
       .trim()
       .split('\n')
