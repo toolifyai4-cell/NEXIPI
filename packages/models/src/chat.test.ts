@@ -1081,6 +1081,10 @@ describe('ChatService', () => {
   });
 
   describe('Dispose', () => {
+    beforeEach(() => {
+      providerRegistry.register(mockStreamingProvider);
+    });
+
     it('should cancel all active streams on dispose', async () => {
       let abortTriggered = false;
       mockStreamingProvider.executeStream = createAbortableStreamingMock(() => {
@@ -1135,23 +1139,42 @@ describe('ChatService', () => {
       expect(abortTriggered).toBe(true);
     });
 
-    it('should handle provider throwing unrelated error (regression test 3)', async () => {
+    it('should handle provider throwing unrelated error after disposal begins (regression test 3)', async () => {
+      let disposalStarted = false;
+      let disposalComplete = false;
+
       mockStreamingProvider.executeStream = vi.fn().mockReturnValue(
         (async function* () {
           yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Start', timestamp: Date.now() };
-          throw new Error('Provider network error');
+          // Wait for disposal to start
+          await new Promise<void>(resolve => {
+            const checkDisposal = () => {
+              if (disposalStarted) {
+                disposalComplete = true;
+                resolve();
+              } else {
+                setTimeout(checkDisposal, 10);
+              }
+            };
+            checkDisposal();
+          });
+          // This error occurs AFTER disposal has marked the message cancelled
+          throw new Error('Late provider error after disposal');
         })()
       );
 
-      const conversationId = chatService.createConversation('Dispose Error').id;
+      const conversationId = chatService.createConversation('Dispose Late Error').id;
       const assistantMessageId = await chatService.sendMessage(conversationId, 'Test');
       await new Promise(resolve => setTimeout(resolve, 10));
 
+      disposalStarted = true;
       await chatService.dispose();
       await new Promise(resolve => setTimeout(resolve, 50));
 
       const finalMessage = chatService.getMessage(conversationId, assistantMessageId);
+      // Late error after disposal should not overwrite cancelled status
       expect(finalMessage?.status).toBe('cancelled');
+      expect(disposalComplete).toBe(true);
     });
 
     it('should handle provider resolving after cancellation (regression test 4)', async () => {
@@ -1623,16 +1646,32 @@ describe('ChatService', () => {
       const conversationId = queueService.createConversation('Queue Cancel').id;
 
       let resolveFirst: () => void;
+      let resolveSecond: () => void;
+      let resolveThird: () => void;
       const firstPromise = new Promise<void>(resolve => { resolveFirst = resolve; });
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
+      const thirdPromise = new Promise<void>(resolve => { resolveThird = resolve; });
 
-      queueProvider.executeStream = vi.fn().mockReturnValue(
-        (async function* () {
+      let requestCount = 0;
+      queueProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
+        const thisRequest = ++requestCount;
+        if (thisRequest === 1) {
           yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'First ', timestamp: Date.now() };
           await firstPromise;
           if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
           yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
-        })()
-      );
+        } else if (thisRequest === 2) {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Second ', timestamp: Date.now() };
+          await secondPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        } else {
+          yield { type: 'stream:delta', conversationId: '', messageId: '', delta: 'Third ', timestamp: Date.now() };
+          await thirdPromise;
+          if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
+          yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
+        }
+      });
 
       const msgId1 = await queueService.sendMessage(conversationId, 'First');
       await new Promise(resolve => setTimeout(resolve, 10));
@@ -1676,16 +1715,22 @@ describe('ChatService', () => {
       const msgId3 = assistantMessagesAfterSecond[2].id;
       expect(queueService.getMessage(conversationId, msgId3)?.status).toBe('streaming');
 
-      // Complete third - it has no blocking promise so completes immediately
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Complete third
+      resolveThird!();
+      await new Promise(resolve => setTimeout(resolve, 10));
       expect(queueService.getMessage(conversationId, msgId3)?.status).toBe('completed');
 
+      // Clean up
+      resolveSecond!(); // In case it's still pending
       await p2;
       await p3;
     });
 
     it('should not permanently block queue on failed request', async () => {
       const conversationId = queueService.createConversation('Queue Failed').id;
+
+      let resolveSecond: () => void;
+      const secondPromise = new Promise<void>(resolve => { resolveSecond = resolve; });
 
       let requestCount = 0;
       queueProvider.executeStream = vi.fn().mockImplementation(async function* (request, signal) {
@@ -1695,6 +1740,7 @@ describe('ChatService', () => {
           yield { type: 'stream:error', conversationId: '', messageId: '', error: { code: 'ERROR', message: 'Failed', retryable: true }, timestamp: Date.now() };
         } else {
           yield { type: 'stream:delta', conversationId: '', messageId: '', delta: `Req${thisRequest} `, timestamp: Date.now() };
+          await secondPromise;
           if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
           yield { type: 'stream:complete', conversationId: '', messageId: '', finishReason: 'stop', timestamp: Date.now() };
         }
@@ -1718,7 +1764,9 @@ describe('ChatService', () => {
       const msgId2 = assistantMessages[1].id;
       expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('streaming');
 
-      await new Promise(resolve => setTimeout(resolve, 50));
+      // Complete second
+      resolveSecond!();
+      await new Promise(resolve => setTimeout(resolve, 10));
       expect(queueService.getMessage(conversationId, msgId2)?.status).toBe('completed');
 
       await p2;
