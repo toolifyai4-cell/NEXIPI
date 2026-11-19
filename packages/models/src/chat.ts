@@ -734,6 +734,15 @@ export class ChatService {
           });
           continue;
         }
+        // Don't overwrite cancelled status with completion
+        const currentMessage = this.getMessage(conversationId, messageId);
+        if (currentMessage?.status === 'cancelled') {
+          this.logger.debug('Ignoring late stream:complete - message already cancelled', {
+            conversationId,
+            messageId,
+          });
+          break;
+        }
         hasCompleted = true;
 
         this.updateMessage(conversationId, messageId, {
@@ -751,6 +760,15 @@ export class ChatService {
         if (hasCompleted) {
           this.logger.warn('Stream error after completion ignored', { conversationId, messageId });
           continue;
+        }
+        // Don't overwrite cancelled status with error
+        const currentMessage = this.getMessage(conversationId, messageId);
+        if (currentMessage?.status === 'cancelled') {
+          this.logger.debug('Ignoring late stream:error - message already cancelled', {
+            conversationId,
+            messageId,
+          });
+          break;
         }
         hasCompleted = true;
         this.handleStreamError(conversationId, messageId, event.error);
@@ -821,6 +839,16 @@ export class ChatService {
         throw new DOMException('Aborted', 'AbortError');
       }
 
+      // Don't overwrite cancelled status with completion
+      const currentMessage = this.getMessage(conversationId, messageId);
+      if (currentMessage?.status === 'cancelled') {
+        this.logger.debug('Ignoring late non-streaming completion - message already cancelled', {
+          conversationId,
+          messageId,
+        });
+        return;
+      }
+
       // ModelResponse has choices array with message.content per the provider contract
       const content =
         result.choices && result.choices.length > 0
@@ -849,6 +877,15 @@ export class ChatService {
     } catch (error) {
       if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         throw error;
+      }
+      // Don't overwrite cancelled status with error
+      const currentMessage = this.getMessage(conversationId, messageId);
+      if (currentMessage?.status === 'cancelled') {
+        this.logger.debug('Ignoring late non-streaming error - message already cancelled', {
+          conversationId,
+          messageId,
+        });
+        return;
       }
       this.handleStreamError(conversationId, messageId, {
         code: 'EXECUTION_FAILED',
@@ -1051,7 +1088,9 @@ export class ChatService {
     this.eventEmitter.removeAllListeners();
     this.logger.info('ChatService disposed');
     // Ensure all cancelled streams have correct status after promises settle (fallback)
-    return Promise.all(abortPromises).then(() => {
+    // Use a timeout to avoid hanging on providers that ignore abort signals
+    const timeoutPromise = new Promise<void>((resolve) => setTimeout(resolve, 1000));
+    return Promise.race([Promise.all(abortPromises), timeoutPromise]).then(() => {
       for (const info of streamInfos) {
         this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
       }
