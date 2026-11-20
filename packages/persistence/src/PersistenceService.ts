@@ -4,6 +4,7 @@
 // exec() returns SQLStatement | SQLStatement[] | void
 // export() returns Uint8Array
 import 'sql.js'; // Import types side-effect only; actual DB instantiated via new Database()
+import z from 'zod';
 
 // Type for sql.js Database - structural type matching the methods we use.
 // Using concrete types instead of 'any' to pass ESLint strict mode.
@@ -192,7 +193,7 @@ export class PersistenceService {
           console.error(`Failed to persist database to ${this.dbPath}:`, error);
         }
       }
-      await this.db.close();
+      this.db.close();
       this.db = null;
     }
     this.initialized = false;
@@ -246,15 +247,9 @@ export class PersistenceService {
     `);
 
     // Get already-applied migration versions
-    const result = this.db!.exec('SELECT version FROM _nexipi_migrations');
-
-    // Note: sql.js exec() returns SQLResultSetRowArray[]. The first element is a row,
-            // and we access the first column value to get the migration version string.
     const result = this.db!.exec('SELECT version FROM _nexipi_migrations') as SQLResultSetRowArray[];
     const appliedStr = result[0]?.[0] as string | undefined;
-    const appliedVersions = appliedStr
-      .trim()
-      .split('\n')
+    const appliedVersions = (appliedStr ? appliedStr.trim() : '').split('\n')
       .filter((line: string) => line.trim())
       .map((line: string) => parseInt(line.split('|')[0].trim(), 10));
 
