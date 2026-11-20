@@ -76,18 +76,9 @@ export class PersistenceService {
     this.dbPath = dbPath;
   }
 
-
-  
-
-
-
-
-
-
-
-// @ts-expect-error sql.js Database constructor accepts string paths at runtime despite type definitions
-  async init(): Promise<void> {
-    this.db = new Database(undefined);
+  init(): void {
+    // @ts-expect-error sql.js Database constructor accepts string paths at runtime despite type definitions
+    this.db = new Database(undefined) as SQLDatabase;
   }
 
   async close(): Promise<void> {
