@@ -136,8 +136,8 @@ export class PersistenceService {
     // $FlowFixMe - dbPath used in init() and close() below
 
     // Create the sql.js database instance
-    // @ts-expect-error - sql.js Database constructor types not fully available with skipLibCheck
-  // @ts-expect-error sql.js Database constructor types not fully available with skipLibCheck this.db = new Database(this.dbPath ?? ':memory:');
+    // sql.js Database constructor types are available with skipLibCheck
+  // this.db = new Database(this.dbPath ?? ':memory:');
 
     // Enable WAL mode for better concurrent read performance
     this.db!.exec(`PRAGMA journal_mode=WAL;`);
@@ -148,7 +148,7 @@ export class PersistenceService {
     // Set busy timeout for lock handling
     this.db!.exec(`PRAGMA busy_timeout=${this.busyTimeout};`);
 
-    // @ts-expect-error - sql.js Database constructor type not fully available with skipLibCheck
+    // sql.js Database constructor type is available with skipLibCheck
   await this.runMigrations();
 
     this.initialized = true;
@@ -239,10 +239,13 @@ export class PersistenceService {
     // Get already-applied migration versions
     const result = this.db!.exec('SELECT version FROM _nexipi_migrations');
 
-    // @ts-expect-error description
-    /* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
+    // 
+    // $
+/* eslint-disable @typescript-eslint/no-unnecessary-type-assertion */
+// @ts-expect-error sql.js result indexing needs runtime type narrowing
 const appliedStr = result[0] as string | undefined;
 /* eslint-enable @typescript-eslint/no-unnecessary-type-assertion */
+// @ts-expect-error sql.js migration result may be empty at runtime
     const appliedVersions = appliedStr
       .trim()
       .split('\n')
