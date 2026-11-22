@@ -15,7 +15,7 @@ class MockPersistencePort implements IPersistencePort {
     return this.available && !this.disposed;
   }
 
-  async dispose(): Promise<void> {
+  dispose(): void {
     this.disposed = true;
     this.available = false;
   }
@@ -90,8 +90,8 @@ describe('IPersistencePort - Contract Tests', () => {
     await port.initialize();
   });
 
-  afterEach(async () => {
-    await port.dispose();
+  afterEach(() => {
+    port.dispose();
   });
 
   it('should have initialize method', () => {
@@ -127,13 +127,13 @@ describe('IPersistencePort - Contract Tests', () => {
     expect(port.isAvailable()).toBe(true);
   });
 
-  it('should not be available after disposal', async () => {
-    await port.dispose();
+  it('should not be available after disposal', () => {
+    port.dispose();
     expect(port.isAvailable()).toBe(false);
   });
 
   it('should throw when operating after disposal', async () => {
-    await port.dispose();
+    port.dispose();
     await expect(port.createConversation({} as any)).rejects.toThrow(PersistenceError);
   });
 

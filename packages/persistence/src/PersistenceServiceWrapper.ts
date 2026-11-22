@@ -162,7 +162,7 @@ export class PersistenceService implements IPersistencePort {
     return this.foundationService.isInitialized();
   }
 
-  async dispose(): Promise<void> {
+  dispose(): void {
     if (this.disposed) {
       return;
     }
@@ -170,8 +170,6 @@ export class PersistenceService implements IPersistencePort {
     if (this.ownsFoundationService) {
       this.foundationService.close();
     }
-    // No async cleanup required for external foundation service
-    await Promise.resolve();
   }
 
   async createConversation(input: CreateConversationInput): Promise<ConversationResult> {
