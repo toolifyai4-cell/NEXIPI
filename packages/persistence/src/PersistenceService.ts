@@ -1,9 +1,10 @@
-import initSqlJs, { Database as SqlJsDatabase, QueryExecResult } from 'sql.js';
+import initSqlJs from 'sql.js';
+import type { Database as SqlJsDatabaseType } from 'sql.js';
 import * as fs from 'fs';
 import * as path from 'path';
 import z from 'zod';
 
-export type SQLDatabase = SqlJsDatabase;
+export type SQLDatabase = SqlJsDatabaseType;
 
 export const ConversationValidationSchema = z.object({
   id: z.string(),
@@ -82,8 +83,12 @@ const MIGRATIONS: Migration[] = [
           metadata TEXT NOT NULL DEFAULT '{}'
         )
       `);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)`);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`
+      );
     },
   },
   {
@@ -103,7 +108,9 @@ const MIGRATIONS: Migration[] = [
           FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
         )
       `);
-      db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp ASC)`);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp ASC)`
+      );
       db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(conversation_id, seq ASC)`);
     },
   },
@@ -123,31 +130,48 @@ const MIGRATIONS: Migration[] = [
 ];
 
 export class PersistenceError extends Error {
-  constructor(message: string, public readonly cause?: Error) {
+  constructor(
+    message: string,
+    public readonly cause?: Error
+  ) {
     super(message);
     this.name = 'PersistenceError';
   }
 }
 
+interface SqlJsModule {
+  Database: new (data?: Uint8Array) => SQLDatabase;
+}
+
 export class PersistenceService {
   private readonly dbPath: string | undefined;
   private db: SQLDatabase | null = null;
-  private sqlModule: { Database: typeof SqlJsDatabase } | null = null;
+  private sqlModule: SqlJsModule | null = null;
   private isClosed = false;
+  private wasInitialized = false;
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath;
   }
 
   async init(): Promise<void> {
-    if (this.sqlModule) {
+    if (this.sqlModule && this.wasInitialized && !this.isClosed) {
       return;
+    }
+
+    // If we were closed, reset state for re-initialization
+    if (this.isClosed) {
+      this.isClosed = false;
+      this.db = null;
     }
 
     try {
       this.sqlModule = await initSqlJs();
     } catch (error) {
-      throw new PersistenceError('Failed to initialize sql.js', error instanceof Error ? error : undefined);
+      throw new PersistenceError(
+        'Failed to initialize sql.js',
+        error instanceof Error ? error : undefined
+      );
     }
 
     const DatabaseClass = this.sqlModule.Database;
@@ -157,14 +181,18 @@ export class PersistenceService {
         const fileData = fs.readFileSync(this.dbPath);
         this.db = new DatabaseClass(new Uint8Array(fileData));
       } catch (error) {
-        throw new PersistenceError(`Failed to load database from ${this.dbPath}`, error instanceof Error ? error : undefined);
+        throw new PersistenceError(
+          `Failed to load database from ${this.dbPath}`,
+          error instanceof Error ? error : undefined
+        );
       }
     } else {
       this.db = new DatabaseClass();
     }
 
     this.enableForeignKeys();
-    await this.runMigrations();
+    this.runMigrations();
+    this.wasInitialized = true;
   }
 
   private enableForeignKeys(): void {
@@ -172,7 +200,7 @@ export class PersistenceService {
     this.db.exec('PRAGMA foreign_keys = ON');
   }
 
-  private async runMigrations(): Promise<void> {
+  private runMigrations(): void {
     if (!this.db) return;
 
     this.db.exec(`
@@ -198,10 +226,11 @@ export class PersistenceService {
 
       try {
         migration.up(this.db);
-        this.db.exec(
-          'INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)',
-          [migration.version, migration.name, Date.now()]
-        );
+        this.db.exec('INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)', [
+          migration.version,
+          migration.name,
+          Date.now(),
+        ]);
       } catch (error) {
         throw new PersistenceError(
           `Migration ${migration.version} (${migration.name}) failed`,
@@ -221,10 +250,10 @@ export class PersistenceService {
 
   exportDatabase(): Uint8Array {
     if (!this.db) {
+      if (this.isClosed) {
+        throw new PersistenceError('Database has been closed.');
+      }
       throw new PersistenceError('Database not initialized. Call init() first.');
-    }
-    if (this.isClosed) {
-      throw new PersistenceError('Database has been closed.');
     }
     return this.db.export();
   }
@@ -234,10 +263,10 @@ export class PersistenceService {
       throw new PersistenceError('No database path configured. Cannot save.');
     }
     if (!this.db) {
+      if (this.isClosed) {
+        throw new PersistenceError('Database has been closed.');
+      }
       throw new PersistenceError('Database not initialized. Call init() first.');
-    }
-    if (this.isClosed) {
-      throw new PersistenceError('Database has been closed.');
     }
 
     try {
@@ -248,16 +277,19 @@ export class PersistenceService {
       }
       fs.writeFileSync(this.dbPath, data);
     } catch (error) {
-      throw new PersistenceError(`Failed to save database to ${this.dbPath}`, error instanceof Error ? error : undefined);
+      throw new PersistenceError(
+        `Failed to save database to ${this.dbPath}`,
+        error instanceof Error ? error : undefined
+      );
     }
   }
 
   getRawDatabase(): SQLDatabase {
     if (!this.db) {
+      if (this.isClosed) {
+        throw new PersistenceError('Database has been closed.');
+      }
       throw new PersistenceError('Database not initialized. Call init() first.');
-    }
-    if (this.isClosed) {
-      throw new PersistenceError('Database has been closed.');
     }
     return this.db;
   }
