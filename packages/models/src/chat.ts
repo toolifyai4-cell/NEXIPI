@@ -31,6 +31,8 @@ import {
   createStreamErrorEvent,
   createStreamCancelEvent,
 } from '@nexipi/shared';
+import { PersistenceAdapter, createPersistenceAdapter, type PersistenceAdapterOptions } from './persistence-adapter.js';
+import { PersistenceError } from '@nexipi/persistence';
 
 export interface ChatServiceEvents extends EventMap {
   'conversation:created': { conversation: Conversation; timestamp: number };
@@ -46,6 +48,13 @@ export interface ChatServiceEvents extends EventMap {
     messageId?: MessageId;
     timestamp: number;
   };
+  'persistence:error': {
+    error: PersistenceError;
+    operation: string;
+    conversationId?: ConversationId;
+    messageId?: MessageId;
+    timestamp: number;
+  };
 }
 
 export interface ChatServiceOptions {
@@ -56,6 +65,10 @@ export interface ChatServiceOptions {
   maxHistoryLength?: number;
   /** Concurrency policy for multiple requests in the same conversation */
   concurrencyPolicy?: 'queue' | 'cancel-previous' | 'allow-all';
+  /** Workspace ID for persistence (default: 'default') */
+  workspaceId?: string;
+  /** Persistence adapter for durable storage. If not provided, operates in-memory only. */
+  persistenceAdapter?: PersistenceAdapter;
 }
 
 type ConcurrencyPolicy = 'queue' | 'cancel-previous' | 'allow-all';
@@ -104,6 +117,8 @@ export class ChatService {
   private readonly activeRequests: Map<string, ActiveRequestInfo> = new Map();
   /** Tracks the primary request per conversation (for queue/cancel-previous policies) */
   private readonly primaryRequestId: Map<ConversationId, string> = new Map();
+  private readonly persistenceAdapter: PersistenceAdapter | undefined;
+  private readonly workspaceId: string;
   private _isDisposed = false;
 
   constructor(options: ChatServiceOptions = {}) {
@@ -123,6 +138,8 @@ export class ChatService {
       });
     this.maxHistoryLength = options.maxHistoryLength ?? 100;
     this.concurrencyPolicy = options.concurrencyPolicy ?? 'cancel-previous';
+    this.workspaceId = options.workspaceId ?? 'default';
+    this.persistenceAdapter = options.persistenceAdapter;
     this.eventEmitter = new EventEmitter<ChatServiceEvents>({
       onListenerError: (error, eventName) => {
         this.logger.error(`Listener error for event ${eventName}`, { error: error.message });
@@ -145,6 +162,21 @@ export class ChatService {
   /** Get the current concurrency policy */
   getConcurrencyPolicy(): ConcurrencyPolicy {
     return this.concurrencyPolicy;
+  }
+
+  /** Get the workspace ID */
+  getWorkspaceId(): string {
+    return this.workspaceId;
+  }
+
+  /** Check if persistence is enabled */
+  hasPersistence(): boolean {
+    return this.persistenceAdapter !== undefined;
+  }
+
+  /** Get the persistence adapter (if available) */
+  getPersistenceAdapter(): PersistenceAdapter | undefined {
+    return this.persistenceAdapter;
   }
 
   /** Check if the service has been disposed */
@@ -177,23 +209,278 @@ export class ChatService {
     }
   }
 
+  private async persistConversation(
+    conversation: Conversation,
+    createdAt?: number,
+    updatedAt?: number
+  ): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.createConversation(conversation, createdAt, updatedAt);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to persist conversation', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: createConversation', { error: persistenceError.message });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'createConversation',
+        conversationId: conversation.id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistConversationUpdate(
+    id: ConversationId,
+    title?: string,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.updateConversation(id, title, metadata);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to update conversation', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: updateConversation', { error: persistenceError.message, conversationId: id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'updateConversation',
+        conversationId: id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistConversationDelete(id: ConversationId): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.deleteConversation(id);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to delete conversation', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: deleteConversation', { error: persistenceError.message, conversationId: id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'deleteConversation',
+        conversationId: id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistMessage(message: Message, seq?: number): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.createMessage(message, seq);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to persist message', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: createMessage', { error: persistenceError.message, conversationId: message.conversationId, messageId: message.id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'createMessage',
+        conversationId: message.conversationId,
+        messageId: message.id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistMessageUpdate(
+    id: MessageId,
+    content?: string,
+    status?: MessageStatus,
+    metadata?: Record<string, unknown>
+  ): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.updateMessage(id, content, status, metadata);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to update message', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: updateMessage', { error: persistenceError.message, messageId: id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'updateMessage',
+        messageId: id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistMessageDelete(id: MessageId): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.deleteMessage(id);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to delete message', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: deleteMessage', { error: persistenceError.message, messageId: id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'deleteMessage',
+        messageId: id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async persistMessagesByConversationDelete(conversationId: ConversationId): Promise<void> {
+    if (!this.persistenceAdapter) return;
+    try {
+      await this.persistenceAdapter.deleteMessagesByConversationId(conversationId);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to delete messages by conversation', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: deleteMessagesByConversationId', { error: persistenceError.message, conversationId });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'deleteMessagesByConversationId',
+        conversationId,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async loadConversationFromPersistence(id: ConversationId): Promise<Conversation | null> {
+    if (!this.persistenceAdapter) return null;
+    try {
+      return await this.persistenceAdapter.getConversation(id);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to load conversation', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: getConversation', { error: persistenceError.message, conversationId: id });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'getConversation',
+        conversationId: id,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async loadConversationsFromPersistence(): Promise<Conversation[]> {
+    if (!this.persistenceAdapter) return [];
+    try {
+      return await this.persistenceAdapter.listConversations();
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to list conversations', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: listConversations', { error: persistenceError.message });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'listConversations',
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  private async loadMessagesFromPersistence(conversationId: ConversationId): Promise<Message[]> {
+    if (!this.persistenceAdapter) return [];
+    try {
+      return await this.persistenceAdapter.getMessagesByConversationId(conversationId);
+    } catch (error) {
+      const persistenceError = error instanceof PersistenceError ? error : new PersistenceError('Failed to load messages', error instanceof Error ? error : undefined);
+      this.logger.error('Persistence error: getMessagesByConversationId', { error: persistenceError.message, conversationId });
+      this.eventEmitter.emit('persistence:error', {
+        error: persistenceError,
+        operation: 'getMessagesByConversationId',
+        conversationId,
+        timestamp: Date.now(),
+      });
+      throw persistenceError;
+    }
+  }
+
+  async initialize(): Promise<void> {
+    if (this.persistenceAdapter) {
+      await this.persistenceAdapter.initialize();
+      // Load all conversations from persistence into memory
+      const conversations = await this.loadConversationsFromPersistence();
+      for (const conversation of conversations) {
+        this.conversations.set(conversation.id, conversation);
+        const messages = await this.loadMessagesFromPersistence(conversation.id);
+        const messageMap = new Map<MessageId, Message>();
+        for (const message of messages) {
+          messageMap.set(message.id, message);
+        }
+        this.messages.set(conversation.id, messageMap);
+      }
+      this.logger.info('ChatService initialized with persistence', {
+        workspaceId: this.workspaceId,
+        conversationCount: conversations.length,
+      });
+    }
+  }
+
   createConversation(title: string = 'New Conversation'): Conversation {
     const conversationId =
       `${Date.now()}-${Math.random().toString(36).substr(2, 9)}` as ConversationId;
+    const now = Date.now();
     const conversation = createConversation(conversationId, title);
     this.conversations.set(conversationId, conversation);
     this.messages.set(conversationId, new Map());
     this.logger.info('Conversation created', { conversationId, title });
     this.eventEmitter.emit('conversation:created', { conversation, timestamp: Date.now() });
+
+    // Persist asynchronously (fire and forget) - don't block creation
+    if (this.persistenceAdapter) {
+      this.persistConversation(conversation, now, now).catch(() => {
+        // Error already logged in persistConversation
+      });
+    }
+
     return conversation;
   }
 
   getConversation(conversationId: ConversationId): Conversation | undefined {
-    return this.conversations.get(conversationId);
+    // First check in-memory cache
+    const cached = this.conversations.get(conversationId);
+    if (cached) return cached;
+
+    // If not in cache and persistence is enabled, try loading from persistence
+    if (this.persistenceAdapter) {
+      // This is a synchronous method, so we can't await here.
+      // The async version should be used for persistence-backed retrieval.
+      return undefined;
+    }
+    return undefined;
+  }
+
+  async getConversationAsync(conversationId: ConversationId): Promise<Conversation | undefined> {
+    const cached = this.conversations.get(conversationId);
+    if (cached) return cached;
+
+    if (this.persistenceAdapter) {
+      const conversation = await this.loadConversationFromPersistence(conversationId);
+      if (conversation) {
+        this.conversations.set(conversationId, conversation);
+        const messages = await this.loadMessagesFromPersistence(conversationId);
+        const messageMap = new Map<MessageId, Message>();
+        for (const message of messages) {
+          messageMap.set(message.id, message);
+        }
+        this.messages.set(conversationId, messageMap);
+      }
+      return conversation ?? undefined;
+    }
+    return undefined;
   }
 
   listConversations(): readonly Conversation[] {
     return Array.from(this.conversations.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  }
+
+  async listConversationsAsync(): Promise<readonly Conversation[]> {
+    if (this.persistenceAdapter) {
+      const conversations = await this.loadConversationsFromPersistence();
+      // Update in-memory cache
+      for (const conversation of conversations) {
+        this.conversations.set(conversation.id, conversation);
+      }
+      return conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+    }
+    return this.listConversations();
   }
 
   updateConversationTitle(conversationId: ConversationId, title: string): Conversation | undefined {
@@ -201,10 +488,11 @@ export class ChatService {
     if (!conversation) {
       return undefined;
     }
+    const now = Date.now();
     const updated: Conversation = {
       ...conversation,
       title,
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
     this.conversations.set(conversationId, updated);
     this.logger.debug('Conversation title updated', { conversationId, title });
@@ -212,6 +500,14 @@ export class ChatService {
       conversation: updated,
       timestamp: Date.now(),
     });
+
+    // Persist asynchronously
+    if (this.persistenceAdapter) {
+      this.persistConversationUpdate(conversationId, title).catch(() => {
+        // Error already logged
+      });
+    }
+
     return updated;
   }
 
@@ -229,6 +525,17 @@ export class ChatService {
     this.messages.delete(conversationId);
     this.logger.info('Conversation deleted', { conversationId });
     this.eventEmitter.emit('conversation:deleted', { conversationId, timestamp: Date.now() });
+
+    // Persist asynchronously
+    if (this.persistenceAdapter) {
+      this.persistConversationDelete(conversationId).catch(() => {
+        // Error already logged
+      });
+      this.persistMessagesByConversationDelete(conversationId).catch(() => {
+        // Error already logged
+      });
+    }
+
     return true;
   }
 
@@ -240,8 +547,45 @@ export class ChatService {
     return Array.from(convMessages.values()).sort((a, b) => a.timestamp - b.timestamp);
   }
 
+  async getMessagesAsync(conversationId: ConversationId): Promise<readonly Message[]> {
+    const convMessages = this.messages.get(conversationId);
+    if (convMessages && convMessages.size > 0) {
+      return Array.from(convMessages.values()).sort((a, b) => a.timestamp - b.timestamp);
+    }
+
+    if (this.persistenceAdapter) {
+      const messages = await this.loadMessagesFromPersistence(conversationId);
+      const messageMap = new Map<MessageId, Message>();
+      for (const message of messages) {
+        messageMap.set(message.id, message);
+      }
+      this.messages.set(conversationId, messageMap);
+      return messages.sort((a, b) => a.timestamp - b.timestamp);
+    }
+    return [];
+  }
+
   getMessage(conversationId: ConversationId, messageId: MessageId): Message | undefined {
     return this.messages.get(conversationId)?.get(messageId);
+  }
+
+  async getMessageAsync(conversationId: ConversationId, messageId: MessageId): Promise<Message | undefined> {
+    const cached = this.messages.get(conversationId)?.get(messageId);
+    if (cached) return cached;
+
+    if (this.persistenceAdapter) {
+      const message = await this.persistenceAdapter.getMessage(messageId);
+      if (message) {
+        let convMessages = this.messages.get(conversationId);
+        if (!convMessages) {
+          convMessages = new Map();
+          this.messages.set(conversationId, convMessages);
+        }
+        convMessages.set(messageId, message);
+      }
+      return message ?? undefined;
+    }
+    return undefined;
   }
 
   addMessage(
@@ -265,6 +609,16 @@ export class ChatService {
 
     this.logger.debug('Message added', { conversationId, messageId: message.id, role, status });
     this.eventEmitter.emit('message:created', { message, timestamp: Date.now() });
+
+    // Persist asynchronously
+    if (this.persistenceAdapter) {
+      // Determine sequence number based on current message count
+      const seq = convMessages.size;
+      this.persistMessage(message, seq).catch(() => {
+        // Error already logged
+      });
+    }
+
     return message;
   }
 
@@ -297,6 +651,14 @@ export class ChatService {
 
     this.logger.debug('Message updated', { conversationId, messageId, status: updated.status });
     this.eventEmitter.emit('message:updated', { message: updated, timestamp: Date.now() });
+
+    // Persist asynchronously
+    if (this.persistenceAdapter) {
+      this.persistMessageUpdate(messageId, updated.content, updated.status, updated.metadata).catch(() => {
+        // Error already logged
+      });
+    }
+
     return updated;
   }
 
@@ -315,6 +677,13 @@ export class ChatService {
         conversationId,
         timestamp: Date.now(),
       });
+
+      // Persist asynchronously
+      if (this.persistenceAdapter) {
+        this.persistMessageDelete(messageId).catch(() => {
+          // Error already logged
+        });
+      }
     }
     return deleted;
   }
@@ -335,7 +704,26 @@ export class ChatService {
       activeMessageId: activeMessage?.id ?? null,
       isLoading: activeMessage !== undefined,
       error: errorMessage?.content ?? null,
-    };
+    }
+  }
+
+  async getConversationStateAsync(conversationId: ConversationId): Promise<ConversationState | undefined> {
+    const conversation = await this.getConversationAsync(conversationId);
+    if (!conversation) {
+      return undefined;
+    }
+
+    const messages = await this.getMessagesAsync(conversationId);
+    const activeMessage = messages.find(m => isMessageActive(m));
+    const errorMessage = messages.find(m => m.status === 'failed');
+
+    return {
+      conversation,
+      messages,
+      activeMessageId: activeMessage?.id ?? null,
+      isLoading: activeMessage !== undefined,
+      error: errorMessage?.content ?? null,
+    }
   }
 
   // eslint-disable-next-line @typescript-eslint/require-await
@@ -353,7 +741,11 @@ export class ChatService {
       throw new EngineError(EngineErrorCode.INTERNAL_ERROR, 'ChatService has been disposed');
     }
 
-    const conversation = this.conversations.get(conversationId);
+    // Ensure conversation exists (load from persistence if needed)
+    let conversation = this.conversations.get(conversationId);
+    if (!conversation && this.persistenceAdapter) {
+      conversation = await this.getConversationAsync(conversationId);
+    }
     if (!conversation) {
       throw new EngineError(
         EngineErrorCode.INVALID_CONFIGURATION,

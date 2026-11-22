@@ -3,6 +3,7 @@ export * from './registry.js';
 export * from './credentials.js';
 export * from './errors.js';
 export * from './chat.js';
+export * from './persistence-adapter.js';
 
 export {
   ModelProviderErrorCode,
