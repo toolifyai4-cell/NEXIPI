@@ -11,3 +11,21 @@ export {
   createMessageId,
   SQLDatabase,
 } from './PersistenceService.js';
+
+export {
+  ConversationRepository,
+  MessageRepository,
+  SqlJsConversationRepository,
+  SqlJsMessageRepository,
+  CreateConversationInput,
+  UpdateConversationInput,
+  CreateMessageInput,
+  UpdateMessageInput,
+  ConversationResult,
+  ConversationListResult,
+  MessageResult,
+  MessageListResult,
+  DeleteResult,
+  ConversationRecord,
+  MessageRecord,
+} from './repositories.js';
