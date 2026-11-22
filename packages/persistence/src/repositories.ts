@@ -103,7 +103,7 @@ function mapConversationRow(row: unknown[]): ConversationRecord {
     title: row[2] as string,
     created_at: row[3] as number,
     updated_at: row[4] as number,
-    metadata: JSON.parse(row[5] as string),
+    metadata: JSON.parse(row[5] as string) as Record<string, unknown>,
   };
 }
 
@@ -116,7 +116,7 @@ function mapMessageRow(row: unknown[]): MessageRecord {
     status: row[4] as 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled',
     timestamp: row[5] as number,
     seq: row[6] as number,
-    metadata: JSON.parse(row[7] as string),
+    metadata: JSON.parse(row[7] as string) as Record<string, unknown>,
   };
 }
 
@@ -124,6 +124,7 @@ export class SqlJsConversationRepository implements ConversationRepository {
   constructor(private readonly db: SQLDatabase) {}
 
   async create(input: CreateConversationInput): Promise<ConversationResult> {
+    await Promise.resolve();
     try {
       const now = Date.now();
       const conversation = {
@@ -161,6 +162,7 @@ export class SqlJsConversationRepository implements ConversationRepository {
   }
 
   async getById(id: string): Promise<ConversationResult> {
+    await Promise.resolve();
     try {
       const result = this.db.exec('SELECT id, workspace_id, title, created_at, updated_at, metadata FROM conversations WHERE id = ?', [id]);
       if (result.length === 0 || result[0].values.length === 0) {
@@ -173,6 +175,7 @@ export class SqlJsConversationRepository implements ConversationRepository {
   }
 
   async list(workspaceId?: string): Promise<ConversationListResult> {
+    await Promise.resolve();
     try {
       let sql = 'SELECT id, workspace_id, title, created_at, updated_at, metadata FROM conversations';
       const params: unknown[] = [];
@@ -193,6 +196,7 @@ export class SqlJsConversationRepository implements ConversationRepository {
   }
 
   async update(id: string, input: UpdateConversationInput): Promise<ConversationResult> {
+    await Promise.resolve();
     try {
       const existingResult = this.db.exec('SELECT id, workspace_id, title, created_at, updated_at, metadata FROM conversations WHERE id = ?', [id] as SqlValue[]);
       if (existingResult.length === 0 || existingResult[0].values.length === 0) {
@@ -223,9 +227,10 @@ export class SqlJsConversationRepository implements ConversationRepository {
   }
 
   async delete(id: string): Promise<DeleteResult> {
+    await Promise.resolve();
     try {
-      const result = this.db.exec('DELETE FROM conversations WHERE id = ?', [id] as SqlValue[]);
-      const deleted = result.length > 0 && result[0].values.length > 0 && (result[0].values[0][0] as number) > 0;
+      this.db.exec('DELETE FROM conversations WHERE id = ?', [id] as SqlValue[]);
+      const deleted = this.db.getRowsModified() > 0;
       return { deleted, error: null };
     } catch (error) {
       return { deleted: false, error: new PersistenceError('Failed to delete conversation', error instanceof Error ? error : undefined) };
@@ -237,6 +242,7 @@ export class SqlJsMessageRepository implements MessageRepository {
   constructor(private readonly db: SQLDatabase) {}
 
   async create(input: CreateMessageInput): Promise<MessageResult> {
+    await Promise.resolve();
     try {
       const now = Date.now();
       const message = {
@@ -278,6 +284,7 @@ export class SqlJsMessageRepository implements MessageRepository {
   }
 
   async getById(id: string): Promise<MessageResult> {
+    await Promise.resolve();
     try {
       const result = this.db.exec(
         'SELECT id, conversation_id, role, content, status, timestamp, seq, metadata FROM messages WHERE id = ?',
@@ -293,6 +300,7 @@ export class SqlJsMessageRepository implements MessageRepository {
   }
 
   async getByConversationId(conversationId: string): Promise<MessageListResult> {
+    await Promise.resolve();
     try {
       const result = this.db.exec(
         'SELECT id, conversation_id, role, content, status, timestamp, seq, metadata FROM messages WHERE conversation_id = ? ORDER BY timestamp ASC, seq ASC',
@@ -306,6 +314,7 @@ export class SqlJsMessageRepository implements MessageRepository {
   }
 
   async update(id: string, input: UpdateMessageInput): Promise<MessageResult> {
+    await Promise.resolve();
     try {
       const existingResult = this.db.exec(
         'SELECT id, conversation_id, role, content, status, timestamp, seq, metadata FROM messages WHERE id = ?',
@@ -338,9 +347,10 @@ export class SqlJsMessageRepository implements MessageRepository {
   }
 
   async delete(id: string): Promise<DeleteResult> {
+    await Promise.resolve();
     try {
-      const result = this.db.exec('DELETE FROM messages WHERE id = ?', [id] as SqlValue[]);
-      const deleted = result.length > 0 && result[0].values.length > 0 && (result[0].values[0][0] as number) > 0;
+      this.db.exec('DELETE FROM messages WHERE id = ?', [id] as SqlValue[]);
+      const deleted = this.db.getRowsModified() > 0;
       return { deleted, error: null };
     } catch (error) {
       return { deleted: false, error: new PersistenceError('Failed to delete message', error instanceof Error ? error : undefined) };
@@ -348,9 +358,10 @@ export class SqlJsMessageRepository implements MessageRepository {
   }
 
   async deleteByConversationId(conversationId: string): Promise<DeleteResult> {
+    await Promise.resolve();
     try {
-      const result = this.db.exec('DELETE FROM messages WHERE conversation_id = ?', [conversationId] as SqlValue[]);
-      const deleted = result.length > 0 && result[0].values.length > 0 && (result[0].values[0][0] as number) > 0;
+      this.db.exec('DELETE FROM messages WHERE conversation_id = ?', [conversationId] as SqlValue[]);
+      const deleted = this.db.getRowsModified() > 0;
       return { deleted, error: null };
     } catch (error) {
       return { deleted: false, error: new PersistenceError('Failed to delete messages by conversation', error instanceof Error ? error : undefined) };

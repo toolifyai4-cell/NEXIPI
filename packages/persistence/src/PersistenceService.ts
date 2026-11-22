@@ -7,7 +7,7 @@ import z from 'zod';
 export type SQLDatabase = SqlJsDatabaseType;
 
 export const ConversationValidationSchema = z.object({
-  id: z.string(),
+  id: z.string().min(1),
   workspace_id: z.string().min(1),
   title: z.string().min(1),
   created_at: z.number().int().nonnegative(),
@@ -20,8 +20,8 @@ export function validateConversation(data: unknown): z.infer<typeof Conversation
 }
 
 export const MessageValidationSchema = z.object({
-  id: z.string(),
-  conversation_id: z.string(),
+  id: z.string().min(1),
+  conversation_id: z.string().min(1),
   role: z.enum(['user', 'assistant', 'system']),
   content: z.string(),
   status: z.enum(['pending', 'streaming', 'completed', 'failed', 'cancelled']),
