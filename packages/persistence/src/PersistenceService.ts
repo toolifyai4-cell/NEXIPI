@@ -1,16 +1,30 @@
-import Database from 'sql.js';
+import initSqlJs from 'sql.js';
 import z from 'zod';
+
+// Type from @types/sql.js - the Module interface returned by initSqlJs
+interface SqlJsModule {
+  Database: new (buffer?: Uint8Array | string, filePath?: string) => SQLDatabaseInternal;
+  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
+  close: () => Promise<void> | void;
+  export: () => Uint8Array;
+}
 
 export type SQLDatabase = {
   exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
   close: () => Promise<void> | void;
   export: () => Uint8Array;
-  loadExtension: (name: string, data?: Uint8Array) => void;
 };
 
 export type SQLStatement = {
   readonly: boolean;
 };
+
+// Internal database type that includes all runtime methods
+interface SQLDatabaseInternal {
+  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
+  close: () => Promise<void> | void;
+  export: () => Uint8Array;
+}
 
 export const ConversationValidationSchema = z.object({
   id: z.string(),
@@ -71,14 +85,21 @@ export function createMessageId(id: string): string {
 export class PersistenceService {
   private readonly dbPath: string | undefined;
   private db: SQLDatabase | null = null;
+  private sqlModule: SqlJsModule | null = null;
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath;
   }
 
-  init(): void {
-    // @ts-expect-error sql.js Database constructor accepts string paths at runtime despite type definitions
-    this.db = new Database(undefined) as SQLDatabase;
+  async init(): Promise<void> {
+    if (this.sqlModule) {
+      // Already initialized
+      return;
+    }
+
+    this.sqlModule = await initSqlJs();
+    const DatabaseClass = this.sqlModule.Database;
+    this.db = new DatabaseClass(undefined) as SQLDatabase;
   }
 
   async close(): Promise<void> {
