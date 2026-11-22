@@ -1,17 +1,19 @@
 import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import {
-  PersistenceService,
+  PersistenceService as FoundationPersistenceService,
+} from './PersistenceService.js';
+import {
   SqlJsConversationRepository,
   CreateConversationInput,
   UpdateConversationInput,
-} from './index.js';
+} from './repositories.js';
 
 describe('SqlJsConversationRepository', () => {
-  let service: PersistenceService;
+  let service: FoundationPersistenceService;
   let repository: SqlJsConversationRepository;
 
   beforeEach(async () => {
-    service = new PersistenceService();
+    service = new FoundationPersistenceService();
     await service.init();
     repository = new SqlJsConversationRepository(service.getRawDatabase());
   });

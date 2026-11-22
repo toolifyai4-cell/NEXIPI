@@ -3,20 +3,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import {
-  PersistenceService,
+  PersistenceService as FoundationPersistenceService,
+} from './PersistenceService.js';
+import {
   SqlJsConversationRepository,
   SqlJsMessageRepository,
   CreateConversationInput,
   CreateMessageInput,
-} from './index.js';
+} from './repositories.js';
 
 describe('Repository Integrity Tests', () => {
-  let service: PersistenceService;
+  let service: FoundationPersistenceService;
   let conversationRepo: SqlJsConversationRepository;
   let messageRepo: SqlJsMessageRepository;
 
   beforeEach(async () => {
-    service = new PersistenceService();
+    service = new FoundationPersistenceService();
     await service.init();
     conversationRepo = new SqlJsConversationRepository(service.getRawDatabase());
     messageRepo = new SqlJsMessageRepository(service.getRawDatabase());
@@ -226,7 +228,7 @@ describe('Repository File Persistence Tests', () => {
   });
 
   it('should persist conversations across close and reopen', async () => {
-    const service1 = new PersistenceService(dbPath);
+    const service1 = new FoundationPersistenceService(dbPath);
     await service1.init();
     const conversationRepo1 = new SqlJsConversationRepository(service1.getRawDatabase());
     const messageRepo1 = new SqlJsMessageRepository(service1.getRawDatabase());
@@ -239,7 +241,7 @@ describe('Repository File Persistence Tests', () => {
 
     expect(fs.existsSync(dbPath)).toBe(true);
 
-    const service2 = new PersistenceService(dbPath);
+    const service2 = new FoundationPersistenceService(dbPath);
     await service2.init();
     const conversationRepo2 = new SqlJsConversationRepository(service2.getRawDatabase());
     const messageRepo2 = new SqlJsMessageRepository(service2.getRawDatabase());
@@ -258,7 +260,7 @@ describe('Repository File Persistence Tests', () => {
   });
 
   it('should persist updates across close and reopen', async () => {
-    const service1 = new PersistenceService(dbPath);
+    const service1 = new FoundationPersistenceService(dbPath);
     await service1.init();
     const conversationRepo1 = new SqlJsConversationRepository(service1.getRawDatabase());
 
@@ -268,7 +270,7 @@ describe('Repository File Persistence Tests', () => {
     service1.save();
     service1.close();
 
-    const service2 = new PersistenceService(dbPath);
+    const service2 = new FoundationPersistenceService(dbPath);
     await service2.init();
     const conversationRepo2 = new SqlJsConversationRepository(service2.getRawDatabase());
 
@@ -281,7 +283,7 @@ describe('Repository File Persistence Tests', () => {
 
   it('should handle multiple save/close/reopen cycles with repositories', async () => {
     // Cycle 1
-    const service1 = new PersistenceService(dbPath);
+    const service1 = new FoundationPersistenceService(dbPath);
     await service1.init();
     const conversationRepo1 = new SqlJsConversationRepository(service1.getRawDatabase());
     await conversationRepo1.create({ id: 'conv-1', workspace_id: 'ws-1', title: 'Conv 1', created_at: 1000, updated_at: 1000 });
@@ -289,7 +291,7 @@ describe('Repository File Persistence Tests', () => {
     service1.close();
 
     // Cycle 2
-    const service2 = new PersistenceService(dbPath);
+    const service2 = new FoundationPersistenceService(dbPath);
     await service2.init();
     const conversationRepo2 = new SqlJsConversationRepository(service2.getRawDatabase());
     await conversationRepo2.create({ id: 'conv-2', workspace_id: 'ws-1', title: 'Conv 2', created_at: 2000, updated_at: 2000 });
@@ -297,7 +299,7 @@ describe('Repository File Persistence Tests', () => {
     service2.close();
 
     // Cycle 3
-    const service3 = new PersistenceService(dbPath);
+    const service3 = new FoundationPersistenceService(dbPath);
     await service3.init();
     const conversationRepo3 = new SqlJsConversationRepository(service3.getRawDatabase());
     const listResult = await conversationRepo3.list();

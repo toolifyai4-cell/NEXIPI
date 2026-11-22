@@ -14,7 +14,8 @@
   },
   "dependencies": {
     "sql.js": "^1.17.0",
-    "zod": "^3.22.0"
+    "zod": "^3.22.0",
+    "@nexipi/shared": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20.10.0",
