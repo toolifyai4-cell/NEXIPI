@@ -31,7 +31,7 @@ import {
   createStreamErrorEvent,
   createStreamCancelEvent,
 } from '@nexipi/shared';
-import { PersistenceAdapter, createPersistenceAdapter, type PersistenceAdapterOptions } from './persistence-adapter.js';
+import type { PersistenceAdapter } from './persistence-adapter.js';
 import { PersistenceError } from '@nexipi/persistence';
 
 export interface ChatServiceEvents extends EventMap {

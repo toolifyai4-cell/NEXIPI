@@ -1,6 +1,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { ChatService, createChatService } from './chat.js';
 import { createProviderRegistry } from './registry.js';
+import { PersistenceAdapter, createPersistenceAdapter } from './persistence-adapter.js';
+import { PersistenceError } from '@nexipi/persistence';
 import {
   createProviderId,
   createModelId,
@@ -10,6 +12,11 @@ import {
 } from './types.js';
 import { EngineErrorCode, isEngineError } from './errors.js';
 import type { StreamEvent } from '@nexipi/core';
+import {
+  FoundationPersistenceService,
+  SqlJsConversationRepository,
+  SqlJsMessageRepository,
+} from '@nexipi/persistence';
 
 function createMockStreamingProvider(
   overrides: {

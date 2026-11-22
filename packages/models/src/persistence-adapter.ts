@@ -1,5 +1,5 @@
-import type { IPersistencePort, Conversation as PersistenceConversation, CreateConversationInput, UpdateConversationInput, Message as PersistenceMessage, CreateMessageInput, UpdateMessageInput, DeleteResult, ConversationResult, ConversationListResult, MessageResult, MessageListResult } from '@nexipi/persistence';
-import type { ConversationId, MessageId, Conversation, Message, MessageRole, MessageStatus } from '@nexipi/shared';
+import type { IPersistencePort, Conversation as PersistenceConversation, CreateConversationInput, UpdateConversationInput, Message as PersistenceMessage, CreateMessageInput, UpdateMessageInput, ConversationResult, MessageResult } from '@nexipi/persistence';
+import type { ConversationId, MessageId, Conversation, Message, MessageStatus } from '@nexipi/shared';
 import { PersistenceError } from '@nexipi/persistence';
 
 export interface PersistenceAdapterOptions {
@@ -41,7 +41,7 @@ export class PersistenceAdapter {
 
   private fromPersistenceConversation(p: PersistenceConversation): Conversation {
     return {
-      id: p.id as ConversationId,
+      id: p.id,
       title: p.title,
       createdAt: p.createdAt,
       updatedAt: p.updatedAt,
@@ -64,8 +64,8 @@ export class PersistenceAdapter {
 
   private fromPersistenceMessage(p: PersistenceMessage): Message {
     return {
-      id: p.id as MessageId,
-      conversationId: p.conversationId as ConversationId,
+      id: p.id,
+      conversationId: p.conversationId,
       role: p.role,
       content: p.content,
       status: p.status,
@@ -113,7 +113,7 @@ export class PersistenceAdapter {
     if (result.error) {
       throw result.error;
     }
-    return result.conversations.map(this.fromPersistenceConversation);
+    return result.conversations.map((c) => this.fromPersistenceConversation(c));
   }
 
   async updateConversation(id: ConversationId, title?: string, metadata?: Record<string, unknown>): Promise<Conversation> {
@@ -151,7 +151,7 @@ export class PersistenceAdapter {
     if (result.error) {
       throw result.error;
     }
-    return result.messages.map(this.fromPersistenceMessage);
+    return result.messages.map((m) => this.fromPersistenceMessage(m));
   }
 
   async updateMessage(id: MessageId, content?: string, status?: MessageStatus, metadata?: Record<string, unknown>): Promise<Message> {
