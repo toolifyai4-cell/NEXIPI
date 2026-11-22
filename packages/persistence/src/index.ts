@@ -1,1 +1,13 @@
-export { PersistenceService, ConversationValidationSchema, MessageValidationSchema, Conversation, Message } from './PersistenceService.js';
+export {
+  PersistenceService,
+  PersistenceError,
+  ConversationValidationSchema,
+  MessageValidationSchema,
+  Conversation,
+  Message,
+  validateConversation,
+  validateMessage,
+  createConversationId,
+  createMessageId,
+  SQLDatabase,
+} from './PersistenceService.js';

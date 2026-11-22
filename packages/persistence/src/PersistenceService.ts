@@ -1,30 +1,9 @@
-import initSqlJs from 'sql.js';
+import initSqlJs, { Database as SqlJsDatabase, QueryExecResult } from 'sql.js';
+import * as fs from 'fs';
+import * as path from 'path';
 import z from 'zod';
 
-// Type from @types/sql.js - the Module interface returned by initSqlJs
-interface SqlJsModule {
-  Database: new (buffer?: Uint8Array | string, filePath?: string) => SQLDatabaseInternal;
-  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
-  close: () => Promise<void> | void;
-  export: () => Uint8Array;
-}
-
-export type SQLDatabase = {
-  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
-  close: () => Promise<void> | void;
-  export: () => Uint8Array;
-};
-
-export type SQLStatement = {
-  readonly: boolean;
-};
-
-// Internal database type that includes all runtime methods
-interface SQLDatabaseInternal {
-  exec: (sql: string, params?: unknown[]) => SQLStatement | SQLStatement[] | void;
-  close: () => Promise<void> | void;
-  export: () => Uint8Array;
-}
+export type SQLDatabase = SqlJsDatabase;
 
 export const ConversationValidationSchema = z.object({
   id: z.string(),
@@ -82,10 +61,79 @@ export function createMessageId(id: string): string {
   return id;
 }
 
+interface Migration {
+  version: number;
+  name: string;
+  up: (db: SQLDatabase) => void;
+}
+
+const MIGRATIONS: Migration[] = [
+  {
+    version: 1,
+    name: 'create_conversations_table',
+    up: (db: SQLDatabase) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS conversations (
+          id TEXT PRIMARY KEY,
+          workspace_id TEXT NOT NULL,
+          title TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL,
+          metadata TEXT NOT NULL DEFAULT '{}'
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_workspace ON conversations(workspace_id)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_updated ON conversations(updated_at DESC)`);
+    },
+  },
+  {
+    version: 2,
+    name: 'create_messages_table',
+    up: (db: SQLDatabase) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS messages (
+          id TEXT PRIMARY KEY,
+          conversation_id TEXT NOT NULL,
+          role TEXT NOT NULL,
+          content TEXT NOT NULL,
+          status TEXT NOT NULL,
+          timestamp INTEGER NOT NULL,
+          seq INTEGER NOT NULL DEFAULT 0,
+          metadata TEXT NOT NULL DEFAULT '{}',
+          FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+        )
+      `);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id, timestamp ASC)`);
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_messages_seq ON messages(conversation_id, seq ASC)`);
+    },
+  },
+  {
+    version: 3,
+    name: 'create_migrations_table',
+    up: (db: SQLDatabase) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS migrations (
+          version INTEGER PRIMARY KEY,
+          name TEXT NOT NULL,
+          applied_at INTEGER NOT NULL
+        )
+      `);
+    },
+  },
+];
+
+export class PersistenceError extends Error {
+  constructor(message: string, public readonly cause?: Error) {
+    super(message);
+    this.name = 'PersistenceError';
+  }
+}
+
 export class PersistenceService {
   private readonly dbPath: string | undefined;
   private db: SQLDatabase | null = null;
-  private sqlModule: SqlJsModule | null = null;
+  private sqlModule: { Database: typeof SqlJsDatabase } | null = null;
+  private isClosed = false;
 
   constructor(dbPath?: string) {
     this.dbPath = dbPath;
@@ -93,33 +141,132 @@ export class PersistenceService {
 
   async init(): Promise<void> {
     if (this.sqlModule) {
-      // Already initialized
       return;
     }
 
-    this.sqlModule = await initSqlJs();
+    try {
+      this.sqlModule = await initSqlJs();
+    } catch (error) {
+      throw new PersistenceError('Failed to initialize sql.js', error instanceof Error ? error : undefined);
+    }
+
     const DatabaseClass = this.sqlModule.Database;
-    this.db = new DatabaseClass(undefined) as SQLDatabase;
+
+    if (this.dbPath && fs.existsSync(this.dbPath)) {
+      try {
+        const fileData = fs.readFileSync(this.dbPath);
+        this.db = new DatabaseClass(new Uint8Array(fileData));
+      } catch (error) {
+        throw new PersistenceError(`Failed to load database from ${this.dbPath}`, error instanceof Error ? error : undefined);
+      }
+    } else {
+      this.db = new DatabaseClass();
+    }
+
+    this.enableForeignKeys();
+    await this.runMigrations();
   }
 
-  async close(): Promise<void> {
-    if (this.db) {
-      await this.db.close();
+  private enableForeignKeys(): void {
+    if (!this.db) return;
+    this.db.exec('PRAGMA foreign_keys = ON');
+  }
+
+  private async runMigrations(): Promise<void> {
+    if (!this.db) return;
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS migrations (
+        version INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        applied_at INTEGER NOT NULL
+      )
+    `);
+
+    const appliedResult = this.db.exec('SELECT version FROM migrations ORDER BY version');
+    const appliedVersions = new Set<number>();
+    if (appliedResult.length > 0 && appliedResult[0].values.length > 0) {
+      for (const row of appliedResult[0].values) {
+        appliedVersions.add(row[0] as number);
+      }
+    }
+
+    for (const migration of MIGRATIONS) {
+      if (appliedVersions.has(migration.version)) {
+        continue;
+      }
+
+      try {
+        migration.up(this.db);
+        this.db.exec(
+          'INSERT INTO migrations (version, name, applied_at) VALUES (?, ?, ?)',
+          [migration.version, migration.name, Date.now()]
+        );
+      } catch (error) {
+        throw new PersistenceError(
+          `Migration ${migration.version} (${migration.name}) failed`,
+          error instanceof Error ? error : undefined
+        );
+      }
+    }
+  }
+
+  close(): void {
+    if (this.db && !this.isClosed) {
+      this.db.close();
       this.db = null;
+      this.isClosed = true;
     }
   }
 
   exportDatabase(): Uint8Array {
     if (!this.db) {
-      throw new Error('Database not initialized. Call init() first.');
+      throw new PersistenceError('Database not initialized. Call init() first.');
+    }
+    if (this.isClosed) {
+      throw new PersistenceError('Database has been closed.');
     }
     return this.db.export();
   }
 
+  save(): void {
+    if (!this.dbPath) {
+      throw new PersistenceError('No database path configured. Cannot save.');
+    }
+    if (!this.db) {
+      throw new PersistenceError('Database not initialized. Call init() first.');
+    }
+    if (this.isClosed) {
+      throw new PersistenceError('Database has been closed.');
+    }
+
+    try {
+      const data = this.exportDatabase();
+      const dir = path.dirname(this.dbPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
+      fs.writeFileSync(this.dbPath, data);
+    } catch (error) {
+      throw new PersistenceError(`Failed to save database to ${this.dbPath}`, error instanceof Error ? error : undefined);
+    }
+  }
+
   getRawDatabase(): SQLDatabase {
     if (!this.db) {
-      throw new Error('Database not initialized. Call init() first.');
+      throw new PersistenceError('Database not initialized. Call init() first.');
+    }
+    if (this.isClosed) {
+      throw new PersistenceError('Database has been closed.');
     }
     return this.db;
+  }
+
+  getDbPath(): string | undefined {
+    return this.dbPath;
+  }
+
+  isInitialized(): boolean {
+    return this.db !== null && !this.isClosed;
   }
 }
