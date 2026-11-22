@@ -1,5 +1,5 @@
-import { ConversationId, MessageId, MessageRole, MessageStatus } from '@nexipi/shared';
-import { PersistenceError } from './PersistenceService.js';
+import type { ConversationId, MessageId, MessageRole, MessageStatus } from '@nexipi/shared';
+import type { PersistenceError } from './PersistenceService.js';
 
 export interface CreateConversationInput {
   id: ConversationId;

@@ -398,19 +398,6 @@ describe('PersistenceService - Integration Tests', () => {
       }
     });
 
-    it('should persist data across close and reopen with owned foundation', async () => {
-      // Phase 1: Create service with owned foundation, insert data, save and close
-      const service1 = new PersistenceService(
-        new SqlJsConversationRepository((new FoundationPersistenceService(dbPath)).getRawDatabase()),
-        new SqlJsMessageRepository((new FoundationPersistenceService(dbPath)).getRawDatabase())
-      );
-      
-      // Actually we need a different approach for file persistence testing
-      // since the wrapper doesn't expose save/close directly
-      // This test is more appropriate for the foundation service directly
-      // We'll test the wrapper's integration with a shared foundation
-    });
-
     it('should persist data across close and reopen with shared foundation', async () => {
       const foundation1 = new FoundationPersistenceService(dbPath);
       await foundation1.init();

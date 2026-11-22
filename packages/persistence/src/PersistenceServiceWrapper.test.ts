@@ -490,6 +490,4 @@ describe('PersistenceService - Error Handling', () => {
       title: 'Test',
     })).rejects.toThrow('Persistence not initialized');
   });
-    expect(result.error!.message).toContain('not initialized');
-  });
 });

@@ -1,4 +1,4 @@
-import {
+import type {
   IPersistencePort,
   CreateConversationInput,
   UpdateConversationInput,
@@ -12,7 +12,7 @@ import {
   MessageListResult,
   DeleteResult,
 } from './port.js';
-import {
+import type {
   ConversationRepository,
   MessageRepository,
   ConversationRecord,
@@ -28,7 +28,7 @@ import {
   DeleteResult as RepoDeleteResult,
 } from './repositories.js';
 import { PersistenceError, PersistenceService as FoundationPersistenceService } from './PersistenceService.js';
-import { ConversationId, MessageId } from '@nexipi/shared';
+import type { ConversationId, MessageId } from '@nexipi/shared';
 
 function toRepoConversationInput(input: CreateConversationInput): RepoCreateConversationInput {
   return {
@@ -170,6 +170,8 @@ export class PersistenceService implements IPersistencePort {
     if (this.ownsFoundationService) {
       this.foundationService.close();
     }
+    // No async cleanup required for external foundation service
+    await Promise.resolve();
   }
 
   async createConversation(input: CreateConversationInput): Promise<ConversationResult> {
