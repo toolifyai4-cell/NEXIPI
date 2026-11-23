@@ -1,7 +1,6 @@
 import type {
   WorkspaceFolderId,
   FileMetadata,
-  DiscoveryError,
 } from '../types.js';
 import { normalizeAbsolutePath } from './scan-types.js';
 

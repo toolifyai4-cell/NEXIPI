@@ -1,6 +1,5 @@
 import {
   EngineError,
-  EngineErrorCode,
   type EngineErrorOptions,
 } from '@nexipi/core';
 import type { ScanId } from './scan-types.js';

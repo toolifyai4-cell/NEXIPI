@@ -6,10 +6,10 @@ import type {
   WorkspaceProviderSubscription,
   WorkspaceFoldersChangeEvent,
 } from '../../discovery/workspace-provider.js';
-import type { WorkspaceFolder, WorkspaceFolderId } from '../../types.js';
+import type { WorkspaceFolder } from '../../types.js';
 import { createWorkspaceFolderId } from '../../types.js';
 import { WorkspaceScanOrchestrator } from '../workspace-scan-orchestrator.js';
-import type { ScanResult } from '../scan-types.js';
+import type { ScanProgress, ScanResult, WorkspaceScanOrchestratorOptions } from '../scan-types.js';
 
 export function makeEntry(name: string, type: DirectoryEntry['type']): DirectoryEntry {
   return { name, type };
@@ -21,7 +21,7 @@ export function makeWorkspaceFolder(
   index: number = 0
 ): WorkspaceFolder {
   return {
-    id: createWorkspaceFolderId(uri) as WorkspaceFolderId,
+    id: createWorkspaceFolderId(uri),
     uri,
     name,
     index,
@@ -106,7 +106,6 @@ export class VirtualFileSystem implements FileSystemProvider {
       return [];
     }
     return base.map((e) => {
-      const full = key ? `${key}/${e.name}` : e.name;
       return { ...e };
     });
   }
@@ -147,7 +146,7 @@ export function makeProvider(folders: readonly WorkspaceFolder[]): WorkspaceProv
 export function createTestOrchestrator(
   provider: WorkspaceProvider,
   fileSystem: FileSystemProvider,
-  options?: Parameters<typeof WorkspaceScanOrchestrator>[2]
+  options?: WorkspaceScanOrchestratorOptions
 ): WorkspaceScanOrchestrator {
   return new WorkspaceScanOrchestrator(provider, fileSystem, options);
 }
@@ -162,9 +161,9 @@ export function captureEvents<T>(
   eventName: 'scan:progress' | 'scan:state-changed' | 'scan:started' | 'scan:completed' | 'scan:cancelled' | 'scan:failed'
 ): CapturedEvents<T> {
   const events: T[] = [];
-  const sub = orchestrator.on(eventName as any, ((payload: unknown) => {
+  const sub = orchestrator.on(eventName, (payload: unknown) => {
     events.push(payload as T);
-  }) as any);
+  });
   return { events, unsubscribe: () => sub.unsubscribe() };
 }
 
@@ -174,17 +173,17 @@ export function waitForEvent<T>(
   predicate?: (payload: T) => boolean
 ): Promise<T> {
   return new Promise<T>((resolve, reject) => {
-    const sub = orchestrator.on(eventName as any, ((payload: unknown) => {
-      const raw = payload as any;
-      // Many scan events wrap the payload under `progress`/`result`; unwrap so
-      // predicates can target the meaningful field directly.
-      const target = raw && raw.progress !== undefined ? raw.progress : raw;
+    const sub = orchestrator.on(eventName, (payload: unknown) => {
+      let target: unknown = payload;
+      if (target !== null && typeof target === 'object' && 'progress' in target) {
+        target = (target as { readonly progress: unknown }).progress;
+      }
       const p = target as T;
       if (!predicate || predicate(p)) {
         sub.unsubscribe();
         resolve(p);
       }
-    }) as any);
+    });
     setTimeout(() => {
       sub.unsubscribe();
       reject(new Error(`Timed out waiting for event ${eventName}`));
@@ -206,7 +205,7 @@ export async function startScanBlockedAtAnalysis(
 ): Promise<{ promise: Promise<ScanResult>; release: () => void }> {
   const gate = vfs.setReadDirectoryGate();
   const promise = startScan();
-  await waitForEvent(orchestrator, 'scan:progress', (e) => e.stage === 'analyzing-projects');
+  await waitForEvent<ScanProgress>(orchestrator, 'scan:progress', (e) => e.stage === 'analyzing-projects');
   return { promise, release: () => gate.release() };
 }
 

@@ -1,7 +1,6 @@
 import { z } from 'zod';
-import type { EventMap, EventName } from '@nexipi/core';
+import type { EventMap, EventName, Logger } from '@nexipi/core';
 import type {
-  WorkspaceFolder,
   WorkspaceFolderId,
   FileMetadata,
   DiscoveryError,
@@ -255,7 +254,7 @@ export interface OrchestratorStatus {
  */
 export interface WorkspaceScanOrchestratorOptions {
   readonly config?: Partial<WorkspaceScanConfig>;
-  readonly logger?: import('@nexipi/core').Logger;
+  readonly logger?: Logger;
 }
 
 export interface ValidatedWorkspaceScanConfig extends WorkspaceScanConfig {}

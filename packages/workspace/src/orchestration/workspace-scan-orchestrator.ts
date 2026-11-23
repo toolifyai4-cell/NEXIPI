@@ -24,16 +24,19 @@ import type {
   ProjectRoot,
 } from '../types.js';
 import {
-  defaultFileDiscoveryConfig,
-  MandatorySafetyExclusions,
-  DefaultDirectoryExclusions,
-  validateWorkspaceScanConfig,
   defaultWorkspaceScanConfig,
+  validateWorkspaceScanConfig,
   type WorkspaceScanConfig,
 } from '../config.js';
 import {
-  ScanId,
   createScanId,
+  isTerminalScanState,
+  isActiveScanState,
+  normalizeAbsolutePath,
+  isPathUnderRoot,
+} from './scan-types.js';
+import type {
+  ScanId,
   ScanState,
   ScanStage,
   FileChangeType,
@@ -48,10 +51,6 @@ import {
   ScanOptions,
   OrchestratorStatus,
   WorkspaceScanOrchestratorOptions,
-  isTerminalScanState,
-  isActiveScanState,
-  normalizeAbsolutePath,
-  isPathUnderRoot,
 } from './scan-types.js';
 import {
   ScanError,
@@ -87,6 +86,7 @@ interface ActiveScan extends QueuedScan {
   stage: ScanStage;
   progress: ScanProgress;
   lastEmitTime: number;
+  abandoned: boolean;
 }
 
 function initialProgress(
@@ -392,9 +392,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     };
   }
 
-  async cancel(scanId?: ScanId): Promise<boolean> {
+  cancel(scanId?: ScanId): Promise<boolean> {
     if (this.disposed) {
-      return false;
+      return Promise.resolve(false);
     }
 
     const targets: ActiveScan[] = [];
@@ -442,7 +442,7 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     }
 
     this.transitionOrchestratorState();
-    return cancelledAny;
+    return Promise.resolve(cancelledAny);
   }
 
   dispose(): void {
@@ -500,22 +500,8 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
   }): Promise<ScanResult> {
     this.throwIfDisposed();
 
-    const workspace = await this.resolveWorkspace();
-    const workspaceId = params.workspaceId ?? workspace.id;
-
-    const existing = this.findActiveScanForWorkspace(workspaceId);
-    if (existing) {
-      if (this.config.duplicateScanBehavior === 'reject') {
-        throw new InvalidWorkspaceStateError(
-          `A scan is already active for workspace ${workspaceId}`,
-          { scanId: existing.scanId }
-        );
-      }
-      if (this.config.duplicateScanBehavior === 'cancel-existing') {
-        await this.cancel(existing.scanId);
-      }
-    }
-
+    // --- Synchronous setup: create scan, apply concurrency policy, enqueue ---
+    // This ensures queue count is visible immediately, before any async work.
     const abortController = new AbortController();
     if (params.abortSignal) {
       params.abortSignal.addEventListener('abort', () => {
@@ -525,19 +511,21 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
 
     const scanId = createScanId(randomUUID());
     const startTime = Date.now();
+    const initialWorkspaceId = params.workspaceId ?? '';
 
     const scan: ActiveScan = {
       scanId,
-      workspaceId,
+      workspaceId: initialWorkspaceId,
       folderId: params.folderId,
       abortController,
       state: 'queued',
       startTime,
       stage: 'initializing',
-      progress: initialProgress(scanId, workspaceId, startTime),
+      progress: initialProgress(scanId, initialWorkspaceId, startTime),
       lastEmitTime: startTime,
       resolve: () => {},
       reject: () => {},
+      abandoned: false,
     };
 
     const resultPromise = new Promise<ScanResult>((resolve, reject) => {
@@ -546,16 +534,21 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     });
 
     let runNow = false;
+    let needsCancelPrevious = false;
+    let addedToActive = false;
+
     switch (this.config.concurrencyPolicy) {
       case 'cancel-previous':
-        await this.cancelAllActive();
-        runNow = true;
+        needsCancelPrevious = true;
         break;
       case 'queue':
         runNow = this.getRunningScanCount() === 0;
         if (!runNow) {
           this.enqueue(scan);
         }
+        this.activeScans.set(scanId, scan);
+        addedToActive = true;
+        this.transitionScanState(scan, 'queued');
         break;
       case 'allow-all':
         if (this.getRunningScanCount() < this.config.maxConcurrentScans) {
@@ -563,6 +556,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
         } else {
           this.enqueue(scan);
         }
+        this.activeScans.set(scanId, scan);
+        addedToActive = true;
+        this.transitionScanState(scan, 'queued');
         break;
     }
 
@@ -578,10 +574,48 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       );
     }
 
-    this.activeScans.set(scanId, scan);
-    this.transitionScanState(scan, 'queued');
-    this.transitionOrchestratorState();
-    this.emitScanStarted(scan, workspaceId);
+    if (addedToActive) {
+      this.transitionOrchestratorState();
+      this.emitScanStarted(scan, initialWorkspaceId);
+    }
+
+    // --- Async: resolve workspace, handle duplicates, start scan ---
+    const workspace = await this.resolveWorkspace();
+    const workspaceId = params.workspaceId ?? workspace.id;
+    scan.workspaceId = workspaceId;
+    scan.progress = { ...scan.progress, workspaceId };
+
+    const existing = this.findActiveScanForWorkspace(workspaceId);
+    if (existing && existing.scanId !== scanId) {
+      if (this.config.duplicateScanBehavior === 'reject') {
+        if (addedToActive) {
+          this.activeScans.delete(scanId);
+          const qIdx = this.queue.indexOf(scan);
+          if (qIdx >= 0) {
+            this.queue.splice(qIdx, 1);
+          }
+        }
+        throw new InvalidWorkspaceStateError(
+          `A scan is already active for workspace ${workspaceId}`,
+          { scanId: existing.scanId }
+        );
+      }
+      if (this.config.duplicateScanBehavior === 'cancel-existing') {
+        await this.cancel(existing.scanId);
+      }
+    }
+
+    if (needsCancelPrevious) {
+      await this.cancelAllActive();
+      if (!addedToActive) {
+        this.activeScans.set(scanId, scan);
+        addedToActive = true;
+        this.transitionScanState(scan, 'queued');
+      }
+      this.transitionOrchestratorState();
+      this.emitScanStarted(scan, workspaceId);
+      runNow = true;
+    }
 
     if (runNow) {
       void this.runScan(scan);
@@ -596,12 +630,31 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     const signal = scan.abortController.signal;
     try {
       this.transitionScanState(scan, 'scanning');
-      let result: ScanResult;
-      if (scan.folderId) {
-        result = await this.runFolderScan(scan);
-      } else {
-        result = await this.runFullScan(scan);
-      }
+
+      // Race the scan against the abort signal so cancelled scans settle
+      // promptly even when blocked on non-abortable provider I/O.
+      const scanPromise = scan.folderId
+        ? this.runFolderScan(scan)
+        : this.runFullScan(scan);
+
+      const abortPromise = new Promise<ScanResult>((_, reject) => {
+        const onAbort = (): void => {
+          signal.removeEventListener('abort', onAbort);
+          reject(
+            new ScanCancelledError(`Scan ${scan.scanId} was cancelled`, {
+              scanId: scan.scanId,
+            })
+          );
+        };
+        if (signal.aborted) {
+          onAbort();
+        } else {
+          signal.addEventListener('abort', onAbort);
+        }
+      });
+
+      scan.abandoned = false;
+      let result: ScanResult = await Promise.race([scanPromise, abortPromise]);
 
       // Late-completion guard: a cancelled scan must never be reported as completed.
       if (signal.aborted && result.state === 'completed') {
@@ -693,6 +746,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       });
 
       const folderResult = await this.discoverFolder(folder, projectRoots, signal);
+      if (scan.abandoned) {
+        return this.buildCancelledResult(scan);
+      }
       directoriesProcessed += folderResult.directoriesProcessed;
       filesExcluded += folderResult.filesExcluded;
       errors.push(...folderResult.errors);
@@ -827,6 +883,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     assertNotAborted();
 
     const folderResult = await this.discoverFolder(folder, projectRoots, signal);
+    if (scan.abandoned) {
+      return this.buildCancelledResult(scan);
+    }
 
     const allFiles: FileMetadata[] = [];
     const seenPaths = new Set<string>();
@@ -1044,10 +1103,10 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     } as FileMetadata;
   }
 
-  private async getIgnoreEngine(folder: WorkspaceFolder): Promise<IgnoreEngine> {
+  private getIgnoreEngine(folder: WorkspaceFolder): Promise<IgnoreEngine> {
     const existing = this.ignoreEngines.get(folder.id);
     if (existing) {
-      return existing;
+      return Promise.resolve(existing);
     }
     const root = normalizeAbsolutePath(folder.uri.replace(/^file:\/\//, ''));
     const engine = new IgnoreEngine({
@@ -1063,7 +1122,7 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       logger: this.logger,
     });
     this.ignoreEngines.set(folder.id, engine);
-    return engine;
+    return Promise.resolve(engine);
   }
 
   private relativePathFor(folder: WorkspaceFolder, absolutePath: string): string | undefined {
