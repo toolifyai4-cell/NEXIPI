@@ -134,6 +134,57 @@ export class FileReader {
 
     checkCancelled(options.signal, options.uri);
 
+    // No-follow symlink detection first. stat() may follow symlinks and report
+    // the target type, so lstat is used to inspect the link itself. If the
+    // provider cannot reliably determine symlink status, fail closed.
+    let linkStat: FileStat;
+    try {
+      linkStat = await this.fileSystem.lstat(absPath);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Read cancelled', {
+          path: options.uri,
+        });
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      const isNotFound =
+        (error as Error & { code?: string }).code === 'ENOENT' ||
+        message.includes('ENOENT');
+      if (isNotFound) {
+        throw createToolError(
+          ToolErrorCode.TOOL_FILE_NOT_FOUND,
+          `File not found: ${message}`,
+          { path: options.uri, cause: error instanceof Error ? error : undefined }
+        );
+      }
+      // Fail closed: provider cannot reliably determine symlink status.
+      throw createToolError(
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR,
+        `Unable to resolve path safely: ${message}`,
+        { path: options.uri, cause: error instanceof Error ? error : undefined }
+      );
+    }
+
+    checkCancelled(options.signal, options.uri);
+
+    // Symbolic links are never followed or read.
+    if (linkStat.type === 'symbolicLink') {
+      throw createToolError(
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
+        'Symbolic links are not allowed for reading',
+        { path: options.uri }
+      );
+    }
+
+    // Reject directories and any other non-file entries.
+    if (linkStat.type !== 'file') {
+      throw createToolError(ToolErrorCode.TOOL_NOT_A_FILE, 'Path is not a file', {
+        path: options.uri,
+      });
+    }
+
+    // The path is confirmed not to be a symlink, so stat() may safely follow
+    // to obtain real size/mtime/ctime metadata for limit checks.
     let stat: FileStat;
     try {
       stat = await this.fileSystem.stat(absPath);
@@ -151,24 +202,6 @@ export class FileReader {
     }
 
     checkCancelled(options.signal, options.uri);
-
-    // Symbolic links are never followed or read. The FileSystemProvider
-    // abstraction has no readlink/realpath API, so symlink targets cannot be
-    // resolved or validated against the workspace root. Reject unconditionally.
-    if (stat.type === 'symbolicLink') {
-      throw createToolError(
-        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
-        'Symbolic links are not allowed for reading',
-        { path: options.uri }
-      );
-    }
-
-    // Reject directories and any other non-file entries.
-    if (stat.type !== 'file') {
-      throw createToolError(ToolErrorCode.TOOL_NOT_A_FILE, 'Path is not a file', {
-        path: options.uri,
-      });
-    }
 
     const rel = relativePath(root, absPath);
     if (rel === undefined) {

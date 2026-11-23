@@ -64,6 +64,15 @@ class VirtualFileSystem implements FileSystemProvider {
     return { ...stat, ctime: stat.mtime };
   }
 
+  async lstat(uri: string): Promise<{ type: 'file' | 'directory' | 'symbolicLink'; size: number; mtime: number; ctime: number }> {
+    const key = uri.replace(/\\/g, '/').replace(/\/+$/, '');
+    const stat = this.stats.get(key);
+    if (!stat) {
+      throw new Error(`ENOENT: no such file or directory, lstat '${uri}'`);
+    }
+    return { ...stat, ctime: stat.mtime };
+  }
+
   async readFile(uri: string): Promise<string> {
     const key = uri.replace(/\\/g, '/').replace(/\/+$/, '');
     const content = this.files.get(key);

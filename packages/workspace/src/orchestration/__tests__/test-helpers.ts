@@ -119,6 +119,15 @@ export class VirtualFileSystem implements FileSystemProvider {
     return { type: stat.type, size: stat.size, mtime: stat.mtime, ctime: stat.ctime };
   }
 
+  async lstat(uri: string): Promise<FileStat> {
+    const key = uri.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    const stat = this.stats.get(key);
+    if (!stat) {
+      throw new Error(`Stat not found: ${key}`);
+    }
+    return { type: stat.type, size: stat.size, mtime: stat.mtime, ctime: stat.ctime };
+  }
+
   async exists(uri: string): Promise<boolean> {
     const key = uri.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
     return this.files.has(key) || this.dirs.has(key);

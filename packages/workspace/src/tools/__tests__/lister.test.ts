@@ -28,6 +28,7 @@ class VirtualFileSystem implements FileSystemProvider {
   private stats = new Map<string, FileStat & { ctime: number }>();
   private dirs = new Map<string, DirectoryEntry[]>();
   private failingStat = new Set<string>();
+  private failingLstat = new Set<string>();
   private failingRead = new Set<string>();
   private failingReaddir = new Set<string>();
 
@@ -70,6 +71,10 @@ class VirtualFileSystem implements FileSystemProvider {
     this.failingStat.add(this.key(p));
   }
 
+  failLstat(p: string): void {
+    this.failingLstat.add(this.key(p));
+  }
+
   failRead(p: string): void {
     this.failingRead.add(this.key(p));
   }
@@ -98,6 +103,18 @@ class VirtualFileSystem implements FileSystemProvider {
     const s = this.stats.get(k);
     if (!s) {
       throw new Error(`ENOENT: no such file or directory, stat '${uri}'`);
+    }
+    return { ...s };
+  }
+
+  async lstat(uri: string): Promise<FileStat> {
+    const k = this.key(uri);
+    if (this.failingLstat.has(k)) {
+      throw new Error(`cannot determine symlink status, lstat '${uri}'`);
+    }
+    const s = this.stats.get(k);
+    if (!s) {
+      throw new Error(`ENOENT: no such file or directory, lstat '${uri}'`);
     }
     return { ...s };
   }
@@ -554,6 +571,66 @@ describe('DirectoryLister', () => {
           workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
         }),
         ToolErrorCode.TOOL_INVALID_ARGUMENT
+      );
+    });
+
+    it('should reject a directory symlink pointing outside the workspace', async () => {
+      vfs.stats.set('/root/escape', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      await expectToolError(
+        lister.listDirectory({
+          uri: makeUri('/root/escape'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+    });
+
+    it('should fail closed when lstat cannot determine symlink status', async () => {
+      vfs.failLstat('/root');
+      await expectToolError(
+        lister.listDirectory({
+          uri: makeUri('/root'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR
+      );
+    });
+
+    it('should reject symlink even when stat reports the target as a directory', async () => {
+      // lstat identifies the link; stat follows and reports the target. The
+      // lister must rely on lstat and reject regardless of what stat says.
+      const fs: FileSystemProvider = {
+        readDirectory: async () => [],
+        stat: async () => ({
+          type: 'directory' as const,
+          size: 0,
+          mtime: Date.now(),
+          ctime: Date.now(),
+        }),
+        lstat: async () => ({
+          type: 'symbolicLink' as const,
+          size: 0,
+          mtime: Date.now(),
+          ctime: Date.now(),
+        }),
+        readFile: async () => '',
+        exists: async () => true,
+      };
+      const symlinkLister = createDirectoryLister({
+        fileSystem: fs,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      await expectToolError(
+        symlinkLister.listDirectory({
+          uri: makeUri('/root/link'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
       );
     });
   });

@@ -89,6 +89,15 @@ class VirtualFileSystem implements FileSystemProvider {
     return { ...stat };
   }
 
+  async lstat(uri: string): Promise<FileStat> {
+    const key = uri.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    const stat = this.stats.get(key);
+    if (!stat) {
+      throw new Error(`ENOENT: no such file or directory, lstat '${uri}'`);
+    }
+    return { ...stat };
+  }
+
   async readFile(uri: string): Promise<string> {
     const key = uri.replace(/\\/g, '/').replace(/\/+$/, '');
     const content = this.files.get(key);
@@ -233,6 +242,7 @@ describe('FileDiscoveryService', () => {
         return vfs.readDirectory(uri);
       }),
       stat: vi.fn(async (uri: string) => vfs.stat(uri)),
+      lstat: vi.fn(async (uri: string) => vfs.lstat(uri)),
       readFile: vi.fn(async (uri: string) => vfs.readFile(uri)),
       exists: vi.fn(async (uri: string) => vfs.exists(uri)),
     };

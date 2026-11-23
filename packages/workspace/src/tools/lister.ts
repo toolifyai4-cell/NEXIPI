@@ -111,30 +111,47 @@ export class DirectoryLister {
 
     checkCancelled(options.signal, options.uri);
 
-    let stat: FileStat;
+    // No-follow symlink detection first. stat() may follow symlinks and report
+    // the target type, so lstat is used to inspect the link itself. If the
+    // provider cannot reliably determine symlink status, fail closed.
+    let linkStat: FileStat;
     try {
-      stat = await this.fileSystem.stat(absPath);
+      linkStat = await this.fileSystem.lstat(absPath);
     } catch (error) {
       if (isAbortError(error)) {
         throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Listing cancelled', {
           path: options.uri,
         });
       }
+      const message = error instanceof Error ? error.message : String(error);
+      const isNotFound =
+        (error as Error & { code?: string }).code === 'ENOENT' ||
+        message.includes('ENOENT');
+      if (isNotFound) {
+        throw createToolError(
+          ToolErrorCode.TOOL_FILE_NOT_FOUND,
+          `Directory not found: ${message}`,
+          { path: options.uri, cause: error instanceof Error ? error : undefined }
+        );
+      }
+      // Fail closed: provider cannot reliably determine symlink status.
       throw createToolError(
-        ToolErrorCode.TOOL_FILE_NOT_FOUND,
-        `Directory not found: ${error instanceof Error ? error.message : String(error)}`,
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR,
+        `Unable to resolve path safely: ${message}`,
         { path: options.uri, cause: error instanceof Error ? error : undefined }
       );
     }
 
-    if (stat.type === 'symbolicLink') {
+    checkCancelled(options.signal, options.uri);
+
+    if (linkStat.type === 'symbolicLink') {
       throw createToolError(
         ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
         'Symbolic links are not allowed for listing',
         { path: options.uri }
       );
     }
-    if (stat.type !== 'directory') {
+    if (linkStat.type !== 'directory') {
       throw createToolError(ToolErrorCode.TOOL_NOT_A_DIRECTORY, 'Path is not a directory', {
         path: options.uri,
       });

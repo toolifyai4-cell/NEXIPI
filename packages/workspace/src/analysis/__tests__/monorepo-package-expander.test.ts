@@ -50,6 +50,10 @@ class VirtualFileSystem implements FileSystemProvider {
     return { type: 'file', size: 0, mtime: Date.now(), ctime: Date.now() };
   }
 
+  async lstat(): Promise<{ type: 'file' | 'directory' | 'symbolicLink'; size: number; mtime: number; ctime: number }> {
+    return { type: 'file', size: 0, mtime: Date.now(), ctime: Date.now() };
+  }
+
   async readFile(): Promise<string> {
     return '{}';
   }

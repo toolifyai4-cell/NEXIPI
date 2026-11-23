@@ -28,6 +28,7 @@ class VirtualFileSystem implements FileSystemProvider {
   private stats = new Map<string, FileStat & { ctime: number }>();
   private dirs = new Map<string, DirectoryEntry[]>();
   private failingStat = new Set<string>();
+  private failingLstat = new Set<string>();
   private failingRead = new Set<string>();
 
   private key(p: string): string {
@@ -57,6 +58,10 @@ class VirtualFileSystem implements FileSystemProvider {
 
   failStat(p: string): void {
     this.failingStat.add(this.key(p));
+  }
+
+  failLstat(p: string): void {
+    this.failingLstat.add(this.key(p));
   }
 
   failRead(p: string): void {
@@ -94,6 +99,18 @@ class VirtualFileSystem implements FileSystemProvider {
     const s = this.stats.get(k);
     if (!s) {
       throw new Error(`ENOENT: no such file or directory, stat '${uri}'`);
+    }
+    return { ...s };
+  }
+
+  async lstat(uri: string): Promise<FileStat> {
+    const k = this.key(uri);
+    if (this.failingLstat.has(k)) {
+      throw new Error(`cannot determine symlink status, lstat '${uri}'`);
+    }
+    const s = this.stats.get(k);
+    if (!s) {
+      throw new Error(`ENOENT: no such file or directory, lstat '${uri}'`);
     }
     return { ...s };
   }
@@ -523,6 +540,51 @@ describe('FileReader', () => {
           signal: controller.signal,
         }),
         ToolErrorCode.TOOL_CANCELLED
+      );
+    });
+
+    it('should fail closed when lstat cannot determine symlink status', async () => {
+      vfs.addFile('/root/secret.ts', 'secret\n');
+      vfs.failLstat('/root/secret.ts');
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/secret.ts'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR
+      );
+    });
+
+    it('should reject symlink even when stat reports the target as a file', async () => {
+      // lstat identifies the link; stat follows and reports the target. The
+      // reader must rely on lstat and reject regardless of what stat says.
+      const fs: FileSystemProvider = {
+        readDirectory: async () => [],
+        stat: async () => ({
+          type: 'file' as const,
+          size: 5,
+          mtime: Date.now(),
+          ctime: Date.now(),
+        }),
+        lstat: async () => ({
+          type: 'symbolicLink' as const,
+          size: 0,
+          mtime: Date.now(),
+          ctime: Date.now(),
+        }),
+        readFile: async () => 'outside\n',
+        exists: async () => true,
+      };
+      const symlinkReader = createFileReader({
+        fileSystem: fs,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      await expectToolError(
+        symlinkReader.readFile({
+          uri: makeUri('/root/link.ts'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
       );
     });
   });
