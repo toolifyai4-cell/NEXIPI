@@ -68,26 +68,26 @@ export function safeValidateProjectAnalysisConfig(
   return { success: false, error: result.error };
 }
 
-export const WorkspaceConfigSchema = z.object({
+export const WorkspaceIntelligenceConfigSchema = z.object({
   discovery: WorkspaceDiscoveryConfigSchema.optional(),
   analysis: ProjectAnalysisConfigSchema.optional(),
 });
 
-export type WorkspaceConfig = z.infer<typeof WorkspaceConfigSchema>;
+export type WorkspaceIntelligenceConfig = z.infer<typeof WorkspaceIntelligenceConfigSchema>;
 
-export const defaultWorkspaceConfig: WorkspaceConfig = {
+export const defaultWorkspaceIntelligenceConfig: WorkspaceIntelligenceConfig = {
   discovery: defaultWorkspaceDiscoveryConfig,
   analysis: defaultProjectAnalysisConfig,
 };
 
-export function validateWorkspaceConfig(config: unknown): WorkspaceConfig {
-  return WorkspaceConfigSchema.parse(config);
+export function validateWorkspaceIntelligenceConfig(config: unknown): WorkspaceIntelligenceConfig {
+  return WorkspaceIntelligenceConfigSchema.parse(config);
 }
 
-export function safeValidateWorkspaceConfig(
+export function safeValidateWorkspaceIntelligenceConfig(
   config: unknown
-): { success: true; data: WorkspaceConfig } | { success: false; error: z.ZodError } {
-  const result = WorkspaceConfigSchema.safeParse(config);
+): { success: true; data: WorkspaceIntelligenceConfig } | { success: false; error: z.ZodError } {
+  const result = WorkspaceIntelligenceConfigSchema.safeParse(config);
   if (result.success) {
     return { success: true, data: result.data };
   }

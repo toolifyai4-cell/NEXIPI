@@ -1,4 +1,4 @@
-import { createLogger, type Logger } from '@nexipi/core';
+import { createLogger, type Logger, defaultEngineConfig, createEventEmitter, type EventMap } from '@nexipi/core';
 import type {
   WorkspaceProvider,
   WorkspaceFoldersChangeEvent,
@@ -8,10 +8,9 @@ import type {
 import type {
   Workspace,
   WorkspaceFolder,
-  WorkspaceFolderId,
   WorkspaceChangeEvent,
 } from '../types.js';
-import type { WorkspaceEventEmitter } from '../events/workspace-events.js';
+import type { WorkspaceEventMap, WorkspaceEventEmitter } from '../events/workspace-events.js';
 import type { WorkspaceDiscoveryConfig } from '../config.js';
 import { createWorkspaceFolderId } from '../types.js';
 
@@ -44,15 +43,17 @@ export class WorkspaceDiscovery {
       workspaceLessMode: 'temporary',
       ...options.config,
     };
-    this.logger = options.logger ?? createLogger({ name: 'workspace-discovery', version: '0.0.1', logLevel: 'info' });
-    this.eventEmitter = options.eventEmitter ?? createWorkspaceEventEmitter();
+    this.logger = options.logger ?? createLogger({
+      ...defaultEngineConfig,
+      name: 'workspace-discovery',
+      version: '0.0.1',
+      logLevel: 'info',
+    });
+    this.eventEmitter = options.eventEmitter ?? createEventEmitter<WorkspaceEventMap>();
   }
 
   private get createWorkspaceEventEmitter(): () => WorkspaceEventEmitter {
-    return () => {
-      const { createEventEmitter } = require('@nexipi/core');
-      return createEventEmitter<import('../events/workspace-events.js').WorkspaceEventMap>();
-    };
+    return () => createEventEmitter<WorkspaceEventMap>();
   }
 
   async initialize(): Promise<Workspace> {
@@ -205,9 +206,4 @@ export class WorkspaceDiscovery {
     this.currentWorkspace = null;
     this.logger.info('WorkspaceDiscovery disposed');
   }
-}
-
-function createWorkspaceEventEmitter(): WorkspaceEventEmitter {
-  const { createEventEmitter } = require('@nexipi/core');
-  return createEventEmitter<import('../events/workspace-events.js').WorkspaceEventMap>();
 }

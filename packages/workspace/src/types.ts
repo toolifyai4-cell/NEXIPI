@@ -85,6 +85,22 @@ export interface ProjectManifest {
   readonly rawData?: Record<string, unknown>;
 }
 
+export function createProjectManifest(params: {
+  path: string;
+  type: ManifestType;
+  name?: string;
+  version?: string;
+  rawData?: Record<string, unknown>;
+}): ProjectManifest {
+  return {
+    path: params.path,
+    type: params.type,
+    ...(params.name !== undefined ? { name: params.name } : {}),
+    ...(params.version !== undefined ? { version: params.version } : {}),
+    ...(params.rawData !== undefined ? { rawData: params.rawData } : {}),
+  };
+}
+
 export const ProjectManifestSchema = z.object({
   path: z.string().min(1),
   type: z.enum([
@@ -139,6 +155,20 @@ export interface MonorepoInfo {
   readonly manifestPaths: readonly string[];
 }
 
+export function createMonorepoInfo(params: {
+  type: MonorepoType;
+  rootPath: string;
+  manifestPaths: readonly string[];
+  config?: WorkspaceConfig;
+}): MonorepoInfo {
+  return {
+    type: params.type,
+    rootPath: params.rootPath,
+    manifestPaths: params.manifestPaths,
+    ...(params.config !== undefined ? { config: params.config } : {}),
+  };
+}
+
 export const MonorepoInfoSchema = z.object({
   type: z.enum(['pnpm', 'npm', 'yarn', 'turbo', 'nx', 'lerna']),
   rootPath: z.string().min(1),
@@ -158,6 +188,28 @@ export interface ProjectRoot {
   readonly frameworks: readonly string[];
   readonly isMonorepoRoot: boolean;
   readonly monorepoInfo?: MonorepoInfo;
+}
+
+export function createProjectRoot(params: {
+  path: string;
+  name: string;
+  type: ProjectType;
+  manifests: readonly ProjectManifest[];
+  languages: readonly string[];
+  frameworks: readonly string[];
+  isMonorepoRoot: boolean;
+  monorepoInfo?: MonorepoInfo;
+}): ProjectRoot {
+  return {
+    path: params.path,
+    name: params.name,
+    type: params.type,
+    manifests: params.manifests,
+    languages: params.languages,
+    frameworks: params.frameworks,
+    isMonorepoRoot: params.isMonorepoRoot,
+    ...(params.monorepoInfo !== undefined ? { monorepoInfo: params.monorepoInfo } : {}),
+  };
 }
 
 export const ProjectRootSchema = z.object({

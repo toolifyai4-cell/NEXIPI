@@ -1,5 +1,5 @@
-import type { EventMap, EventName, EventEmitter, EventSubscription } from '@nexipi/core';
-import type { Workspace, WorkspaceFolder, WorkspaceChangeEvent } from '../types.js';
+import { createEventEmitter, type EventMap, type EventName, type EventEmitter, type EventSubscription } from '@nexipi/core';
+import type { Workspace, WorkspaceChangeEvent } from '../types.js';
 
 export interface WorkspaceEventMap extends EventMap {
   'workspace:discovered': { workspace: Workspace; timestamp: number };
@@ -26,6 +26,5 @@ export interface WorkspaceEventEmitter extends EventEmitter<WorkspaceEventMap> {
 }
 
 export function createWorkspaceEventEmitter(): WorkspaceEventEmitter {
-  const { createEventEmitter } = require('@nexipi/core');
   return createEventEmitter<WorkspaceEventMap>();
 }
