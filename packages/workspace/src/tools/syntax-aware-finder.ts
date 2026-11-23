@@ -231,10 +231,16 @@ interface ClassificationResult {
  *   NamespaceImport.name, ImportEqualsDeclaration.name  -> `import`
  * - ExportSpecifier, ExportAssignment.expression  -> `export`
  * - CallExpression.expression  -> `call`
+ * - Transparent wrappers (ParenthesizedExpression, AsExpression,
+ *   NonNullExpression, SatisfiesExpression) whose `.expression` is the
+ *   identifier: `call` if the wrapper is the callee of a CallExpression,
+ *   otherwise `usage`.
  * - PropertyAccessExpression.expression  -> `usage` (the object being accessed)
- * - PropertyAccessExpression.name, PropertyAssignment.name,
- *   ShorthandPropertyAssignment.name  -> excluded (skip)
+ * - PropertyAccessExpression.name, PropertyAssignment.name  -> excluded (skip)
+ * - ShorthandPropertyAssignment.name  -> `usage` (shorthand for `{ name: name }`)
  * - BinaryExpression.left  -> `usage` (assignment target)
+ * - LabeledStatement.label, BreakStatement.label, ContinueStatement.label
+ *   -> excluded (skip)
  * - Any other identifier  -> `usage`
  *
  * Declaration names are never also reported as usages. Each identifier node is
@@ -251,6 +257,7 @@ interface ClassificationResult {
  * - Computed property names (`{ [foo]: 1 }`) are classified as `usage`.
  * - Destructuring patterns (`const { foo } = bar`) classify `foo` as
  *   `declaration` (binding element) and `bar` as `usage`.
+ * - Label identifiers are not reported as symbol references.
  */
 function classifyIdentifierNode(
   node: ts.Identifier,
@@ -371,6 +378,9 @@ function classifyIdentifierNode(
       break;
 
     case ts.SyntaxKind.CallExpression:
+      // Direct callee: `foo()` where `foo` is the CallExpression.expression.
+      // Wrapped callees (e.g. `(foo)()`, `foo!()`) are handled by the
+      // transparent-expression-wrapper cases below.
       if ((parent as ts.CallExpression).expression === node) {
         return { classification: 'call', skip: false };
       }
@@ -385,16 +395,67 @@ function classifyIdentifierNode(
       return { classification: 'usage', skip: true };
     }
 
-    case ts.SyntaxKind.PropertyAssignment:
+    case ts.SyntaxKind.ParenthesizedExpression:
+    case ts.SyntaxKind.AsExpression:
+    case ts.SyntaxKind.NonNullExpression:
+    case ts.SyntaxKind.SatisfiesExpression: {
+      const wrapper = parent as
+        | ts.ParenthesizedExpression
+        | ts.AsExpression
+        | ts.NonNullExpression
+        | ts.SatisfiesExpression;
+      if (wrapper.expression === node) {
+        // Transparent wrappers preserve the syntactic role of the wrapped
+        // expression. If the wrapper is the callee of a call expression,
+        // the identifier is a call target.
+        const grandparent = wrapper.parent;
+        if (
+          grandparent &&
+          grandparent.kind === ts.SyntaxKind.CallExpression &&
+          (grandparent as ts.CallExpression).expression === wrapper
+        ) {
+          return { classification: 'call', skip: false };
+        }
+        return { classification: 'usage', skip: false };
+      }
+      break;
+    }
+
+    case ts.SyntaxKind.PropertyAssignment: {
+      const pa = parent as ts.PropertyAssignment;
+      if (pa.name === node) {
+        // Object-literal property names (e.g. `customer` in `{ customer: value }`)
+        // are not references.
+        return { classification: 'usage', skip: true };
+      }
+      break;
+    }
+
     case ts.SyntaxKind.ShorthandPropertyAssignment:
-      // Object-literal property names are not references.
-      return { classification: 'usage', skip: true };
+      // Shorthand object properties (e.g. `customer` in `{ customer }`) are
+      // shorthand for `{ customer: customer }`, so the name is a genuine
+      // identifier reference.
+      return { classification: 'usage', skip: false };
 
     case ts.SyntaxKind.BinaryExpression:
       if ((parent as ts.BinaryExpression).left === node) {
         return { classification: 'usage', skip: false };
       }
       break;
+
+    case ts.SyntaxKind.LabeledStatement:
+    case ts.SyntaxKind.BreakStatement:
+    case ts.SyntaxKind.ContinueStatement: {
+      const labelParent = parent as
+        | ts.LabeledStatement
+        | ts.BreakStatement
+        | ts.ContinueStatement;
+      if (labelParent.label === node) {
+        // Label identifiers are control-flow markers, not symbol references.
+        return { classification: 'usage', skip: true };
+      }
+      break;
+    }
 
     default:
       break;

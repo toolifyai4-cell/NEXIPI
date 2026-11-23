@@ -242,6 +242,29 @@ function buildTree(vfs: VirtualFileSystem): void {
     'const { qux: q } = obj;',
   ].join('\n'));
 
+  // Shorthand object properties, labels, and wrapped calls
+  vfs.addFile('/root/shorthand.js', [
+    'const customer = getCustomer();',
+    'const result = { customer };',
+    'const result2 = { customer: anotherValue };',
+    'const { customer: sourceCustomer } = source;',
+  ].join('\n'));
+
+  vfs.addFile('/root/labels.ts', [
+    'retry: while (active) {',
+    '  break retry;',
+    '}',
+  ].join('\n'));
+
+  vfs.addFile('/root/wrapped-calls.ts', [
+    'runTask();',
+    '(runTask)();',
+    'const x = runTask as () => void;',
+    'x();',
+    'const y = runTask!;',
+    'y();',
+  ].join('\n'));
+
   // JSX and TSX files
   vfs.addFile('/root/component.jsx', 'const el = <div>foo</div>;');
   vfs.addFile('/root/component.tsx', 'const el: JSX.Element = <div>foo</div>;');
@@ -478,6 +501,131 @@ describe('SyntaxAwareFinder', () => {
       // `qux` is a property name, excluded
       const quxRefs = usageFile.references.filter(r => r.symbol === 'qux');
       expect(quxRefs.length).toBe(0);
+    });
+  });
+
+  describe('Shorthand object property references', () => {
+    it('classifies shorthand property name as usage', async () => {
+      const result = await finder.find({ symbol: 'customer' });
+      const shorthandFile = result.files.find(f => f.relativePath === 'shorthand.js')!;
+      // `{ customer }` on line 2: shorthand name is a genuine usage
+      const usage = shorthandFile.references.find(
+        r => r.lineNumber === 2 && r.classification === 'usage'
+      );
+      expect(usage).toBeDefined();
+      expect(usage!.confidence).toBe('medium');
+    });
+
+    it('does not report object property key as usage', async () => {
+      const result = await finder.find({ symbol: 'customer' });
+      const shorthandFile = result.files.find(f => f.relativePath === 'shorthand.js')!;
+      // `{ customer: anotherValue }` on line 3: `customer` is a property key, excluded
+      const propKeyRef = shorthandFile.references.find(
+        r => r.lineNumber === 3 && r.symbol === 'customer'
+      );
+      expect(propKeyRef).toBeUndefined();
+    });
+
+    it('classifies object property value as usage', async () => {
+      const result = await finder.find({ symbol: 'anotherValue' });
+      const shorthandFile = result.files.find(f => f.relativePath === 'shorthand.js')!;
+      const usage = shorthandFile.references.find(
+        r => r.lineNumber === 3 && r.classification === 'usage'
+      );
+      expect(usage).toBeDefined();
+      expect(usage!.confidence).toBe('medium');
+    });
+
+    it('excludes destructuring property name but classifies binding as declaration', async () => {
+      const result = await finder.find({ symbol: 'sourceCustomer' });
+      const shorthandFile = result.files.find(f => f.relativePath === 'shorthand.js')!;
+      const decl = shorthandFile.references.find(
+        r => r.lineNumber === 4 && r.classification === 'declaration'
+      );
+      expect(decl).toBeDefined();
+    });
+
+    it('excludes destructuring property name from references', async () => {
+      const result = await finder.find({ symbol: 'customer' });
+      const shorthandFile = result.files.find(f => f.relativePath === 'shorthand.js')!;
+      // Line 4: `customer` in `const { customer: sourceCustomer }` is a
+      // destructuring property name, not a reference.
+      const propNameRef = shorthandFile.references.find(
+        r => r.lineNumber === 4 && r.symbol === 'customer'
+      );
+      expect(propNameRef).toBeUndefined();
+    });
+  });
+
+  describe('Label identifiers', () => {
+    it('does not report label declaration as usage', async () => {
+      const result = await finder.find({ symbol: 'retry' });
+      const labelsFile = result.files.find(f => f.relativePath === 'labels.ts')!;
+      // `retry:` label on line 1 and `break retry` on line 2 are control-flow
+      // markers, not symbol references.
+      const retryRefs = labelsFile.references.filter(r => r.symbol === 'retry');
+      expect(retryRefs.length).toBe(0);
+    });
+
+    it('classifies identifiers in labeled statements as usage', async () => {
+      const result = await finder.find({ symbol: 'active' });
+      const labelsFile = result.files.find(f => f.relativePath === 'labels.ts')!;
+      const usage = labelsFile.references.find(
+        r => r.lineNumber === 1 && r.classification === 'usage'
+      );
+      expect(usage).toBeDefined();
+      expect(usage!.confidence).toBe('medium');
+    });
+  });
+
+  describe('Wrapped call expressions', () => {
+    it('classifies direct call as call', async () => {
+      const result = await finder.find({ symbol: 'runTask' });
+      const callsFile = result.files.find(f => f.relativePath === 'wrapped-calls.ts')!;
+      const call = callsFile.references.find(
+        r => r.lineNumber === 1 && r.classification === 'call'
+      );
+      expect(call).toBeDefined();
+      expect(call!.confidence).toBe('medium');
+    });
+
+    it('classifies parenthesized call as call', async () => {
+      const result = await finder.find({ symbol: 'runTask' });
+      const callsFile = result.files.find(f => f.relativePath === 'wrapped-calls.ts')!;
+      const call = callsFile.references.find(
+        r => r.lineNumber === 2 && r.classification === 'call'
+      );
+      expect(call).toBeDefined();
+      expect(call!.confidence).toBe('medium');
+    });
+
+    it('classifies as-cast expression as usage, not call', async () => {
+      const result = await finder.find({ symbol: 'runTask' });
+      const callsFile = result.files.find(f => f.relativePath === 'wrapped-calls.ts')!;
+      // `runTask as () => void` on line 3: `runTask` is a usage, not a call
+      const usage = callsFile.references.find(
+        r => r.lineNumber === 3 && r.classification === 'usage'
+      );
+      expect(usage).toBeDefined();
+      expect(usage!.confidence).toBe('medium');
+      const callRefs = callsFile.references.filter(
+        r => r.lineNumber === 3 && r.classification === 'call'
+      );
+      expect(callRefs.length).toBe(0);
+    });
+
+    it('classifies non-null expression as usage, not call', async () => {
+      const result = await finder.find({ symbol: 'runTask' });
+      const callsFile = result.files.find(f => f.relativePath === 'wrapped-calls.ts')!;
+      // `runTask!` on line 5: `runTask` is a usage, not a call
+      const usage = callsFile.references.find(
+        r => r.lineNumber === 5 && r.classification === 'usage'
+      );
+      expect(usage).toBeDefined();
+      const callRefs = callsFile.references.filter(
+        r => r.lineNumber === 5 && r.classification === 'call'
+      );
+      expect(callRefs.length).toBe(0);
     });
   });
 
