@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Contributing Guide
+    url: https://github.com/your-org/nexipi/blob/main/CONTRIBUTING.md
+    about: Read the contributing guidelines before opening an issue or PR.
+  - name: Contributor Rewards
+    url: https://github.com/your-org/nexipi/blob/main/README.md#-contributor-rewards
+    about: Learn how contributions are tracked and rewarded.

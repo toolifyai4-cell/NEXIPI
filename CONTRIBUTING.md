@@ -60,6 +60,15 @@ Thank you for contributing to NexiPi! Please follow these guidelines to ensure a
 - Use GitHub Issues for bugs and feature requests
 - Provide minimal reproduction steps
 - Include environment details (OS, Node version, pnpm version)
+- Tag with `contributor-reward` to be considered for rewards
+
+## Contributor Recognition
+
+- All contributions are tracked in [CONTRIBUTORS.md](CONTRIBUTORS.md)
+- Use [all-contributors](https://allcontributors.org) spec to add yourself to the README wall
+- Contributions are weighted by impact, not raw count (see [Contributor Rewards](README.md#-contributor-rewards))
+- Non-code contributions (docs, design, community, ideas) are fully valued
+- Quarterly public reports on project health and reward distribution
 
 ## Code of Conduct
 

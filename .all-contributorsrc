@@ -1,0 +1,16 @@
+{
+  "projectName": "NexiPi",
+  "projectOwner": "your-org",
+  "repoType": "github",
+  "repoShortName": "nexipi",
+  "files": [
+    "README.md"
+  ],
+  "imageSize": 100,
+  "commit": false,
+  "commitConvention": "angular",
+  "contributors": [],
+  "contributorsPerLine": 7,
+  "skipCi": true,
+  "badgeTemplate": "![All Contributors](https://img.shields.io/github/contributors/your-org/nexipi?logo=github)"
+}

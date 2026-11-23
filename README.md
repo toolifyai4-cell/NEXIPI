@@ -17,6 +17,7 @@
   <a href="#-configuration"><strong>Configuration</strong></a> •
   <a href="#-contributing"><strong>Contributing</strong></a> •
   <a href="#-contributor-rewards"><strong>Contributor Rewards</strong></a> •
+  <a href="#-contributors"><strong>Contributors</strong></a> •
   <a href="#-license"><strong>License</strong></a>
 </p>
 
@@ -27,6 +28,8 @@
   <img src="https://img.shields.io/badge/VS%20Code-%5E1.85.0-purple?logo=visual-studio-code&logoColor=white" alt="VS Code">
   <img src="https://img.shields.io/badge/Turbo-1.11-red?logo=turborepo&logoColor=white" alt="Turbo">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
+  <img src="https://img.shields.io/github/contributors/your-org/nexipi?logo=github" alt="Contributors">
+  <img src="https://img.shields.io/github/last-commit/your-org/nexipi?logo=github" alt="Last Commit">
 </p>
 
 ---
@@ -419,6 +422,38 @@ We believe in recognizing and rewarding valuable contributions. **When NexiPi ac
 4. **Transparency** — Quarterly reports on project health, revenue, and distribution
 
 > **Note**: This is a statement of intent. Specific terms, percentages, and legal structure will be formalized via a Contributor License Agreement (CLA) and token/equity framework before monetization. Early contributors will be prioritized.
+
+### Early Contributors
+
+| Contributor | Focus | Impact |
+|-------------|-------|--------|
+| _Be the first!_ | — | Open an issue or PR to get listed here |
+
+> This table is manually curated for high-impact early contributors. The full list is below.
+
+---
+
+## 👥 Contributors
+
+We recognize all contributions — code, docs, design, testing, ideas, and more.
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center"><a href="https://github.com/your-org/nexipi/graphs/contributors"><img src="https://contrib.rocks/image?repo=your-org/nexipi" width="100px;" alt="Contributors"/><br /><sub><b>All Contributors</b></sub></a></td>
+    </tr>
+  </tbody>
+</table>
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+<!-- ALL-CONTRIBUTORS-LIST:END -->
+
+This project follows the [all-contributors](https://allcontributors.org) specification. Contributions of any kind are welcome.
+
+See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the detailed impact log used for reward tracking.
 
 ---
 
