@@ -185,7 +185,7 @@ describe('FileDiscoveryService', () => {
       cur = cur[`level${i}`] as Record<string, unknown>;
     }
     (cur as Record<string, unknown>)['deep.txt'] = 'deep';
-    const vfs = new VirtualFileSystem(tree);
+    const vfs = makeVfs(tree);
     const service = createService(vfs, 'file:///root', { maxDepth: 2 });
     const result = await service.discover();
     // maxDepth 2: root->level1 (depth1), level1->level2 (depth2). level2->level3 would be depth3 > 2.
@@ -198,7 +198,7 @@ describe('FileDiscoveryService', () => {
     for (let i = 0; i < 20; i++) {
       tree[`file${i}.txt`] = 'x';
     }
-    const vfs = new VirtualFileSystem(tree);
+    const vfs = makeVfs(tree);
     const service = createService(vfs, 'file:///root', { maxFileCount: 5 });
     const result = await service.discover();
     expect(result.count).toBe(5);
@@ -252,11 +252,10 @@ describe('FileDiscoveryService', () => {
     for (let i = 0; i < 100; i++) {
       tree[`file${i}.txt`] = 'x';
     }
-    const vfs = new VirtualFileSystem(tree);
-    const service = createService(vfs, 'file:///root', { signal: controller.signal });
-    const promise = service.discover();
+    const vfs = makeVfs(tree);
     controller.abort();
-    const result = await promise;
+    const service = createService(vfs, 'file:///root', { signal: controller.signal });
+    const result = await service.discover();
     expect(result.cancelled).toBe(true);
     expect(result.completed).toBe(false);
   });

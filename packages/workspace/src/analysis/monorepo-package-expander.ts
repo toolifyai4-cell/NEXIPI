@@ -133,8 +133,8 @@ export class MonorepoPackageExpander {
 
     try {
       for (let i = 0; i < this.patterns.length; i++) {
-        const pattern = this.patterns[i];
-        const rawPattern = this.rawPatterns[i];
+        const pattern = this.patterns[i]!;
+        const rawPattern = this.rawPatterns[i]!;
         if (state.cancelled) {
           break;
         }
@@ -305,7 +305,6 @@ export class MonorepoPackageExpander {
       }
 
       const nextSegments = [...currentSegments, entry.name];
-      const absPath = joinSegments(this.monorepoRootPath, nextSegments);
 
       if (entry.type === 'directory') {
         if (this.isExcludedDirectory(nextSegments)) {

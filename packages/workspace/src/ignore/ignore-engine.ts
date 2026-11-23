@@ -212,13 +212,16 @@ export class IgnoreEngine {
     if (this.config.enableMandatorySafetyExclusions && testPath(this.mandatoryIgnore, relDir, true)) {
       return true;
     }
-    if (testPath(this.userIgnore, relDir, true)) {
-      return true;
-    }
     if (this.config.enableDefaultExclusions && testPath(this.defaultIgnore, relDir, true)) {
       return true;
     }
-    return this.gitignoreIsIgnored(relDir, true);
+    if (this.gitignoreIsIgnored(relDir, true)) {
+      return true;
+    }
+    if (testPath(this.userIgnore, relDir, true)) {
+      return true;
+    }
+    return false;
   }
 
   private gitignoreIsIgnored(relPath: string, isDirectory: boolean): boolean {
@@ -262,14 +265,14 @@ export class IgnoreEngine {
     if (this.config.enableMandatorySafetyExclusions && testPath(this.mandatoryIgnore, rel, isDirectory)) {
       return { ignored: true, reason: 'mandatory', matchedPattern: '(mandatory safety)' };
     }
-    if (testPath(this.userIgnore, rel, isDirectory)) {
-      return { ignored: true, reason: 'user', matchedPattern: '(user exclusion)' };
-    }
     if (this.config.enableDefaultExclusions && testPath(this.defaultIgnore, rel, isDirectory)) {
       return { ignored: true, reason: 'default', matchedPattern: '(default exclusion)' };
     }
     if (this.gitignoreIsIgnored(rel, isDirectory)) {
       return { ignored: true, reason: 'gitignore', matchedPattern: '(gitignore)' };
+    }
+    if (testPath(this.userIgnore, rel, isDirectory)) {
+      return { ignored: true, reason: 'user', matchedPattern: '(user exclusion)' };
     }
     return { ignored: false, reason: 'none' };
   }

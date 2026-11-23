@@ -133,6 +133,30 @@ describe('IgnoreEngine', () => {
     expect(engine.isIgnored('src/main.ts')).toBe(false);
   });
 
+  it('should apply nested .gitignore rules relative to their containing directory', async () => {
+    const vfs = makeVfs({
+      '.gitignore': 'ignored-by-root.txt\n',
+      'sub': {
+        '.gitignore': 'sub-only.log\n',
+        'ignored-by-root.txt': 'x',
+        'sub-only.log': 'x',
+        'keep.log': 'x',
+      },
+    });
+    const engine = createIgnoreEngine(vfs, '/root');
+    await engine.loadGitignore('/root');
+    await engine.loadGitignore('/root/sub');
+    // Root pattern applies at root and to descendants.
+    expect(engine.isIgnored('ignored-by-root.txt')).toBe(true);
+    expect(engine.isIgnored('sub/ignored-by-root.txt')).toBe(true);
+    // Nested pattern applies relative to its directory.
+    expect(engine.isIgnored('sub/sub-only.log')).toBe(true);
+    // Nested pattern does not match other files in its directory.
+    expect(engine.isIgnored('sub/keep.log')).toBe(false);
+    // Unmatched files at root are not ignored.
+    expect(engine.isIgnored('keep.log')).toBe(false);
+  });
+
   it('should support negation patterns', () => {
     const vfs = makeVfs({
       'docs': { 'a.txt': 'a', 'b.txt': 'b', 'keep.txt': 'k' },
@@ -241,5 +265,49 @@ describe('IgnoreEngine', () => {
     const result = engine.isExcluded('.git', { isDirectory: true });
     expect(result.ignored).toBe(true);
     expect(result.reason).toBe('mandatory');
+  });
+
+  it('should give default exclusions precedence over user re-inclusion', () => {
+    const vfs = makeVfs({ 'node_modules': { 'pkg': { 'index.js': 'x' } } });
+    const engine = createIgnoreEngine(vfs, '/root', { userExclusions: ['!node_modules/'] });
+    const result = engine.isExcluded('node_modules', { isDirectory: true });
+    expect(result.ignored).toBe(true);
+    expect(result.reason).toBe('default');
+  });
+
+  it('should give gitignore exclusions precedence over user re-inclusion', async () => {
+    const vfs = makeVfs({
+      '.gitignore': '*.log\n',
+      'app.log': 'log',
+    });
+    const engine = createIgnoreEngine(vfs, '/root', { userExclusions: ['!app.log'] });
+    await engine.loadGitignore('/root');
+    const result = engine.isExcluded('app.log');
+    expect(result.ignored).toBe(true);
+    expect(result.reason).toBe('gitignore');
+  });
+
+  it('should enforce full precedence chain mandatory > default > gitignore > user', async () => {
+    const vfs = makeVfs({
+      '.gitignore': 'secret.txt\n',
+      'secret.txt': 's',
+      'node_modules': { 'pkg': { 'index.js': 'x' } },
+    });
+    const engine = createIgnoreEngine(vfs, '/root', {
+      userExclusions: ['!secret.txt', '!node_modules/'],
+    });
+    await engine.loadGitignore('/root');
+
+    // User cannot re-include a gitignore-excluded file.
+    expect(engine.isExcluded('secret.txt').ignored).toBe(true);
+    expect(engine.isExcluded('secret.txt').reason).toBe('gitignore');
+
+    // User cannot re-include a default-excluded directory.
+    expect(engine.isExcluded('node_modules', { isDirectory: true }).ignored).toBe(true);
+    expect(engine.isExcluded('node_modules', { isDirectory: true }).reason).toBe('default');
+
+    // Mandatory safety still wins over everything.
+    expect(engine.isExcluded('.git', { isDirectory: true }).ignored).toBe(true);
+    expect(engine.isExcluded('.git', { isDirectory: true }).reason).toBe('mandatory');
   });
 });
