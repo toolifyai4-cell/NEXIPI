@@ -16,6 +16,7 @@
   <a href="#-development"><strong>Development</strong></a> •
   <a href="#-configuration"><strong>Configuration</strong></a> •
   <a href="#-contributing"><strong>Contributing</strong></a> •
+  <a href="#-contributor-rewards"><strong>Contributor Rewards</strong></a> •
   <a href="#-license"><strong>License</strong></a>
 </p>
 
@@ -393,6 +394,31 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 | `refactor/` | Code refactoring |
 | `test/` | Test additions |
 | `chore/` | Maintenance tasks |
+
+---
+
+## 💰 Contributor Rewards
+
+We believe in recognizing and rewarding valuable contributions. **When NexiPi achieves commercial success**, contributors will be compensated based on their impact:
+
+| Contribution Type | Reward Criteria |
+|-------------------|-----------------|
+| 🎯 **Core Features** | Major feature implementation, architecture decisions |
+| 🐛 **Bug Fixes** | Critical fixes, security patches, performance improvements |
+| 📚 **Documentation** | Comprehensive guides, API docs, tutorials |
+| 🧪 **Testing** | Test coverage improvements, E2E test suites |
+| 🎨 **UI/UX** | Design improvements, accessibility, user experience |
+| 🔧 **Infrastructure** | CI/CD, build optimization, developer tooling |
+| 🤝 **Community** | Code reviews, issue triage, mentoring, advocacy |
+
+### How It Works
+
+1. **Track Contributions** — All PRs, issues, reviews, and discussions are logged
+2. **Impact Scoring** — Contributions weighted by complexity, impact, and maintenance burden
+3. **Revenue Sharing** — Upon commercialization (SaaS, enterprise licenses, marketplace), a contributor pool is distributed proportionally
+4. **Transparency** — Quarterly reports on project health, revenue, and distribution
+
+> **Note**: This is a statement of intent. Specific terms, percentages, and legal structure will be formalized via a Contributor License Agreement (CLA) and token/equity framework before monetization. Early contributors will be prioritized.
 
 ---
 
