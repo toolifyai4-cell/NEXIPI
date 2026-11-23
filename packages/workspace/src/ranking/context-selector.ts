@@ -46,6 +46,7 @@ export class ContextSelector {
   private readonly maxPerDirectory: number;
   private readonly maxPerProject: number;
   private readonly priorityMentions: readonly string[];
+  private readonly signal: AbortSignal | undefined;
   private readonly estimator: BudgetEstimator;
 
   constructor(options: ContextSelectionOptions) {
@@ -56,6 +57,7 @@ export class ContextSelector {
     this.maxPerDirectory = options.maxPerDirectory;
     this.maxPerProject = options.maxPerProject;
     this.priorityMentions = options.priorityMentions ?? [];
+    this.signal = options.signal;
     this.estimator = new ByteBudgetEstimator(512, 0.001);
   }
 
@@ -66,6 +68,8 @@ export class ContextSelector {
       maxBudget: this.maxBudget,
       estimator: this.estimator,
     });
+
+    checkAborted(this.signal);
 
     const selected: SelectedFile[] = [];
     const skipped: SelectedFile[] = [];
@@ -101,7 +105,7 @@ export class ContextSelector {
     });
 
     for (const cand of sorted) {
-      checkAborted(undefined);
+      checkAborted(this.signal);
 
       const relKey = cand.relativePath.toLowerCase();
       const isPriority = prioritySet.size > 0 && (
@@ -226,7 +230,7 @@ export class ContextSelector {
         continue;
       }
 
-      if (selected.length >= this.maxFileCount && !isPriority) {
+      if (selected.length >= this.maxFileCount) {
         skipped.push({
           id: cand.id,
           relativePath: cand.relativePath,
@@ -276,6 +280,8 @@ export class ContextSelector {
       });
       selectionReasons.push(`${cand.relativePath}: selected (${reasonParts.join(', ')})`);
     }
+
+    checkAborted(this.signal);
 
     const result = budget.toResult();
     return {

@@ -95,11 +95,11 @@ export function toContextSelectionOptions(
     maxPerDirectory: config.maxPerDirectory,
     maxPerProject: config.maxPerProject,
   };
-  if (overrides.priorityMentions !== undefined) {
-    return { ...base, priorityMentions: overrides.priorityMentions };
-  }
-  if (overrides.signal !== undefined) {
-    return { ...base, signal: overrides.signal };
-  }
-  return base;
+  return {
+    ...base,
+    ...(overrides.priorityMentions !== undefined
+      ? { priorityMentions: overrides.priorityMentions }
+      : {}),
+    ...(overrides.signal !== undefined ? { signal: overrides.signal } : {}),
+  };
 }

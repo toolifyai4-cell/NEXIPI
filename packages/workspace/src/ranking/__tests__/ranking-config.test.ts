@@ -148,5 +148,55 @@ describe('RankingConfig', () => {
       });
       expect(options.signal).toBe(ac.signal);
     });
+
+    it('preserves signal alone', () => {
+      const ac = new AbortController();
+      const options = toContextSelectionOptions(defaultRankingConfig, {
+        signal: ac.signal,
+      });
+      expect(options.signal).toBe(ac.signal);
+      expect(options.priorityMentions).toBeUndefined();
+      expect(options.maxFileCount).toBe(defaultRankingConfig.maxFileCount);
+    });
+
+    it('preserves priority mentions alone', () => {
+      const options = toContextSelectionOptions(defaultRankingConfig, {
+        priorityMentions: ['src/auth.ts'],
+      });
+      expect(options.priorityMentions).toEqual(['src/auth.ts']);
+      expect(options.signal).toBeUndefined();
+    });
+
+    it('preserves signal and priority mentions together', () => {
+      const ac = new AbortController();
+      const options = toContextSelectionOptions(defaultRankingConfig, {
+        priorityMentions: ['src/auth.ts'],
+        signal: ac.signal,
+      });
+      expect(options.priorityMentions).toEqual(['src/auth.ts']);
+      expect(options.signal).toBe(ac.signal);
+    });
+
+    it('combines signal and priority with config-derived selection options', () => {
+      const ac = new AbortController();
+      const options = toContextSelectionOptions(defaultRankingConfig, {
+        priorityMentions: ['src/auth.ts'],
+        signal: ac.signal,
+      });
+      expect(options.priorityMentions).toEqual(['src/auth.ts']);
+      expect(options.signal).toBe(ac.signal);
+      expect(options.maxFileCount).toBe(defaultRankingConfig.maxFileCount);
+      expect(options.minRelevanceScore).toBe(defaultRankingConfig.minRelevanceScore);
+      expect(options.enableDiversity).toBe(defaultRankingConfig.enableDiversity);
+      expect(options.maxPerDirectory).toBe(defaultRankingConfig.maxPerDirectory);
+      expect(options.maxPerProject).toBe(defaultRankingConfig.maxPerProject);
+    });
+
+    it('leaves optional values undefined when not supplied', () => {
+      const options = toContextSelectionOptions(defaultRankingConfig);
+      expect(options.priorityMentions).toBeUndefined();
+      expect(options.signal).toBeUndefined();
+      expect(options.maxFileCount).toBe(defaultRankingConfig.maxFileCount);
+    });
   });
 });

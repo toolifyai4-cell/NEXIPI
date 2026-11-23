@@ -297,6 +297,24 @@ describe('RelevanceRanker', () => {
       const ranker = new RelevanceRanker();
       expect(() => ranker.rank({ query: '   ' }, [])).toThrow();
     });
+
+    it('rejects weight below zero', () => {
+      expect(() => new RelevanceRanker({ filename: -0.1 })).toThrow();
+    });
+
+    it('rejects weight above one', () => {
+      expect(() => new RelevanceRanker({ filename: 1.1 })).toThrow();
+    });
+
+    it('rejects negative weight on any signal', () => {
+      expect(() => new RelevanceRanker({ classificationSafety: -0.5 })).toThrow();
+    });
+
+    it('accepts weights within the valid range', () => {
+      const ranker = new RelevanceRanker({ filename: 0.5, explicitMention: 0 });
+      expect(ranker.getWeights().filename).toBe(0.5);
+      expect(ranker.getWeights().explicitMention).toBe(0);
+    });
   });
 
   describe('empty query', () => {

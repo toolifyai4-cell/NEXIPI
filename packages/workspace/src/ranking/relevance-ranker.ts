@@ -13,7 +13,8 @@ import {
   type SignalContext,
 } from './relevance-signals.js';
 import { classifyTask, type TaskClassification } from './task-classifier.js';
-import { InvalidQueryError } from './ranking-errors.js';
+import { InvalidQueryError, InvalidRankingConfigError } from './ranking-errors.js';
+import { safeValidateRankingWeights } from './ranking-config.js';
 
 function normalizeRelativePath(rel: string): string {
   return rel.replace(/\\/g, '/').replace(/\/+$/, '');
@@ -42,10 +43,17 @@ export class RelevanceRanker {
   private readonly weights: RankingWeights;
 
   constructor(weights?: Partial<RankingWeights>) {
-    this.weights = {
+    const merged: RankingWeights = {
       ...defaultRankingWeights,
       ...weights,
     };
+    const validated = safeValidateRankingWeights(merged);
+    if (!validated.success) {
+      throw new InvalidRankingConfigError(
+        `Invalid ranking weights: ${validated.error.issues.map((i) => i.message).join(', ')}`,
+      );
+    }
+    this.weights = validated.data;
   }
 
   getWeights(): RankingWeights {

@@ -508,4 +508,126 @@ describe('ContextSelector', () => {
       expect(countSkipped).toBeDefined();
     });
   });
+
+  describe('AbortSignal cancellation', () => {
+    it('throws immediately when signal is already aborted', () => {
+      const ac = new AbortController();
+      ac.abort();
+      const selector = new ContextSelector({
+        maxFileCount: 100,
+        maxBudget: 1000000,
+        minRelevanceScore: 0,
+        enableDiversity: false,
+        maxPerDirectory: 100,
+        maxPerProject: 100,
+        signal: ac.signal,
+      });
+      expect(() => selector.select(makeCandidates())).toThrow();
+    });
+
+    it('cancellation interrupts selection and returns no partial result', () => {
+      const ac = new AbortController();
+      ac.abort();
+      const selector = new ContextSelector({
+        maxFileCount: 100,
+        maxBudget: 1000000,
+        minRelevanceScore: 0,
+        enableDiversity: false,
+        maxPerDirectory: 100,
+        maxPerProject: 100,
+        signal: ac.signal,
+      });
+      let threw = false;
+      try {
+        selector.select(makeCandidates());
+      } catch {
+        threw = true;
+      }
+      expect(threw).toBe(true);
+    });
+
+    it('selection without a signal continues to work', () => {
+      const selector = new ContextSelector({
+        maxFileCount: 100,
+        maxBudget: 1000000,
+        minRelevanceScore: 0,
+        enableDiversity: false,
+        maxPerDirectory: 100,
+        maxPerProject: 100,
+      });
+      const result = selector.select(makeCandidates());
+      expect(result.selectedCount).toBeGreaterThan(0);
+    });
+  });
+
+  describe('maxFileCount hard limit with priority', () => {
+    const baseOptions = {
+      maxBudget: 1000000,
+      minRelevanceScore: 0,
+      enableDiversity: false,
+      maxPerDirectory: 100,
+      maxPerProject: 100,
+    };
+
+    it('prefers a priority-mentioned candidate that fits within the limit', () => {
+      const selector = new ContextSelector({
+        ...baseOptions,
+        maxFileCount: 1,
+        priorityMentions: ['src/database/connection.ts'],
+      });
+      const result = selector.select(makeCandidates());
+      expect(result.selectedCount).toBe(1);
+      expect(result.selected[0].relativePath).toBe('src/database/connection.ts');
+    });
+
+    it('cannot exceed maxFileCount even with multiple priority candidates', () => {
+      const selector = new ContextSelector({
+        ...baseOptions,
+        maxFileCount: 2,
+        priorityMentions: ['src/auth/login.ts', 'src/auth/auth.service.ts', 'tsconfig.json'],
+      });
+      const result = selector.select(makeCandidates());
+      expect(result.selectedCount).toBeLessThanOrEqual(2);
+      expect(result.countLimitReached).toBe(true);
+      const countSkipped = result.skipped.find((s) => s.skippedReason?.includes('count limit'));
+      expect(countSkipped).toBeDefined();
+    });
+
+    it('priority cannot bypass budget', () => {
+      const selector = new ContextSelector({
+        ...baseOptions,
+        maxFileCount: 100,
+        maxBudget: 100,
+        priorityMentions: ['src/auth/login.ts'],
+      });
+      const result = selector.select(makeCandidates());
+      expect(result.totalBudgetUsed).toBeLessThanOrEqual(result.totalBudget);
+      expect(result.budgetExceeded).toBe(true);
+    });
+
+    it('priority cannot bypass safety', () => {
+      const selector = new ContextSelector({
+        ...baseOptions,
+        maxFileCount: 100,
+        priorityMentions: ['.env', 'image.png'],
+      });
+      const result = selector.select(makeCandidates());
+      const unsafe = result.selected.some(
+        (s) => s.relativePath === '.env' || s.relativePath === 'image.png',
+      );
+      expect(unsafe).toBe(false);
+      expect(result.safetyExcluded).toBeGreaterThan(0);
+    });
+
+    it('remains deterministic when priority candidates compete for limited slots', () => {
+      const options = {
+        ...baseOptions,
+        maxFileCount: 2,
+        priorityMentions: ['src/auth/login.ts', 'src/auth/auth.service.ts'],
+      };
+      const r1 = new ContextSelector(options).select(makeCandidates());
+      const r2 = new ContextSelector(options).select(makeCandidates());
+      expect(r1.selected.map((s) => s.id)).toEqual(r2.selected.map((s) => s.id));
+    });
+  });
 });
