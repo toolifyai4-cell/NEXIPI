@@ -1,6 +1,7 @@
 import type { DiscoveryError } from '../types.js';
 import type { FileReadConfig } from './config.js';
 import type { DirectoryListConfig } from './config.js';
+import type { CodeSearchConfig } from './search-config.js';
 
 /**
  * Kind of read/search/list tool supported in Phase 09.
@@ -113,6 +114,14 @@ export interface SearchMatch {
   readonly startColumn: number;
   readonly endColumn: number;
   readonly matchedText: string;
+  /** Surrounding context lines (before and after the match), if requested. */
+  readonly context: readonly SearchContextLine[] | undefined;
+}
+
+/** A single context line surrounding a match. */
+export interface SearchContextLine {
+  readonly lineNumber: number;
+  readonly text: string;
 }
 
 /**

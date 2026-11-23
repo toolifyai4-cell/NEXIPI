@@ -25,6 +25,11 @@ export {
   ListDirectoryOptions,
   ListDirectoryResult,
   DirectoryListingEntry,
+  SearchContextLine,
+  SearchMatch,
+  SearchFileResult,
+  CodeSearchOptions,
+  CodeSearchResult,
   type ToolResult,
 } from './contracts.js';
 
@@ -47,5 +52,19 @@ export {
   matchesIncludePatterns,
 } from './classification.js';
 
+export {
+  CodeSearchConfig,
+  defaultCodeSearchConfig,
+  validateCodeSearchConfig,
+  safeValidateCodeSearchConfig,
+} from './search-config.js';
+
+export {
+  CodeSearchInput,
+  validateCodeSearchInput,
+  safeValidateCodeSearchInput,
+} from './search-schemas.js';
+
 export { FileReader, createFileReader } from './reader.js';
 export { DirectoryLister, createDirectoryLister } from './lister.js';
+export { CodeSearcher, createCodeSearcher } from './searcher.js';

@@ -1,7 +1,6 @@
 import { z } from 'zod';
 
 export const CodeSearchInputSchema = z.object({
-  uri: z.string().min(1, 'uri is required'),
   query: z.string().min(1, 'query is required'),
   mode: z.enum(['literal', 'regex']),
   caseSensitive: z.boolean().optional(),
