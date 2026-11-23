@@ -27,7 +27,7 @@
   <img src="https://img.shields.io/badge/pnpm-%3E%3D8.10.0-orange?logo=pnpm&logoColor=white" alt="pnpm">
   <img src="https://img.shields.io/badge/VS%20Code-%5E1.85.0-purple?logo=visual-studio-code&logoColor=white" alt="VS Code">
   <img src="https://img.shields.io/badge/Turbo-1.11-red?logo=turborepo&logoColor=white" alt="Turbo">
-  <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
+  <img src="https://img.shields.io/badge/License-Apache%202.0-blue?logo=apache" alt="License">
   <img src="https://img.shields.io/github/contributors/your-org/nexipi?logo=github" alt="Contributors">
   <img src="https://img.shields.io/github/last-commit/your-org/nexipi?logo=github" alt="Last Commit">
 </p>
@@ -459,7 +459,7 @@ See [CONTRIBUTORS.md](CONTRIBUTORS.md) for the detailed impact log used for rewa
 
 ## 📄 License
 
-MIT License - see [LICENSE](LICENSE) for details.
+This project is licensed under the [Apache License 2.0](LICENSE) — see [LICENSE](LICENSE) for details.
 
 ---
 
