@@ -449,5 +449,5 @@ MIT License - see [LICENSE](LICENSE) for details.
 </p>
 
 
-![alt text](<NexiPi Teal Ribbon Icon.png>)
-![alt text](<NexiPi 3D Logo on Black.png>)
+![NexiPi Teal Ribbon Icon](LOGO/NexiPi%20Teal%20Ribbon%20Icon.png)
+![NexiPi 3D Logo on Black](LOGO/NexiPi%203D%20Logo%20on%20Black.png)
