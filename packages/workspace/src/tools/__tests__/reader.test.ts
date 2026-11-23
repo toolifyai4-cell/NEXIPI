@@ -52,8 +52,9 @@ class VirtualFileSystem implements FileSystemProvider {
 
   addDir(p: string, entries: DirectoryEntry[] = []): void {
     const k = this.key(p);
+    this.ensureDir(k);
     this.stats.set(k, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
-    this.dirs.set(k, entries);
+    this.dirs.set(k, [...entries]);
   }
 
   failStat(p: string): void {
@@ -75,6 +76,9 @@ class VirtualFileSystem implements FileSystemProvider {
       const dir = parts.slice(0, i).join('/') || '/';
       if (!this.dirs.has(dir)) {
         this.dirs.set(dir, []);
+      }
+      if (!this.stats.has(dir)) {
+        this.stats.set(dir, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
       }
     }
   }
@@ -459,6 +463,97 @@ describe('FileReader', () => {
         workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
       });
       expect(result.content).toBe('ok\n');
+    });
+  });
+
+  describe('symlink boundary enforcement', () => {
+    it('should read a normal nested file', async () => {
+      vfs.addFile('/root/sub/nested.ts', 'nested\n');
+      const result = await reader.readFile({
+        uri: makeUri('/root/sub/nested.ts'),
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      expect(result.content).toBe('nested\n');
+    });
+
+    it('should reject a direct file symlink pointing outside the workspace', async () => {
+      vfs.addFile('/root/real.ts', 'real\n');
+      vfs.stats.set('/root/link.ts', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/link.ts'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+    });
+
+    it('should reject a file beneath a symlinked parent directory', async () => {
+      vfs.addFile('/root/linked-dir/secret.txt', 'classified\n');
+      vfs.stats.set('/root/linked-dir', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/linked-dir/secret.txt'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+    });
+
+    it('should reject a file beneath nested parents where one component is a symlink', async () => {
+      vfs.addFile('/root/a/b/link/c.txt', 'classified\n');
+      vfs.stats.set('/root/a/b/link', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/a/b/link/c.txt'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+    });
+
+    it('should fail closed when an intermediate component cannot be verified', async () => {
+      vfs.addFile('/root/a/b/file.txt', 'x\n');
+      vfs.failLstat('/root/a');
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/a/b/file.txt'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR
+      );
+    });
+
+    it('should reject a symlinked workspace root', async () => {
+      vfs.stats.set('/root', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      vfs.addFile('/root/file.txt', 'x\n');
+      await expectToolError(
+        reader.readFile({
+          uri: makeUri('/root/file.txt'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
     });
   });
 

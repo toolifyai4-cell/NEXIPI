@@ -18,6 +18,11 @@ beforeEach(() => {
       return {
         scheme,
         path: uri.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ''),
+        with: vi.fn((partial: { path?: string }) => ({
+          scheme,
+          path: partial.path ?? path,
+          toString: () => uri,
+        })),
         toString: () => uri,
       };
     }),
@@ -74,5 +79,22 @@ describe('VSCodeFileSystemProvider', () => {
     const provider = new VSCodeFileSystemProvider();
     await provider.readFile('/root/a.ts');
     expect(readFileSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('detects a symlinked parent directory via parent-directory lookup without following it', async () => {
+    // lstat reads the parent directory and inspects the entry there, so a
+    // symlinked parent is reported as a symbolic link without ever calling
+    // readDirectory on the symlinked path itself.
+    mockFs.readDirectory.mockResolvedValue([
+      ['linked-dir', vscode.FileType.SymbolicLink],
+      ['real.txt', vscode.FileType.File],
+    ]);
+    const provider = new VSCodeFileSystemProvider();
+    const stat = await provider.lstat('file:///root/linked-dir');
+    expect(stat.type).toBe('symbolicLink');
+    expect(mockFs.readDirectory).toHaveBeenCalledTimes(1);
+    expect(mockFs.readDirectory).toHaveBeenCalledWith(
+      expect.objectContaining({ path: '/root' })
+    );
   });
 });

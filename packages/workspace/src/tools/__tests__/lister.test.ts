@@ -63,8 +63,23 @@ class VirtualFileSystem implements FileSystemProvider {
 
   addDir(p: string, entries: DirectoryEntry[] = []): void {
     const k = this.key(p);
+    this.ensureDir(k);
     this.stats.set(k, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
     this.dirs.set(k, [...entries]);
+  }
+
+  private ensureDir(filePath: string): void {
+    const parts = filePath.split('/');
+    parts.pop();
+    for (let i = 1; i <= parts.length; i++) {
+      const dir = parts.slice(0, i).join('/') || '/';
+      if (!this.dirs.has(dir)) {
+        this.dirs.set(dir, []);
+      }
+      if (!this.stats.has(dir)) {
+        this.stats.set(dir, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
+      }
+    }
   }
 
   failStat(p: string): void {
@@ -533,6 +548,67 @@ describe('DirectoryLister', () => {
         workspaceFolder: makeWorkspaceFolder('C:/root', 'root'),
       });
       expect(result.entries.some(e => e.name === 'file.ts')).toBe(true);
+    });
+  });
+
+  describe('symlink boundary enforcement', () => {
+    it('should reject listing beneath a symlinked parent directory', async () => {
+      vfs.stats.set('/root/linked-dir', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      await expectToolError(
+        lister.listDirectory({
+          uri: makeUri('/root/linked-dir/deep'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+    });
+
+    it('should fail closed when an intermediate component cannot be verified', async () => {
+      vfs.failLstat('/root/a');
+      await expectToolError(
+        lister.listDirectory({
+          uri: makeUri('/root/a/b'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR
+      );
+    });
+
+    it('should not traverse into a symlinked parent during recursive listing', async () => {
+      vfs.addDirEntry('/root', 'linked-dir', 'symbolicLink');
+      vfs.stats.set('/root/linked-dir', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      vfs.addFile('/root/linked-dir/secret.txt', 'classified\n');
+
+      const result = await lister.listDirectory({
+        uri: makeUri('/root'),
+        recursive: true,
+        maxDepth: 10,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      expect(result.entries.some(e => e.name === 'linked-dir')).toBe(false);
+      expect(result.entries.some(e => e.relativePath === 'linked-dir/secret.txt')).toBe(false);
+      expect(result.entries.some(e => e.relativePath === 'sub/deep/file5.ts')).toBe(true);
+    });
+
+    it('should list a normal nested directory', async () => {
+      const result = await lister.listDirectory({
+        uri: makeUri('/root/sub'),
+        recursive: true,
+        maxDepth: 10,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      expect(result.entries.some(e => e.relativePath === 'sub/file3.ts')).toBe(true);
+      expect(result.entries.some(e => e.relativePath === 'sub/deep/file5.ts')).toBe(true);
     });
   });
 
