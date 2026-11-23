@@ -305,3 +305,70 @@ export interface IgnoreEngineConfig {
 export const defaultIgnoreEngineConfig: IgnoreEngineConfig = {
   caseSensitive: false,
 };
+
+export type ScanConcurrencyPolicy = 'cancel-previous' | 'queue' | 'allow-all';
+
+export const ScanConcurrencyPolicySchema = z.enum([
+  'cancel-previous',
+  'queue',
+  'allow-all',
+]);
+
+export type DuplicateScanBehavior = 'reject' | 'allow' | 'cancel-existing';
+
+export const DuplicateScanBehaviorSchema = z.enum(['reject', 'allow', 'cancel-existing']);
+
+export interface WorkspaceScanConfig {
+  readonly concurrencyPolicy: ScanConcurrencyPolicy;
+  readonly maxConcurrentScans: number;
+  readonly maxQueuedScans: number;
+  readonly duplicateScanBehavior: DuplicateScanBehavior;
+  readonly progressEventFrequency: number;
+  readonly incrementalRefresh: {
+    readonly enabled: boolean;
+    readonly maxChangesPerBatch: number;
+  };
+}
+
+export const WorkspaceScanConfigSchema = z.object({
+  concurrencyPolicy: ScanConcurrencyPolicySchema.default('queue'),
+  maxConcurrentScans: z.number().int().positive().default(1),
+  maxQueuedScans: z.number().int().nonnegative().default(10),
+  duplicateScanBehavior: DuplicateScanBehaviorSchema.default('reject'),
+  progressEventFrequency: z.number().int().positive().default(100),
+  incrementalRefresh: z
+    .object({
+      enabled: z.boolean().default(true),
+      maxChangesPerBatch: z.number().int().positive().default(100),
+    })
+    .default({ enabled: true, maxChangesPerBatch: 100 }),
+});
+
+export type WorkspaceScanConfigInput = z.input<typeof WorkspaceScanConfigSchema>;
+export type WorkspaceScanConfigOutput = z.output<typeof WorkspaceScanConfigSchema>;
+
+export const defaultWorkspaceScanConfig: WorkspaceScanConfig = {
+  concurrencyPolicy: 'queue',
+  maxConcurrentScans: 1,
+  maxQueuedScans: 10,
+  duplicateScanBehavior: 'reject',
+  progressEventFrequency: 100,
+  incrementalRefresh: {
+    enabled: true,
+    maxChangesPerBatch: 100,
+  },
+};
+
+export function validateWorkspaceScanConfig(config: unknown): WorkspaceScanConfig {
+  return WorkspaceScanConfigSchema.parse(config);
+}
+
+export function safeValidateWorkspaceScanConfig(
+  config: unknown
+): { success: true; data: WorkspaceScanConfig } | { success: false; error: z.ZodError } {
+  const result = WorkspaceScanConfigSchema.safeParse(config);
+  if (result.success) {
+    return { success: true, data: result.data };
+  }
+  return { success: false, error: result.error };
+}

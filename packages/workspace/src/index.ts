@@ -10,3 +10,7 @@ export * from './analysis/manifest-registry.js';
 export * from './analysis/project-analyzer.js';
 export * from './analysis/monorepo-detector.js';
 export * from './analysis/monorepo-package-expander.js';
+export * from './orchestration/scan-types.js';
+export * from './orchestration/scan-errors.js';
+export * from './orchestration/scan-index.js';
+export * from './orchestration/workspace-scan-orchestrator.js';
