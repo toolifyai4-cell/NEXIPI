@@ -221,6 +221,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     eventName: T,
     listener: (payload: ScanEventMap[T]) => void | Promise<void>
   ): { unsubscribe(): void } {
+    if (this.disposed) {
+      return { unsubscribe: () => undefined };
+    }
     return this.eventEmitter.on(eventName, listener);
   }
 
@@ -228,10 +231,16 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     eventName: T,
     listener: (payload: ScanEventMap[T]) => void | Promise<void>
   ): boolean {
+    if (this.disposed) {
+      return false;
+    }
     return this.eventEmitter.off(eventName, listener);
   }
 
   emit<T extends ScanEventName>(eventName: T, payload: ScanEventMap[T]): void {
+    if (this.disposed) {
+      return;
+    }
     this.eventEmitter.emit(eventName, payload);
   }
 
@@ -239,6 +248,9 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     eventName: T,
     payload: ScanEventMap[T]
   ): Promise<void[]> {
+    if (this.disposed) {
+      return Promise.resolve([]);
+    }
     return this.eventEmitter.emitAsync(eventName, payload);
   }
 
@@ -328,23 +340,30 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       try {
         switch (change.type) {
           case 'created':
-            await this.handleCreated(workspace, folder, normalized);
-            filesAdded += 1;
+            if (await this.handleCreated(workspace, folder, normalized)) {
+              filesAdded += 1;
+            }
             break;
           case 'changed':
-            await this.handleChanged(workspace, folder, normalized);
-            filesChanged += 1;
+            if (await this.handleChanged(workspace, folder, normalized)) {
+              filesChanged += 1;
+            }
             break;
           case 'deleted':
-            this.handleDeleted(normalized);
-            filesRemoved += 1;
+            if (this.handleDeleted(normalized)) {
+              filesRemoved += 1;
+            }
             break;
           case 'renamed':
             if (change.previousAbsolutePath) {
-              this.handleDeleted(normalizeAbsolutePath(change.previousAbsolutePath));
-              await this.handleCreated(workspace, folder, normalized);
-              filesRemoved += 1;
-              filesAdded += 1;
+              const removed = this.handleDeleted(normalizeAbsolutePath(change.previousAbsolutePath));
+              const added = await this.handleCreated(workspace, folder, normalized);
+              if (removed) {
+                filesRemoved += 1;
+              }
+              if (added) {
+                filesAdded += 1;
+              }
             }
             break;
         }
@@ -533,13 +552,13 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
         runNow = true;
         break;
       case 'queue':
-        runNow = this.activeScans.size === 0;
+        runNow = this.getRunningScanCount() === 0;
         if (!runNow) {
           this.enqueue(scan);
         }
         break;
       case 'allow-all':
-        if (this.activeScans.size < this.config.maxConcurrentScans) {
+        if (this.getRunningScanCount() < this.config.maxConcurrentScans) {
           runNow = true;
         } else {
           this.enqueue(scan);
@@ -575,29 +594,36 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
 
   private async runScan(scan: ActiveScan): Promise<void> {
     const signal = scan.abortController.signal;
-    let result: ScanResult;
-
     try {
       this.transitionScanState(scan, 'scanning');
+      let result: ScanResult;
       if (scan.folderId) {
         result = await this.runFolderScan(scan);
       } else {
         result = await this.runFullScan(scan);
       }
+
+      // Late-completion guard: a cancelled scan must never be reported as completed.
+      if (signal.aborted && result.state === 'completed') {
+        result = this.buildCancelledResult(scan);
+      }
+
+      // Transition to the final state (validated by the state machine).
+      this.transitionScanState(scan, result.state);
+      this.onScanSucceeded(scan, result);
     } catch (error) {
       if (signal.aborted || error instanceof ScanCancelledError || isAbortError(error)) {
-        result = this.buildCancelledResult(scan);
+        const result = this.buildCancelledResult(scan);
+        this.transitionScanState(scan, result.state);
+        this.onScanSucceeded(scan, result);
       } else {
         this.onScanFailed(scan, error as Error);
-        return;
       }
+    } finally {
+      this.activeScans.delete(scan.scanId);
+      this.transitionOrchestratorState();
+      this.processQueue();
     }
-
-    if (signal.aborted && result.state === 'completed') {
-      result = this.buildCancelledResult(scan);
-    }
-
-    this.onScanSucceeded(scan, result);
   }
 
   private async runFullScan(scan: ActiveScan): Promise<ScanResult> {
@@ -907,76 +933,79 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     workspace: Workspace,
     folder: WorkspaceFolder,
     normalizedPath: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     const relativePath = this.relativePathFor(folder, normalizedPath);
     if (relativePath === undefined) {
-      return;
+      return false;
     }
 
     const ignoreEngine = await this.getIgnoreEngine(folder);
     const excluded = ignoreEngine.isExcluded(relativePath, { isDirectory: false });
     if (excluded.ignored) {
-      return;
+      return false;
     }
 
     let stat;
     try {
       stat = await this.fileSystem.stat(normalizedPath);
     } catch {
-      return;
+      return false;
     }
     if (stat.type !== 'file') {
-      return;
+      return false;
     }
 
     const projectId = this.findProjectId(folder, []);
     const metadata = this.collectMetadata(folder, projectId, normalizedPath, relativePath, stat);
     this.index.upsertMetadata(metadata);
+    return true;
   }
 
   private async handleChanged(
     workspace: Workspace,
     folder: WorkspaceFolder,
     normalizedPath: string
-  ): Promise<void> {
+  ): Promise<boolean> {
     const existing = this.index.getByPath(normalizedPath);
     if (!existing) {
-      await this.handleCreated(workspace, folder, normalizedPath);
-      return;
+      return this.handleCreated(workspace, folder, normalizedPath);
     }
 
     const relativePath = this.relativePathFor(folder, normalizedPath);
     if (relativePath === undefined) {
-      return;
+      return false;
     }
 
     const ignoreEngine = await this.getIgnoreEngine(folder);
     const excluded = ignoreEngine.isExcluded(relativePath, { isDirectory: false });
     if (excluded.ignored) {
       this.index.removeFile(existing.id);
-      return;
+      return true;
     }
 
     let stat;
     try {
       stat = await this.fileSystem.stat(normalizedPath);
     } catch {
-      return;
+      return false;
     }
     if (stat.type !== 'file') {
-      return;
+      return false;
     }
 
     const projectId = this.findProjectId(folder, []);
     const metadata = this.collectMetadata(folder, projectId, normalizedPath, relativePath, stat);
     this.index.upsertMetadata(metadata);
+    return true;
   }
 
-  private handleDeleted(normalizedPath: string): void {
+  private handleDeleted(normalizedPath: string): boolean {
     const existing = this.index.getByPath(normalizedPath);
     if (existing) {
       this.index.removeFile(existing.id);
+      return true;
     }
+    return false;
   }
 
   private collectMetadata(
@@ -1076,16 +1105,26 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     this.queue.push(scan);
   }
 
+  private getRunningScanCount(): number {
+    let count = 0;
+    for (const scan of this.activeScans.values()) {
+      if (scan.state === 'scanning' || scan.state === 'cancelling') {
+        count += 1;
+      }
+    }
+    return count;
+  }
+
   private processQueue(): void {
     while (this.queue.length > 0) {
       const next = this.queue[0]!;
       let canRun = false;
       switch (this.config.concurrencyPolicy) {
         case 'queue':
-          canRun = this.activeScans.size === 0;
+          canRun = this.getRunningScanCount() === 0;
           break;
         case 'allow-all':
-          canRun = this.activeScans.size < this.config.maxConcurrentScans;
+          canRun = this.getRunningScanCount() < this.config.maxConcurrentScans;
           break;
         case 'cancel-previous':
           canRun = false;
@@ -1161,7 +1200,7 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     const allowed: Record<ScanState, readonly ScanState[]> = {
       idle: ['queued', 'disposed'],
       queued: ['scanning', 'cancelled', 'disposed'],
-      scanning: ['cancelling', 'completed', 'failed', 'disposed'],
+      scanning: ['cancelling', 'cancelled', 'completed', 'failed', 'disposed'],
       cancelling: ['cancelled', 'disposed'],
       completed: ['disposed'],
       cancelled: ['disposed'],
@@ -1273,6 +1312,11 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
     this.latestResult = result;
     this.latestProgress = scan.progress;
     this.eventEmitter.emit('scan:completed', { scanId: scan.scanId, result, timestamp: Date.now() });
+    try {
+      scan.resolve(result);
+    } catch {
+      // Ignore resolution errors.
+    }
   }
 
   private onScanFailed(scan: ActiveScan, error: Error): void {

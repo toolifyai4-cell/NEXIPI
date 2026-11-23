@@ -235,6 +235,7 @@ export class ScanIndex {
     this.filesByProject.clear();
     this.workspaceId = null;
     this.complete = false;
+    this.lastSuccessfulScanTimestamp = null;
   }
 
   private addToFolderIndex(file: FileMetadata): void {
