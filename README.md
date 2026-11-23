@@ -32,6 +32,10 @@
   <img src="https://img.shields.io/github/last-commit/your-org/nexipi?logo=github" alt="Last Commit">
 </p>
 
+<p align="center">
+  <strong>v0.0.1</strong> • Early access — breaking changes may occur
+</p>
+
 ---
 
 ## ✨ Features
@@ -274,6 +278,37 @@ pnpm --filter=nexipi test
 ```
 
 ---
+## 🔧 Troubleshooting
+
+| Issue | Solution |
+|-------|----------|
+| Extension not activating | Ensure VS Code ≥ 1.85.0, run `pnpm build`, then press F5 to start debugging |
+| API key not recognized | Verify `.env` exists at the repo root with a valid `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `GOOGLE_AI_API_KEY` |
+| Build failures | Run `pnpm install` then `pnpm build`. Clean `node_modules` and retry if needed |
+| Streaming not working | Confirm your LLM provider supports streaming and check network connectivity |
+| TypeScript errors | Run `pnpm typecheck` and ensure strict mode is enabled in `tsconfig.json` |
+| Tests failing | Run `pnpm test` and inspect package-specific test output |
+
+---
+
+## ❓ FAQ
+
+### Which LLM providers are supported?
+OpenAI, Anthropic, and Google AI via API keys in `.env`. Custom endpoints can be set with `OPENAI_BASE_URL` and `ANTHROPIC_BASE_URL`.
+
+### How does persistence work?
+Conversations and state are stored in a SQLite-backed persistence layer under `packages/persistence`.
+
+### Can I use local models?
+Not out of the box. Point `OPENAI_BASE_URL` at a local inference server (e.g., Ollama, LM Studio) that exposes an OpenAI-compatible API.
+
+### How do I contribute?
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, branch naming, and pull request guidelines.
+
+### Where are releases tracked?
+See [CHANGELOG.md](CHANGELOG.md) for version history and release notes.
+
+---
 
 ## 📁 Project Structure Details
 
@@ -366,6 +401,7 @@ nexipi/
 ├── .eslintrc.js                # ESLint config
 ├── .prettierrc                 # Prettier config
 ├── CONTRIBUTING.md             # Contribution guidelines
+├── CHANGELOG.md                # Release history and version notes
 └── README.md                   # This file
 ```
 </details>
@@ -386,6 +422,7 @@ We welcome contributions! Please see our [Contributing Guide](CONTRIBUTING.md) f
 - [ ] Format code: `pnpm format`
 - [ ] Commit with conventional commits: `git commit -m "feat: add amazing feature"`
 - [ ] Push and open a Pull Request
+- [ ] Look for issues labeled `good first issue` or `help wanted` for starter tasks
 
 ### Branch Naming Convention
 
