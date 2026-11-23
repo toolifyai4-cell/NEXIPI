@@ -34,6 +34,17 @@ export {
 } from './contracts.js';
 
 export {
+  ReferenceClassification,
+  ReferenceConfidence,
+  ReferenceLanguage,
+  ReferenceOccurrence,
+  ReferenceFileResult,
+  ReferenceDiscoveryMetadata,
+  ReferenceDiscoveryResult,
+  ReferenceDiscoveryOptions,
+} from './reference-contracts.js';
+
+export {
   ReadFileInput,
   ListDirectoryInput,
   validateReadFileInput,
@@ -60,10 +71,23 @@ export {
 } from './search-config.js';
 
 export {
+  ReferenceConfig,
+  defaultReferenceConfig,
+  validateReferenceConfig,
+  safeValidateReferenceConfig,
+} from './reference-config.js';
+
+export {
   CodeSearchInput,
   validateCodeSearchInput,
   safeValidateCodeSearchInput,
 } from './search-schemas.js';
+
+export {
+  ReferenceDiscoveryInput,
+  validateReferenceDiscoveryInput,
+  safeValidateReferenceDiscoveryInput,
+} from './reference-schemas.js';
 
 export { FileReader, createFileReader } from './reader.js';
 export { DirectoryLister, createDirectoryLister } from './lister.js';
