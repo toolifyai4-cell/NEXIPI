@@ -1,7 +1,7 @@
 # NexiPi
 
 <p align="center">
-  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="140">
+  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="600">
 </p>
 
 <p align="center">
@@ -27,10 +27,6 @@
   <img src="https://img.shields.io/badge/VS%20Code-%5E1.85.0-purple?logo=visual-studio-code&logoColor=white" alt="VS Code">
   <img src="https://img.shields.io/badge/Turbo-1.11-red?logo=turborepo&logoColor=white" alt="Turbo">
   <img src="https://img.shields.io/badge/License-MIT-yellow" alt="License">
-</p>
-
-<p align="center">
-  <img src="LOGO/NexiPi%20Teal%20Ribbon%20Icon.png" alt="NexiPi Teal Ribbon Icon" width="600">
 </p>
 
 ---
