@@ -12,13 +12,11 @@ import {
   splitNameExtension,
   normalizePath,
   isChildOf,
-  relativePath,
   matchesIncludePatterns,
 } from './classification.js';
 import { validateSymlinkFreePath } from './path-security.js';
 import { defaultCodeSearchConfig, type CodeSearchConfig, safeValidateCodeSearchConfig } from './search-config.js';
 import {
-  CodeSearchInput,
   safeValidateCodeSearchInput,
 } from './search-schemas.js';
 import type {
@@ -105,7 +103,7 @@ function buildLiteralMatcher(query: string, caseSensitive: boolean): LineFinder 
     if (!m) {
       return null;
     }
-    return { index: m.index!, text: m[0]! };
+    return { index: m.index, text: m[0] };
   };
 }
 

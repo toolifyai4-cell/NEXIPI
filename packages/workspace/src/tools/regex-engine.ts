@@ -65,7 +65,7 @@ interface RegExpNode {
   negated?: boolean;
   ranges?: ReadonlyArray<{ readonly lo: string; readonly hi: string }>;
   kind?: 'digit' | 'nonDigit' | 'word' | 'nonWord' | 'space' | 'nonSpace' | 'start' | 'end' | 'boundary' | 'nonBoundary';
-  parts?: ReadonlyArray<RegExpNode>;
+  parts?: readonly RegExpNode[];
   child?: RegExpNode;
   min?: number;
   max?: number | null;
@@ -367,13 +367,13 @@ function parsePattern(pattern: string): ParseResult {
         negated = true;
         i++;
       }
-      const ranges: { lo: string; hi: string }[] = [];
+      const ranges: Array<{ readonly lo: string; readonly hi: string }> = [];
       while (i < len && peek() !== ']') {
         let first = next();
         if (first === '\\') {
           first = next();
         }
-        let lo = first;
+        const lo = first;
         let hi = lo;
         if (i < len && peek() === '-' && i + 1 < len && pattern[i + 1] !== ']') {
           i++;
@@ -604,7 +604,7 @@ function closure(
   n: number
 ): Map<number, number> {
   const result = new Map<number, number>();
-  const stack: [number, number][] = [...current.entries()];
+  const stack: Array<[number, number]> = [...current.entries()];
   const visited = new Set<number>();
   while (stack.length) {
     const [st, startIdx] = stack.pop()!;
@@ -651,7 +651,7 @@ export function findFirstMatch(
   compiled: CompiledRegex,
   fromPos: number
 ): { start: number; end: number } | null {
-  const { states, start, accept, anchoredStart, anchoredEnd } = compiled;
+  const { states, start, anchoredStart, anchoredEnd } = compiled;
   const n = input.length;
 
   if (anchoredStart && fromPos !== 0) {
@@ -699,7 +699,7 @@ export function findAllMatches(
   input: string,
   compiled: CompiledRegex
 ): ReadonlyArray<{ start: number; end: number; text: string }> {
-  const matches: { start: number; end: number; text: string }[] = [];
+  const matches: Array<{ start: number; end: number; text: string }> = [];
   let pos = 0;
   const n = input.length;
   while (pos <= n) {
