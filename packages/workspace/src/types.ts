@@ -261,3 +261,156 @@ export const WorkspaceChangeEventSchema = z.object({
 
 export type WorkspaceChangeEventInput = z.input<typeof WorkspaceChangeEventSchema>;
 export type WorkspaceChangeEventOutput = z.output<typeof WorkspaceChangeEventSchema>;
+
+export type FileCategory = 'source' | 'config' | 'manifest' | 'binary' | 'sensitive' | 'other';
+
+export interface DiscoveredFile {
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly workspaceFolderId: WorkspaceFolderId;
+  readonly projectId?: string;
+}
+
+export interface FileMetadata {
+  readonly id: string;
+  readonly workspaceId: string;
+  readonly workspaceFolderId: WorkspaceFolderId;
+  readonly projectId?: string;
+  readonly absolutePath: string;
+  readonly uri: string;
+  readonly relativePath: string;
+  readonly name: string;
+  readonly extension: string;
+  readonly size: number;
+  readonly mtime: number | null;
+  readonly language: string | null;
+  readonly category: FileCategory;
+  readonly isHidden: boolean;
+  readonly isManifest: boolean;
+  readonly isConfig: boolean;
+  readonly isBinary: boolean;
+  readonly isSensitive: boolean;
+  readonly sourceExcluded: boolean;
+}
+
+export function createFileMetadata(params: {
+  id: string;
+  workspaceId: string;
+  workspaceFolderId: WorkspaceFolderId;
+  projectId?: string;
+  absolutePath: string;
+  uri: string;
+  relativePath: string;
+  name: string;
+  extension: string;
+  size: number;
+  mtime: number | null;
+  language: string | null;
+  category: FileCategory;
+  isHidden: boolean;
+  isManifest: boolean;
+  isConfig: boolean;
+  isBinary: boolean;
+  isSensitive: boolean;
+}): FileMetadata {
+  return {
+    id: params.id,
+    workspaceId: params.workspaceId,
+    workspaceFolderId: params.workspaceFolderId,
+    ...(params.projectId !== undefined ? { projectId: params.projectId } : {}),
+    absolutePath: params.absolutePath,
+    uri: params.uri,
+    relativePath: params.relativePath,
+    name: params.name,
+    extension: params.extension,
+    size: params.size,
+    mtime: params.mtime,
+    language: params.language,
+    category: params.category,
+    isHidden: params.isHidden,
+    isManifest: params.isManifest,
+    isConfig: params.isConfig,
+    isBinary: params.isBinary,
+    isSensitive: params.isSensitive,
+    sourceExcluded: params.isSensitive || params.isBinary,
+  };
+}
+
+export const FileMetadataSchema = z.object({
+  id: z.string().min(1),
+  workspaceId: z.string().min(1),
+  workspaceFolderId: z.string().min(1),
+  projectId: z.string().optional(),
+  absolutePath: z.string().min(1),
+  uri: z.string().min(1),
+  relativePath: z.string().min(1),
+  name: z.string().min(1),
+  extension: z.string(),
+  size: z.number().int().nonnegative(),
+  mtime: z.number().nullable(),
+  language: z.string().nullable(),
+  category: z.enum(['source', 'config', 'manifest', 'binary', 'sensitive', 'other']),
+  isHidden: z.boolean(),
+  isManifest: z.boolean(),
+  isConfig: z.boolean(),
+  isBinary: z.boolean(),
+  isSensitive: z.boolean(),
+  sourceExcluded: z.boolean(),
+});
+
+export type FileMetadataInput = z.input<typeof FileMetadataSchema>;
+export type FileMetadataOutput = z.output<typeof FileMetadataSchema>;
+
+export interface FileDiscoveryResult {
+  readonly workspaceId: string;
+  readonly files: readonly FileMetadata[];
+  readonly count: number;
+  readonly truncated: boolean;
+  readonly completed: boolean;
+  readonly cancelled: boolean;
+  readonly errors: readonly DiscoveryError[];
+}
+
+export interface DiscoveryError {
+  readonly path: string;
+  readonly message: string;
+  readonly isFatal: boolean;
+}
+
+export type FileDiscoveryResultOutput = FileDiscoveryResult;
+
+export interface ExclusionPrecedence {
+  readonly mandatorySafety: readonly string[];
+  readonly defaults: readonly string[];
+  readonly gitignore: readonly string[];
+  readonly user: readonly string[];
+}
+
+export function createDefaultExclusionPrecedence(): ExclusionPrecedence {
+  return {
+    mandatorySafety: [],
+    defaults: [],
+    gitignore: [],
+    user: [],
+  };
+}
+
+export interface MonorepoPackagePattern {
+  readonly pattern: string;
+  readonly source: 'package.json' | 'pnpm-workspace' | 'yarn-workspaces' | 'lerna' | 'nx' | 'turbo';
+}
+
+export interface ExpandedPackage {
+  readonly path: string;
+  readonly relativePath: string;
+  readonly name: string;
+  readonly matchedPattern: string;
+  readonly workspaceFolderId: WorkspaceFolderId;
+  readonly projectId?: string;
+}
+
+export interface SensitiveFileRule {
+  readonly name: string;
+  readonly patterns: readonly string[];
+  readonly description: string;
+}
