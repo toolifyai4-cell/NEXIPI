@@ -193,6 +193,12 @@ export class FileDiscoveryService {
       }
       this.checkAbort();
 
+      // Skip hidden files and directories when includeHidden is false.
+      // Hidden directories are not traversed, so their descendants are also excluded.
+      if (!this.config.includeHidden && entry.name.startsWith('.')) {
+        continue;
+      }
+
       if (collected.length >= this.config.maxFileCount) {
         state.truncated = true;
         return;

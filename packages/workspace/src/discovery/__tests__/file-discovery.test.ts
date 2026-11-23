@@ -330,4 +330,88 @@ describe('FileDiscoveryService', () => {
     expect(result.files.length).toBe(1);
     expect(result.completed).toBe(true);
   });
+
+  it('should discover hidden files when includeHidden is true', async () => {
+    const vfs = makeVfs({
+      '.env': 'secret',
+      '.eslintrc': '{}',
+      'src': { 'main.ts': 'x' },
+    });
+    const service = createService(vfs, 'file:///root', { includeHidden: true });
+    const result = await service.discover();
+    const paths = result.files.map((f) => f.relativePath).sort();
+    expect(paths).toEqual(['.env', '.eslintrc', 'src/main.ts']);
+    for (const f of result.files) {
+      if (f.relativePath.startsWith('.')) {
+        expect(f.isHidden).toBe(true);
+      }
+    }
+  });
+
+  it('should exclude hidden files when includeHidden is false (default)', async () => {
+    const vfs = makeVfs({
+      '.env': 'secret',
+      '.eslintrc': '{}',
+      'src': { 'main.ts': 'x' },
+    });
+    const service = createService(vfs, 'file:///root');
+    const result = await service.discover();
+    const paths = result.files.map((f) => f.relativePath).sort();
+    expect(paths).toEqual(['src/main.ts']);
+    expect(result.files.some((f) => f.relativePath.startsWith('.'))).toBe(false);
+  });
+
+  it('should exclude hidden directories and their descendants when includeHidden is false', async () => {
+    const vfs = makeVfs({
+      '.hidden': { 'secret.txt': 'x', 'nested': { 'deep.txt': 'y' } },
+      'src': { 'main.ts': 'x' },
+    });
+    const service = createService(vfs, 'file:///root');
+    const result = await service.discover();
+    const paths = result.files.map((f) => f.relativePath).sort();
+    expect(paths).toEqual(['src/main.ts']);
+    expect(result.files.some((f) => f.relativePath.startsWith('.hidden'))).toBe(false);
+  });
+
+  it('should discover hidden directory descendants when includeHidden is true', async () => {
+    const vfs = makeVfs({
+      '.hidden': { 'secret.txt': 'x', 'nested': { 'deep.txt': 'y' } },
+      'src': { 'main.ts': 'x' },
+    });
+    const service = createService(vfs, 'file:///root', { includeHidden: true });
+    const result = await service.discover();
+    const paths = result.files.map((f) => f.relativePath).sort();
+    expect(paths).toEqual([
+      '.hidden/nested/deep.txt',
+      '.hidden/secret.txt',
+      'src/main.ts',
+    ]);
+  });
+
+  it('should not allow includeHidden to override mandatory safety exclusions', async () => {
+    const vfs = makeVfs({
+      '.git': { 'config': 'x', 'HEAD': 'ref' },
+      '.env': 'secret',
+      'src': { 'main.ts': 'x' },
+    });
+    const service = createService(vfs, 'file:///root', { includeHidden: true });
+    const result = await service.discover();
+    const paths = result.files.map((f) => f.relativePath);
+    expect(paths).not.toContain('.git/config');
+    expect(paths).not.toContain('.git/HEAD');
+    expect(paths).toContain('.env');
+    expect(paths).toContain('src/main.ts');
+  });
+
+  it('should handle hidden files in multi-root workspaces independently', async () => {
+    const vfsA = makeVfs({ '.env': 'secret', 'a.ts': 'x' }, 'file:///rootA');
+    const vfsB = makeVfs({ '.hidden': { 'secret.txt': 'x' }, 'b.ts': 'y' }, 'file:///rootB');
+    const serviceA = createService(vfsA, 'file:///rootA', { includeHidden: true });
+    const serviceB = createService(vfsB, 'file:///rootB', { includeHidden: false });
+    const resultA = await serviceA.discover();
+    const resultB = await serviceB.discover();
+    expect(resultA.files.map((f) => f.relativePath).sort()).toEqual(['.env', 'a.ts']);
+    expect(resultB.files.map((f) => f.relativePath)).toEqual(['b.ts']);
+    expect(resultA.workspaceId).not.toBe(resultB.workspaceId);
+  });
 });
