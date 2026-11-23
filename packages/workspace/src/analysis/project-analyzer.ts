@@ -358,13 +358,19 @@ const monorepoInfo = this.config.detectMonorepos ? this.detectMonorepo(manifests
     if (monorepoManifests.length === 0) {
       const packageJson = manifests.find((m) => m.type === 'package.json');
       if (packageJson?.rawData) {
-        const data = packageJson.rawData as unknown as ParsedManifest;
-        if (data.workspaceConfig?.packages) {
+        const raw = packageJson.rawData as { workspaces?: string[] | { packages?: string[] } } | undefined;
+        const workspacePackages =
+          raw?.workspaces === undefined || raw?.workspaces === null
+            ? undefined
+            : Array.isArray(raw.workspaces)
+            ? raw.workspaces
+            : raw.workspaces.packages;
+        if (workspacePackages) {
           return createMonorepoInfo({
             type: 'npm',
             rootPath,
+            config: { packages: workspacePackages },
             manifestPaths: [packageJson.path],
-            ...(data.workspaceConfig !== undefined ? { config: data.workspaceConfig } : {}),
           });
         }
       }
@@ -377,17 +383,17 @@ const monorepoInfo = this.config.detectMonorepos ? this.detectMonorepo(manifests
 
     for (const manifest of monorepoManifests) {
       manifestPaths.push(manifest.path);
-      const parsed = manifest.rawData as unknown as ParsedManifest | undefined;
+      const raw = manifest.rawData as { workspaces?: { packages?: string[] }; packages?: string[] } | undefined;
 
       if (manifest.type.startsWith('pnpm-workspace')) {
         types.add('pnpm');
-        if (parsed?.workspaceConfig) {
-          config = parsed.workspaceConfig;
+        if (raw?.workspaces?.packages) {
+          config = { packages: raw.workspaces.packages };
         }
       } else if (manifest.type === 'lerna.json') {
         types.add('lerna');
-        if (parsed?.workspaceConfig) {
-          config = parsed.workspaceConfig;
+        if (raw?.packages) {
+          config = { packages: raw.packages };
         }
       } else if (manifest.type === 'nx.json') {
         types.add('nx');

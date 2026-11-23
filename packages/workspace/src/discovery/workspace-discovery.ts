@@ -1,4 +1,4 @@
-import { createLogger, type Logger, defaultEngineConfig, createEventEmitter, type EventMap } from '@nexipi/core';
+import { createLogger, type Logger, defaultEngineConfig, createEventEmitter } from '@nexipi/core';
 import type {
   WorkspaceProvider,
   WorkspaceFoldersChangeEvent,

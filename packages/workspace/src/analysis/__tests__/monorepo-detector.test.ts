@@ -48,8 +48,8 @@ describe('MonorepoDetector', () => {
   - apps/*`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/pnpm-mono/pnpm-workspace.yaml', pnpmWorkspace]]),
-      new Map([['/pnpm-mono', [{ name: 'pnpm-workspace.yaml', type: 'file' }]])
+      createFileMap([['/pnpm-mono/pnpm-workspace.yaml', pnpmWorkspace]]),
+      createDirMap([['/pnpm-mono', [{ name: 'pnpm-workspace.yaml', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -68,8 +68,8 @@ describe('MonorepoDetector', () => {
     });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/lerna-mono/lerna.json', lernaJson]]),
-      new Map([['/lerna-mono', [{ name: 'lerna.json', type: 'file' }]])
+      createFileMap([['/lerna-mono/lerna.json', lernaJson]]),
+      createDirMap([['/lerna-mono', [{ name: 'lerna.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -84,8 +84,8 @@ describe('MonorepoDetector', () => {
     const nxJson = JSON.stringify({ namedInputs: { default: ['{projectRoot}/**/*'] } });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/nx-mono/nx.json', nxJson]]),
-      new Map([['/nx-mono', [{ name: 'nx.json', type: 'file' }]])
+      createFileMap([['/nx-mono/nx.json', nxJson]]),
+      createDirMap([['/nx-mono', [{ name: 'nx.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -100,8 +100,8 @@ describe('MonorepoDetector', () => {
     const turboJson = JSON.stringify({ pipeline: { build: { dependsOn: ['^build'] } } });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/turbo-mono/turbo.json', turboJson]]),
-      new Map([['/turbo-mono', [{ name: 'turbo.json', type: 'file' }]])
+      createFileMap([['/turbo-mono/turbo.json', turboJson]]),
+      createDirMap([['/turbo-mono', [{ name: 'turbo.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -122,11 +122,11 @@ describe('MonorepoDetector', () => {
   - packages/*`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/yarn-mono/package.json', packageJson],
         ['/yarn-mono/yarn.workspaces', yarnWorkspaces],
       ]),
-      new Map([['/yarn-mono', [{ name: 'package.json', type: 'file' }, { name: 'yarn.workspaces', type: 'file' }]])
+      createDirMap([['/yarn-mono', [{ name: 'package.json', type: 'file' }, { name: 'yarn.workspaces', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -145,8 +145,8 @@ describe('MonorepoDetector', () => {
     });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/npm-mono/package.json', packageJson]]),
-      new Map([['/npm-mono', [{ name: 'package.json', type: 'file' }]])
+      createFileMap([['/npm-mono/package.json', packageJson]]),
+      createDirMap([['/npm-mono', [{ name: 'package.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -164,12 +164,12 @@ describe('MonorepoDetector', () => {
     const nxJson = JSON.stringify({});
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/multi/pnpm-workspace.yaml', pnpmWorkspace],
         ['/multi/turbo.json', turboJson],
         ['/multi/nx.json', nxJson],
       ]),
-      new Map([['/multi', ['pnpm-workspace.yaml', 'turbo.json', 'nx.json']]])
+      createDirMap([['/multi', [{ name: 'pnpm-workspace.yaml', type: 'file' }, { name: 'turbo.json', type: 'file' }, { name: 'nx.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -186,8 +186,8 @@ describe('MonorepoDetector', () => {
     const packageJson = JSON.stringify({ name: 'regular-project', version: '1.0.0' });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/regular/package.json', packageJson]]),
-      new Map([['/regular', ['package.json']]])
+      createFileMap([['/regular/package.json', packageJson]]),
+      createDirMap([['/regular', [{ name: 'package.json', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -203,13 +203,13 @@ describe('MonorepoDetector', () => {
     const turboJson = JSON.stringify({ pipeline: {} });
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/root1/pnpm-workspace.yaml', pnpmWorkspace],
         ['/root2/turbo.json', turboJson],
       ]),
-      new Map([
-        ['/root1', ['pnpm-workspace.yaml']],
-        ['/root2', ['turbo.json']],
+      createDirMap([
+        ['/root1', [{ name: 'pnpm-workspace.yaml', type: 'file' }]],
+        ['/root2', [{ name: 'turbo.json', type: 'file' }]],
       ])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
@@ -236,8 +236,8 @@ describe('MonorepoDetector', () => {
     const pnpmWorkspace = `packages: []`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/mono/pnpm-workspace.yaml', pnpmWorkspace]]),
-      new Map([['/mono', ['pnpm-workspace.yaml']]])
+      createFileMap([['/mono/pnpm-workspace.yaml', pnpmWorkspace]]),
+      createDirMap([['/mono', [{ name: 'pnpm-workspace.yaml', type: 'file' }]]])
     );
     detector = new MonorepoDetector({ fileSystem: mockFileSystem, manifestRegistry });
 
@@ -249,10 +249,10 @@ describe('MonorepoDetector', () => {
   it('should respect maxDepth', async () => {
     const pnpmWorkspace = `packages: []`;
 
-    const dirs = new Map<string, string[]>();
+    const dirs = new Map<string, { name: string; type: 'file' | 'directory' }[]>();
     let current = '/deep';
     for (let i = 0; i < 10; i++) {
-      dirs.set(current, i === 9 ? ['pnpm-workspace.yaml'] : [`level${i + 1}`]);
+      dirs.set(current, i === 9 ? [{ name: 'pnpm-workspace.yaml', type: 'file' }] : [{ name: `level${i + 1}`, type: 'directory' }]);
       current = `${current}/level${i + 1}`;
     }
 

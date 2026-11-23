@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-unsafe-call, @typescript-eslint/no-unsafe-argument */
 import type { FileSystemProvider } from '../discovery/workspace-provider.js';
 import type { ManifestType, ProjectManifest, ProjectType, WorkspaceConfig } from '../types.js';
 import { createProjectManifest } from '../types.js';
@@ -280,15 +281,25 @@ export class ManifestRegistry {
     return skipDirs.has(dirName) || dirName.startsWith('.');
   }
 
-  private parsePackageJson(_content: string, _path: string): ParsedManifest {
+  private parsePackageJson(_content: string, __path: string): ParsedManifest {
     try {
       const data = JSON.parse(_content) as PackageJson;
-      const workspaceConfig = data.workspaces
-        ? {
-            packages: data.workspaces.packages ?? [],
-            ...(data.workspaces.catalogs !== undefined ? { catalogs: data.workspaces.catalogs } : {}),
-          }
-        : undefined;
+      const workspacesRaw = data.workspaces;
+      const workspacePackages =
+        workspacesRaw === undefined || workspacesRaw === null
+          ? undefined
+          : Array.isArray(workspacesRaw)
+          ? workspacesRaw
+          : workspacesRaw.packages;
+      const workspaceConfig =
+        workspacePackages !== undefined
+          ? {
+              packages: workspacePackages,
+              ...(typeof workspacesRaw === 'object' && workspacesRaw !== null && !Array.isArray(workspacesRaw) && workspacesRaw.catalogs !== undefined
+                ? { catalogs: workspacesRaw.catalogs }
+                : {}),
+            }
+          : undefined;
       return {
         name: data.name,
         version: data.version,
@@ -313,7 +324,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseYamlWorkspace(content: string, _path: string): ParsedManifest {
+  private parseYamlWorkspace(content: string, __path: string): ParsedManifest {
     try {
       const lines = content.split('\n');
       const packages: string[] = [];
@@ -358,7 +369,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseLernaJson(content: string, path: string): ParsedManifest {
+  private parseLernaJson(content: string, _path: string): ParsedManifest {
     try {
       const data = JSON.parse(content);
       return {
@@ -387,7 +398,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseNxJson(content: string, path: string): ParsedManifest {
+  private parseNxJson(content: string, _path: string): ParsedManifest {
     try {
       const data = JSON.parse(content);
       return {
@@ -414,7 +425,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseTurboJson(content: string, path: string): ParsedManifest {
+  private parseTurboJson(content: string, _path: string): ParsedManifest {
     try {
       const data = JSON.parse(content);
       return {
@@ -441,7 +452,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseCargoToml(content: string, path: string): ParsedManifest {
+  private parseCargoToml(content: string, _path: string): ParsedManifest {
     try {
       const nameMatch = content.match(/name\s*=\s*"([^"]+)"/);
       const versionMatch = content.match(/version\s*=\s*"([^"]+)"/);
@@ -469,7 +480,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseGoMod(content: string, path: string): ParsedManifest {
+  private parseGoMod(content: string, _path: string): ParsedManifest {
     try {
       const moduleMatch = content.match(/^module\s+(\S+)/m);
       return {
@@ -496,7 +507,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parsePyProjectToml(content: string, path: string): ParsedManifest {
+  private parsePyProjectToml(content: string, _path: string): ParsedManifest {
     try {
       const nameMatch = content.match(/name\s*=\s*"([^"]+)"/);
       const versionMatch = content.match(/version\s*=\s*"([^"]+)"/);
@@ -524,7 +535,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseRequirementsTxt(content: string, path: string): ParsedManifest {
+  private parseRequirementsTxt(content: string, _path: string): ParsedManifest {
     return {
       name: undefined,
       version: undefined,
@@ -537,7 +548,7 @@ export class ManifestRegistry {
     };
   }
 
-  private parseSetupPy(content: string, path: string): ParsedManifest {
+  private parseSetupPy(content: string, _path: string): ParsedManifest {
     return {
       name: undefined,
       version: undefined,
@@ -550,7 +561,7 @@ export class ManifestRegistry {
     };
   }
 
-  private parseSetupCfg(content: string, path: string): ParsedManifest {
+  private parseSetupCfg(content: string, _path: string): ParsedManifest {
     return {
       name: undefined,
       version: undefined,
@@ -563,7 +574,7 @@ export class ManifestRegistry {
     };
   }
 
-  private parsePomXml(content: string, path: string): ParsedManifest {
+  private parsePomXml(content: string, _path: string): ParsedManifest {
     try {
       const artifactIdMatch = content.match(/<artifactId>([^<]+)<\/artifactId>/);
       const versionMatch = content.match(/<version>([^<]+)<\/version>/);
@@ -591,7 +602,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseGradle(content: string, path: string): ParsedManifest {
+  private parseGradle(content: string, _path: string): ParsedManifest {
     try {
       const nameMatch = content.match(/rootProject\.name\s*=\s*['"]([^'"]+)['"]/);
       return {
@@ -618,7 +629,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseComposerJson(content: string, path: string): ParsedManifest {
+  private parseComposerJson(content: string, _path: string): ParsedManifest {
     try {
       const data = JSON.parse(content);
       return {
@@ -645,7 +656,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseGemfile(content: string, path: string): ParsedManifest {
+  private parseGemfile(content: string, _path: string): ParsedManifest {
     return {
       name: undefined,
       version: undefined,
@@ -658,7 +669,7 @@ export class ManifestRegistry {
     };
   }
 
-  private parseCsproj(content: string, path: string): ParsedManifest {
+  private parseCsproj(content: string, _path: string): ParsedManifest {
     try {
       const nameMatch = content.match(/<AssemblyName>([^<]+)<\/AssemblyName>/) ||
                         content.match(/<ProjectName>([^<]+)<\/ProjectName>/) ||
@@ -687,7 +698,7 @@ export class ManifestRegistry {
     }
   }
 
-  private parseSln(content: string, path: string): ParsedManifest {
+  private parseSln(content: string, _path: string): ParsedManifest {
     return {
       name: undefined,
       version: undefined,

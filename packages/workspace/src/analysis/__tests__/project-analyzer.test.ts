@@ -55,8 +55,8 @@ describe('ProjectAnalyzer', () => {
     });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/project/package.json', packageJson]]),
-      new Map([['/project', ['package.json']]])
+      createFileMap([['/project/package.json', packageJson]]),
+      createDirMap([['/project', [{ name: 'package.json', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -81,11 +81,11 @@ describe('ProjectAnalyzer', () => {
     const packageJson = JSON.stringify({ name: 'monorepo-root', private: true });
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/monorepo/pnpm-workspace.yaml', pnpmWorkspace],
         ['/monorepo/package.json', packageJson],
       ]),
-      new Map([['/monorepo', ['pnpm-workspace.yaml', 'package.json']]])
+      createDirMap([['/monorepo', [{ name: 'pnpm-workspace.yaml', type: 'file' }, { name: 'package.json', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -107,11 +107,11 @@ describe('ProjectAnalyzer', () => {
     const packageJson = JSON.stringify({ name: 'turbo-root', private: true });
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/turbo/turbo.json', turboJson],
         ['/turbo/package.json', packageJson],
       ]),
-      new Map([['/turbo', ['turbo.json', 'package.json']]])
+      createDirMap([['/turbo', [{ name: 'turbo.json', type: 'file' }, { name: 'package.json', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -130,11 +130,11 @@ describe('ProjectAnalyzer', () => {
     const packageJson = JSON.stringify({ name: 'nx-root', private: true });
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/nx/nx.json', nxJson],
         ['/nx/package.json', packageJson],
       ]),
-      new Map([['/nx', ['nx.json', 'package.json']]])
+      createDirMap([['/nx', [{ name: 'nx.json', type: 'file' }, { name: 'package.json', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -155,8 +155,8 @@ version = "1.0.0"
 dependencies = ["requests"]`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/python/pyproject.toml', pyproject]]),
-      new Map([['/python', ['pyproject.toml']]])
+      createFileMap([['/python/pyproject.toml', pyproject]]),
+      createDirMap([['/python', [{ name: 'pyproject.toml', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -177,8 +177,8 @@ version = "0.1.0"
 edition = "2021"`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/rust/Cargo.toml', cargoToml]]),
-      new Map([['/rust', ['Cargo.toml']]])
+      createFileMap([['/rust/Cargo.toml', cargoToml]]),
+      createDirMap([['/rust', [{ name: 'Cargo.toml', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -199,8 +199,8 @@ edition = "2021"`;
 go 1.21`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/go/go.mod', goMod]]),
-      new Map([['/go', ['go.mod']]])
+      createFileMap([['/go/go.mod', goMod]]),
+      createDirMap([['/go', [{ name: 'go.mod', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -224,8 +224,8 @@ go 1.21`;
 </project>`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/java/pom.xml', pomXml]]),
-      new Map([['/java', ['pom.xml']]])
+      createFileMap([['/java/pom.xml', pomXml]]),
+      createDirMap([['/java', [{ name: 'pom.xml', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -248,8 +248,8 @@ plugins {
 }`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/gradle/build.gradle.kts', buildGradle]]),
-      new Map([['/gradle', ['build.gradle.kts']]])
+      createFileMap([['/gradle/build.gradle.kts', buildGradle]]),
+      createDirMap([['/gradle', [{ name: 'build.gradle.kts', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -274,8 +274,8 @@ plugins {
 </Project>`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/dotnet/MyDotNetProject.csproj', csproj]]),
-      new Map([['/dotnet', ['MyDotNetProject.csproj']]])
+      createFileMap([['/dotnet/MyDotNetProject.csproj', csproj]]),
+      createDirMap([['/dotnet', [{ name: 'MyDotNetProject.csproj', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -298,8 +298,8 @@ plugins {
     });
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/php/composer.json', composerJson]]),
-      new Map([['/php', ['composer.json']]])
+      createFileMap([['/php/composer.json', composerJson]]),
+      createDirMap([['/php', [{ name: 'composer.json', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -319,8 +319,8 @@ plugins {
 gem 'rails', '~> 7.0'`;
 
     mockFileSystem = createMockFileSystem(
-      new Map([['/ruby/Gemfile', gemfile]]),
-      new Map([['/ruby', ['Gemfile']]])
+      createFileMap([['/ruby/Gemfile', gemfile]]),
+      createDirMap([['/ruby', [{ name: 'Gemfile', type: 'file' }]]])
     );
     analyzer = new ProjectAnalyzer({
       fileSystem: mockFileSystem,
@@ -339,11 +339,11 @@ gem 'rails', '~> 7.0'`;
     const childPackageJson = JSON.stringify({ name: 'child-package', version: '1.0.0' });
 
     mockFileSystem = createMockFileSystem(
-      new Map([
+      createFileMap([
         ['/monorepo/package.json', rootPackageJson],
         ['/monorepo/packages/child/package.json', childPackageJson],
       ]),
-      new Map([
+      createDirMap([
         ['/monorepo', [{ name: 'package.json', type: 'file' }, { name: 'packages', type: 'directory' }]],
         ['/monorepo/packages', [{ name: 'child', type: 'directory' }]],
         ['/monorepo/packages/child', [{ name: 'package.json', type: 'file' }]],
