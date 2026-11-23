@@ -8,9 +8,17 @@ import { z } from 'zod';
  */
 export const FileReadConfigSchema = z.object({
   /** Maximum file size in bytes that may be read (pre-read stat check). */
-  maxFileSize: z.number().int().positive().default(1024 * 1024),
+  maxFileSize: z
+    .number()
+    .int()
+    .positive()
+    .default(1024 * 1024),
   /** Maximum number of bytes of content returned to the caller. */
-  maxOutputSize: z.number().int().positive().default(512 * 1024),
+  maxOutputSize: z
+    .number()
+    .int()
+    .positive()
+    .default(512 * 1024),
   /** Maximum number of lines the file may contain before reading is rejected. */
   maxLineCount: z.number().int().positive().default(10000),
   /** Whether to inspect content for binary indicators after reading. */

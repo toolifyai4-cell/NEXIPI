@@ -1,5 +1,3 @@
-import type { FileStat } from '../discovery/workspace-provider.js';
-import type { WorkspaceFolder } from '../types.js';
 import {
   BinaryFileExtensions,
   ConfigFileNames,
@@ -372,11 +370,14 @@ export function isBinaryContent(content: string): boolean {
  * algorithm as Phase 08's workspace discovery and file discovery.
  */
 export function computeWorkspaceId(uri: string): string {
-  const normalized = uri.replace(/^file:\/\//, '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalized = uri
+    .replace(/^file:\/\//, '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     const char = normalized.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
+    hash = (hash << 5) - hash + char;
     hash = hash & hash;
   }
   return `ws_${Math.abs(hash).toString(36)}`;
@@ -400,9 +401,10 @@ export function matchesIncludePatterns(relativePath: string, patterns: readonly 
     return true;
   }
   const normalized = relativePath.replace(/\\/g, '/');
+  const baseName = normalized.slice(normalized.lastIndexOf('/') + 1);
   for (const pattern of patterns) {
     const regex = patternToRegex(pattern);
-    if (regex.test(normalized)) {
+    if (regex.test(normalized) || regex.test(baseName)) {
       return true;
     }
   }
@@ -414,7 +416,7 @@ function patternToRegex(pattern: string): RegExp {
   let i = 0;
   const len = pattern.length;
   while (i < len) {
-    const ch = pattern[i];
+    const ch = pattern[i]!;
     if (ch === '*' && i + 1 < len && pattern[i + 1] === '*') {
       regex += '.*';
       i += 2;
@@ -436,4 +438,63 @@ function patternToRegex(pattern: string): RegExp {
     }
   }
   return new RegExp(`^${regex}$`);
+}
+
+/**
+ * Normalizes a workspace path/URI to a scheme-stripped, forward-slash path.
+ *
+ * Strips the `file://` scheme, converts backslashes to forward slashes,
+ * collapses repeated slashes, and resolves `.` and `..` segments so that
+ * traversal attempts (e.g. `/root/../outside`) cannot escape the workspace
+ * root through string-prefix matching alone.
+ */
+export function normalizePath(uri: string): string {
+  let p = uri.replace(/^file:\/\//i, '').replace(/\\/g, '/');
+  const isAbsolute = p.startsWith('/');
+  p = p.replace(/\/+/g, '/');
+  const parts = p.split('/');
+  const resolved: string[] = [];
+  for (const part of parts) {
+    if (part === '' || part === '.') {
+      continue;
+    }
+    if (part === '..') {
+      if (resolved.length > 0) {
+        resolved.pop();
+      }
+      continue;
+    }
+    resolved.push(part);
+  }
+  let out = resolved.join('/');
+  if (out.length === 0) {
+    out = isAbsolute ? '/' : '';
+  }
+  return (isAbsolute ? '/' : '') + out.replace(/\/+$/, '');
+}
+
+/**
+ * Returns true when `child` is `parent` itself or a descendant of `parent`,
+ * after normalizing both paths (including `..` resolution).
+ */
+export function isChildOf(parent: string, child: string): boolean {
+  const p = normalizePath(parent);
+  const c = normalizePath(child);
+  return c === p || c.startsWith(`${p}/`);
+}
+
+/**
+ * Returns the path of `absolutePath` relative to `root`, or undefined when it
+ * is not contained by `root`.
+ */
+export function relativePath(root: string, absolutePath: string): string | undefined {
+  const r = normalizePath(root);
+  const a = normalizePath(absolutePath);
+  if (a === r) {
+    return '';
+  }
+  if (a.startsWith(`${r}/`)) {
+    return a.slice(r.length + 1);
+  }
+  return undefined;
 }

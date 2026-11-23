@@ -2,48 +2,27 @@ import type { FileStat, FileSystemProvider } from '../discovery/workspace-provid
 import type { WorkspaceFolder } from '../types.js';
 import { IgnoreEngine } from '../ignore/ignore-engine.js';
 import {
-  detectLanguage,
   isBinaryContent,
   isBinaryExtension,
   isSensitiveFileName,
   splitNameExtension,
   computeWorkspaceId,
+  normalizePath,
+  isChildOf,
+  relativePath,
 } from './classification.js';
-import { defaultFileReadConfig, type FileReadConfig } from './config.js';
-import type { ReadFileOptions, ReadFileResult } from './contracts.js';
-import { validateReadFileInput, safeValidateReadFileInput } from './schemas.js';
 import {
-  ToolErrorCode,
-  createToolError,
-} from './errors.js';
+  defaultFileReadConfig,
+  type FileReadConfig,
+  safeValidateFileReadConfig,
+} from './config.js';
+import type { ReadFileOptions, ReadFileResult } from './contracts.js';
+import { safeValidateReadFileInput } from './schemas.js';
+import { ToolErrorCode, createToolError } from './errors.js';
 
-function normalizeUri(uri: string): string {
-  return uri.replace(/^file:\/\//, '').replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-function isChildOf(parent: string, child: string): boolean {
-  const p = normalizeUri(parent);
-  const c = normalizeUri(child);
-  return c === p || c.startsWith(`${p}/`);
-}
-
-function relativePath(root: string, absolutePath: string): string | undefined {
-  const r = normalizeUri(root);
-  const a = normalizeUri(absolutePath);
-  if (a === r) {
-    return '';
-  }
-  if (a.startsWith(`${r}/`)) {
-    return a.slice(r.length + 1);
-  }
-  return undefined;
-}
-
-function checkAborted(signal: AbortSignal | undefined): void {
+function checkCancelled(signal: AbortSignal | undefined, path: string): void {
   if (signal?.aborted) {
-    const err = new Error('Operation aborted') as Error & { code?: string };
-    err.name = 'AbortError';
-    throw err;
+    throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Operation cancelled', { path });
   }
 }
 
@@ -105,7 +84,14 @@ export class FileReader {
   }) {
     this.fileSystem = options.fileSystem;
     this.workspaceFolder = options.workspaceFolder;
-    this.config = { ...defaultFileReadConfig, ...options.config };
+    const configValidation = safeValidateFileReadConfig(options.config ?? {});
+    if (!configValidation.success) {
+      throw createToolError(
+        ToolErrorCode.TOOL_INVALID_ARGUMENT,
+        `Invalid read config: ${configValidation.error.issues.map(i => i.message).join(', ')}`
+      );
+    }
+    this.config = { ...defaultFileReadConfig, ...configValidation.data };
     this.workspaceId = computeWorkspaceId(options.workspaceFolder.uri);
   }
 
@@ -118,7 +104,7 @@ export class FileReader {
     if (!input.success) {
       throw createToolError(
         ToolErrorCode.TOOL_INVALID_ARGUMENT,
-        `Invalid read arguments: ${input.error.issues.map((i) => i.message).join(', ')}`,
+        `Invalid read arguments: ${input.error.issues.map(i => i.message).join(', ')}`,
         { path: options.uri }
       );
     }
@@ -132,10 +118,10 @@ export class FileReader {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
-    const absPath = normalizeUri(options.uri);
-    const root = normalizeUri(this.workspaceFolder.uri);
+    const absPath = normalizePath(options.uri);
+    const root = normalizePath(this.workspaceFolder.uri);
 
     // Boundary protection: the requested path must be within the workspace root.
     if (!isChildOf(root, absPath)) {
@@ -146,7 +132,7 @@ export class FileReader {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     let stat: FileStat;
     try {
@@ -164,7 +150,7 @@ export class FileReader {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     // Reject directories and symlinks (unless symlinks are explicitly followed).
     if (stat.type !== 'file') {
@@ -175,11 +161,9 @@ export class FileReader {
           { path: options.uri }
         );
       }
-      throw createToolError(
-        ToolErrorCode.TOOL_NOT_A_FILE,
-        'Path is not a file',
-        { path: options.uri }
-      );
+      throw createToolError(ToolErrorCode.TOOL_NOT_A_FILE, 'Path is not a file', {
+        path: options.uri,
+      });
     }
 
     const rel = relativePath(root, absPath);
@@ -241,7 +225,7 @@ export class FileReader {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     let content: string;
     try {
@@ -259,16 +243,13 @@ export class FileReader {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     // Binary detection on the decoded content.
     let binary = false;
     if (this.config.enableBinaryDetection) {
-      const ext = splitNameExtension(
-        absPath.slice(absPath.lastIndexOf('/') + 1)
-      ).extension;
-      binary =
-        isBinaryExtension(ext) || isBinaryContent(content);
+      const ext = splitNameExtension(absPath.slice(absPath.lastIndexOf('/') + 1)).extension;
+      binary = isBinaryExtension(ext) || isBinaryContent(content);
       if (binary) {
         throw createToolError(
           ToolErrorCode.TOOL_FILE_BINARY,

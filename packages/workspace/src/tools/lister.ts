@@ -10,45 +10,22 @@ import {
   matchesIncludePatterns,
   isSensitiveFileName,
   splitNameExtension,
+  normalizePath,
+  isChildOf,
+  relativePath,
 } from './classification.js';
-import {
-  defaultDirectoryListConfig,
-  type DirectoryListConfig,
-} from './config.js';
-import type { ListDirectoryOptions, ListDirectoryResult, DirectoryListingEntry } from './contracts.js';
-import { validateListDirectoryInput, safeValidateListDirectoryInput } from './schemas.js';
-import {
-  ToolErrorCode,
-  createToolError,
-} from './errors.js';
+import { defaultDirectoryListConfig, type DirectoryListConfig } from './config.js';
+import type {
+  ListDirectoryOptions,
+  ListDirectoryResult,
+  DirectoryListingEntry,
+} from './contracts.js';
+import { safeValidateListDirectoryInput } from './schemas.js';
+import { ToolErrorCode, createToolError } from './errors.js';
 
-function normalizeUri(uri: string): string {
-  return uri.replace(/^file:\/\//, '').replace(/\\/g, '/').replace(/\/+$/, '');
-}
-
-function isChildOf(parent: string, child: string): boolean {
-  const p = normalizeUri(parent);
-  const c = normalizeUri(child);
-  return c === p || c.startsWith(`${p}/`);
-}
-
-function relativePath(root: string, absolutePath: string): string | undefined {
-  const r = normalizeUri(root);
-  const a = normalizeUri(absolutePath);
-  if (a === r) {
-    return '';
-  }
-  if (a.startsWith(`${r}/`)) {
-    return a.slice(r.length + 1);
-  }
-  return undefined;
-}
-
-function checkAborted(signal: AbortSignal | undefined): void {
+function checkCancelled(signal: AbortSignal | undefined, path: string): void {
   if (signal?.aborted) {
-    const err = new Error('Operation aborted') as Error & { code?: string };
-    err.name = 'AbortError';
-    throw err;
+    throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Listing cancelled', { path });
   }
 }
 
@@ -86,7 +63,7 @@ export class DirectoryLister {
     let hash = 0;
     for (let i = 0; i < normalized.length; i++) {
       const char = normalized.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
+      hash = (hash << 5) - hash + char;
       hash = hash & hash;
     }
     this.workspaceId = `ws_${Math.abs(hash).toString(36)}`;
@@ -105,7 +82,7 @@ export class DirectoryLister {
     if (!input.success) {
       throw createToolError(
         ToolErrorCode.TOOL_INVALID_ARGUMENT,
-        `Invalid list arguments: ${input.error.issues.map((i) => i.message).join(', ')}`,
+        `Invalid list arguments: ${input.error.issues.map(i => i.message).join(', ')}`,
         { path: options.uri }
       );
     }
@@ -119,10 +96,10 @@ export class DirectoryLister {
     // Non-recursive listing never descends below the target directory.
     const effectiveMaxDepth = recursive ? maxDepth : 0;
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
-    const absPath = normalizeUri(options.uri);
-    const root = normalizeUri(this.workspaceFolder.uri);
+    const absPath = normalizePath(options.uri);
+    const root = normalizePath(this.workspaceFolder.uri);
 
     if (!isChildOf(root, absPath)) {
       throw createToolError(
@@ -132,7 +109,7 @@ export class DirectoryLister {
       );
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     let stat: FileStat;
     try {
@@ -158,14 +135,12 @@ export class DirectoryLister {
           { path: options.uri }
         );
       }
-      throw createToolError(
-        ToolErrorCode.TOOL_NOT_A_DIRECTORY,
-        'Path is not a directory',
-        { path: options.uri }
-      );
+      throw createToolError(ToolErrorCode.TOOL_NOT_A_DIRECTORY, 'Path is not a directory', {
+        path: options.uri,
+      });
     }
 
-    checkAborted(options.signal);
+    checkCancelled(options.signal, options.uri);
 
     const rel = relativePath(root, absPath);
     if (rel === undefined) {
@@ -194,7 +169,7 @@ export class DirectoryLister {
     }
 
     const entries: DirectoryListingEntry[] = [];
-    const errors: { path: string; message: string; isFatal: boolean }[] = [];
+    const errors: Array<{ path: string; message: string; isFatal: boolean }> = [];
     let truncated = false;
     let cancelled = false;
     let completed = false;
@@ -224,7 +199,8 @@ export class DirectoryLister {
         },
         options.signal,
         filterByType,
-        includePatterns
+        includePatterns,
+        maxEntries
       );
       completed = true;
     } catch (error) {
@@ -262,18 +238,19 @@ export class DirectoryLister {
     maxDepth: number,
     ignoreEngine: IgnoreEngine,
     entries: DirectoryListingEntry[],
-    errors: { path: string; message: string; isFatal: boolean }[],
+    errors: Array<{ path: string; message: string; isFatal: boolean }>,
     state: TraverseState,
     signal: AbortSignal | undefined,
     filterByType: 'file' | 'directory' | 'all',
-    includePatterns: readonly string[]
+    includePatterns: readonly string[],
+    maxEntries: number
   ): Promise<void> {
     if (state.cancelled) {
       return;
     }
-    checkAborted(signal);
+    checkCancelled(signal, absDir);
 
-    if (!isChildOf(normalizeUri(this.workspaceFolder.uri), absDir)) {
+    if (!isChildOf(normalizePath(this.workspaceFolder.uri), absDir)) {
       errors.push({
         path: absDir,
         message: 'Path escapes workspace root boundary',
@@ -281,8 +258,6 @@ export class DirectoryLister {
       });
       return;
     }
-
-    const seenKey = absDir.replace(/\\/g, '/').replace(/\/+$/, '');
 
     let directoryEntries: readonly DirectoryEntry[];
     try {
@@ -299,23 +274,22 @@ export class DirectoryLister {
     const sorted = [...directoryEntries].sort((a, b) => a.name.localeCompare(b.name));
 
     for (const entry of sorted) {
-      if (state.cancelled || entries.length >= this.config.maxEntries) {
-        if (entries.length >= this.config.maxEntries) {
+      if (state.cancelled || entries.length >= maxEntries) {
+        if (entries.length >= maxEntries) {
           state.truncated = true;
         }
         return;
       }
-      checkAborted(signal);
-
       if (!this.config.includeHidden && entry.name.startsWith('.')) {
         continue;
       }
 
       const absEntry = `${absDir}/${entry.name}`;
       const relEntry = relDir.length === 0 ? entry.name : `${relDir}/${entry.name}`;
+      checkCancelled(signal, absEntry);
 
       // Boundary check per entry.
-      if (!isChildOf(normalizeUri(this.workspaceFolder.uri), absEntry)) {
+      if (!isChildOf(normalizePath(this.workspaceFolder.uri), absEntry)) {
         errors.push({
           path: absEntry,
           message: 'Entry escapes workspace root boundary',
@@ -343,7 +317,8 @@ export class DirectoryLister {
                 state,
                 signal,
                 filterByType,
-                includePatterns
+                includePatterns,
+                maxEntries
               );
             }
           } else if (targetStat.type === 'file') {
@@ -356,7 +331,8 @@ export class DirectoryLister {
               state,
               signal,
               filterByType,
-              includePatterns
+              includePatterns,
+              maxEntries
             );
           }
         } catch (error) {
@@ -378,7 +354,7 @@ export class DirectoryLister {
         }
         if (filterByType === 'directory' || filterByType === 'all') {
           entries.push(this.makeDirectoryEntry(relEntry, entry.name));
-          if (entries.length >= this.config.maxEntries) {
+          if (entries.length >= maxEntries) {
             state.truncated = true;
             return;
           }
@@ -395,7 +371,8 @@ export class DirectoryLister {
             state,
             signal,
             filterByType,
-            includePatterns
+            includePatterns,
+            maxEntries
           );
         }
         continue;
@@ -417,7 +394,8 @@ export class DirectoryLister {
           state,
           signal,
           filterByType,
-          includePatterns
+          includePatterns,
+          maxEntries
         );
         continue;
       }
@@ -433,15 +411,16 @@ export class DirectoryLister {
     state: TraverseState,
     signal: AbortSignal | undefined,
     filterByType: 'file' | 'directory' | 'all',
-    includePatterns: readonly string[]
+    includePatterns: readonly string[],
+    maxEntries: number
   ): Promise<void> {
-    if (state.cancelled || entries.length >= this.config.maxEntries) {
-      if (entries.length >= this.config.maxEntries) {
+    if (state.cancelled || entries.length >= maxEntries) {
+      if (entries.length >= maxEntries) {
         state.truncated = true;
       }
       return;
     }
-    checkAborted(signal);
+    checkCancelled(signal, absPath);
 
     let fileStat: FileStat;
     try {
@@ -467,16 +446,17 @@ export class DirectoryLister {
       return;
     }
 
-    if (entries.length >= this.config.maxEntries) {
+    if (entries.length >= maxEntries) {
       state.truncated = true;
       return;
     }
 
     const metadata = this.collector.collect(absPath, relPath, fileStat);
+    const baseName = relPath.slice(relPath.lastIndexOf('/') + 1);
 
     entries.push({
       relativePath: relPath,
-      name: metadata.name,
+      name: baseName,
       type: 'file',
       size: metadata.size,
       mtime: metadata.mtime,
@@ -488,10 +468,7 @@ export class DirectoryLister {
     });
   }
 
-  private makeDirectoryEntry(
-    relativePath: string,
-    name: string
-  ): DirectoryListingEntry {
+  private makeDirectoryEntry(relativePath: string, name: string): DirectoryListingEntry {
     return {
       relativePath,
       name,

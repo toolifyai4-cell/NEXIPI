@@ -1,9 +1,4 @@
-import {
-  EngineError,
-  EngineErrorCode,
-  type EngineErrorOptions,
-  createSanitizedContext,
-} from '@nexipi/core';
+import { EngineError, type EngineErrorOptions, createSanitizedContext } from '@nexipi/core';
 
 export enum ToolErrorCode {
   TOOL_INVALID_ARGUMENT = 'TOOL_INVALID_ARGUMENT',
@@ -40,9 +35,10 @@ export class ToolError extends EngineError<ToolErrorCode> {
     });
     this.path = options.path;
     Object.setPrototypeOf(this, ToolError.prototype);
+    this.name = 'ToolError';
   }
 
-  toJSON(): Record<string, unknown> {
+  override toJSON(): Record<string, unknown> {
     return {
       ...super.toJSON(),
       path: this.path,
@@ -62,9 +58,6 @@ export function isToolError(error: unknown): error is ToolError {
   return error instanceof ToolError;
 }
 
-export function isToolErrorCode(
-  error: unknown,
-  code: ToolErrorCode
-): error is ToolError {
+export function isToolErrorCode(error: unknown, code: ToolErrorCode): error is ToolError {
   return isToolError(error) && error.code === code;
 }
