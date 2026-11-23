@@ -82,6 +82,17 @@ class VirtualFileSystem implements FileSystemProvider {
     this.ensureDir(k);
     this.stats.set(k, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
     this.dirs.set(k, [...entries]);
+    // Register this directory in its parent's entries so traversal can descend into it.
+    const parts = k.split('/');
+    const name = parts.pop()!;
+    const parentDir = parts.join('/') || '/';
+    if (!this.dirs.has(parentDir)) {
+      this.dirs.set(parentDir, []);
+    }
+    const parentEntries = this.dirs.get(parentDir)!;
+    if (!parentEntries.some(e => e.name === name && e.type === 'directory')) {
+      parentEntries.push({ name, type: 'directory' });
+    }
   }
 
   async readDirectory(uri: string): Promise<readonly DirectoryEntry[]> {
@@ -98,8 +109,22 @@ class VirtualFileSystem implements FileSystemProvider {
     parts.pop();
     for (let i = 1; i <= parts.length; i++) {
       const dir = parts.slice(0, i).join('/') || '/';
-      if (!this.dirs.has(dir)) {
+      const isNew = !this.dirs.has(dir);
+      if (isNew) {
         this.dirs.set(dir, []);
+        // Register a newly created nested directory as an entry of its parent so
+        // that directory traversal can descend into it (e.g. /root/sub).
+        if (i >= 2) {
+          const parent = parts.slice(0, i - 1).join('/') || '/';
+          const name = parts[i - 1];
+          const parentEntries = this.dirs.get(parent);
+          if (
+            parentEntries &&
+            !parentEntries.some(e => e.name === name && e.type === 'directory')
+          ) {
+            parentEntries.push({ name, type: 'directory' });
+          }
+        }
       }
       if (!this.stats.has(dir)) {
         this.stats.set(dir, { type: 'directory', size: 0, mtime: Date.now(), ctime: Date.now() });
@@ -165,6 +190,7 @@ function buildTree(vfs: VirtualFileSystem): void {
   vfs.addFile('/root/c.py', 'def foo():\n    return foo\nfoo_ = 1\n_foo = 2\n');
   vfs.addFile('/root/d.java', 'public class Foo { void foo() { foo(); } }\n');
   vfs.addFile('/root/e.go', 'package main\nfunc foo() {}\nfoo();\n');
+  vfs.addDir('/root/sub', [{ name: 'f.rb', type: 'file' }]);
   vfs.addFile('/root/sub/f.rb', 'def foo\n  puts foo\nend\n');
   vfs.addFile('/root/ignored.ts', 'should not match\n');
   vfs.addDir('/root/.git', [{ name: 'config', type: 'file' }]);
@@ -373,6 +399,32 @@ describe('LexicalFinder', () => {
       // standalone foo() on line1, const foo line2, bar.foo line3 = 3 matches
       expect(ajs.referenceCount).toBe(3);
     });
+
+    it('reports candidate truncation when the candidate cap is exceeded', async () => {
+      // maxCandidateFiles defaults to 1000; add 1001 eligible files so the
+      // candidate list is capped and truncation must be visible in the result.
+      for (let i = 0; i < 1001; i++) {
+        vfs.addFile(`/root/cap${i}.js`, 'foo\n');
+      }
+      const f = createFinder(vfs, 'file:///root', { maxTotalReferences: 100000 });
+      const result = await f.find({ symbol: 'foo' });
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxCandidateFiles');
+      expect(result.metadata.filesExamined).toBeLessThanOrEqual(1000);
+      expect(result.metadata.completed).toBe(false);
+    });
+
+    it('reports maxFilesExamined when it is the binding limit over candidates', async () => {
+      for (let i = 0; i < 1001; i++) {
+        vfs.addFile(`/root/capb${i}.js`, 'foo\n');
+      }
+      const f = createFinder(vfs, 'file:///root', { maxFilesExamined: 5 });
+      const result = await f.find({ symbol: 'foo' });
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxFilesExamined');
+      expect(result.metadata.filesExamined).toBe(5);
+      expect(result.metadata.completed).toBe(false);
+    });
   });
 
   describe('limits', () => {
@@ -465,12 +517,13 @@ describe('LexicalFinder', () => {
 
     it('excludes sensitive files (.env, id_rsa)', async () => {
       const result = await finder.find({ symbol: 'foo' });
-      const env = result.files.find(f => f.relativePath === '.env');
+      // Dotfiles such as .env are skipped during traversal (dotfile entries are
+      // not traversed), so they do not appear in results. Non-dotfile sensitive
+      // files such as id_rsa are candidates and are skipped with reason sensitive.
       const idRsa = result.files.find(f => f.relativePath === 'id_rsa');
-      expect(env?.skipped).toBe(true);
-      expect(env?.skipReason).toBe('sensitive');
       expect(idRsa?.skipped).toBe(true);
       expect(idRsa?.skipReason).toBe('sensitive');
+      expect(result.files.find(f => f.relativePath === '.env')).toBeUndefined();
     });
 
     it('excludes binary files by extension (.bin)', async () => {

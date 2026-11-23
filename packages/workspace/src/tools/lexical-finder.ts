@@ -8,7 +8,6 @@ import {
   isSensitiveFileName,
   splitNameExtension,
   normalizePath,
-  isChildOf,
   detectLanguage,
 } from './classification.js';
 import { validateSymlinkFreePath } from './path-security.js';
@@ -19,7 +18,6 @@ import {
 } from './reference-schemas.js';
 import type {
   ReferenceClassification,
-  ReferenceConfidence,
   ReferenceDiscoveryResult,
   ReferenceFileResult,
   ReferenceLanguage,
@@ -232,7 +230,7 @@ export class LexicalFinder {
 
     // Lexical fallback must be enabled for this finder to produce matches.
     if (input.enableLexicalFallback === false) {
-      return this.emptyResult(input.symbol, input.languages, false, false);
+      return this.emptyResult(input.symbol, input.languages, false, true);
     }
 
     // Reject symbol queries that are not valid identifiers before any I/O.
@@ -260,7 +258,7 @@ export class LexicalFinder {
       input.classifications.length > 0 &&
       !input.classifications.includes('textual_match')
     ) {
-      return this.emptyResult(input.symbol, input.languages, false, false);
+      return this.emptyResult(input.symbol, input.languages, false, true);
     }
 
     checkCancelled(options.signal, this.workspaceFolder.uri);
@@ -291,11 +289,12 @@ export class LexicalFinder {
 
     // Reuse CodeSearcher for candidate discovery (traversal, ignore engine,
     // include/exclude filtering, symlink safety, workspace boundary).
-    let { candidates, truncated: candidateTruncated } = await this.searcher.getCandidates({
-      includePatterns: input.includePatterns,
-      excludePatterns: input.excludePatterns,
-      signal: options.signal,
-    });
+    const { candidates, truncated: candidatesTruncated } =
+      await this.searcher.getCandidates({
+        includePatterns: input.includePatterns,
+        excludePatterns: input.excludePatterns,
+        signal: options.signal,
+      });
 
     const maxFilesExamined = this.config.maxFilesExamined;
     const maxFileSize = this.config.maxFileSize;
@@ -311,20 +310,23 @@ export class LexicalFinder {
     let filesSkipped = 0;
     let totalReferences = 0;
     let totalBytesRead = 0;
-    let truncated = candidateTruncated;
+    // A candidate-list cap (maxCandidateFiles) means not every eligible file
+    // was discovered, so the search cannot be reported as complete.
+    let truncated = candidatesTruncated;
     let limitReached:
+      | 'maxCandidateFiles'
       | 'maxFilesExamined'
       | 'maxTotalBytesRead'
       | 'maxReferencesPerFile'
       | 'maxTotalReferences'
       | 'maxOutputSize'
-      | undefined = candidateTruncated ? 'maxFilesExamined' : undefined;
+      | undefined = candidatesTruncated ? 'maxCandidateFiles' : undefined;
     let cancelled = false;
     let completed = false;
 
     try {
       for (const candidate of candidates) {
-        if (cancelled || truncated) {
+        if (cancelled) {
           break;
         }
         checkCancelled(options.signal, candidate.absPath);
@@ -335,8 +337,6 @@ export class LexicalFinder {
           limitReached = 'maxFilesExamined';
           break;
         }
-
-        const relPath = candidate.relPath;
 
         // Sensitive-file protection.
         if (isSensitiveFile(candidate.absPath)) {
@@ -440,8 +440,11 @@ export class LexicalFinder {
       completed = !cancelled && !truncated;
     } catch (error) {
       if (isAbortError(error) || isToolErrorCode(error, ToolErrorCode.TOOL_CANCELLED)) {
-        cancelled = true;
-        completed = false;
+        // Cancellation follows the exception contract: report TOOL_CANCELLED
+        // rather than returning a partial ReferenceDiscoveryResult.
+        throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Reference discovery cancelled', {
+          path: absRoot,
+        });
       } else {
         errors.push({
           path: absRoot,

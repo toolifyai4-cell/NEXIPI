@@ -111,6 +111,7 @@ export interface ReferenceDiscoveryMetadata {
   readonly truncated: boolean;
   /** Which limit was reached, if any. */
   readonly limitReached:
+    | 'maxCandidateFiles'
     | 'maxFilesExamined'
     | 'maxTotalBytesRead'
     | 'maxReferencesPerFile'
