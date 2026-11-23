@@ -15,6 +15,22 @@ function createMockFileSystem(files: Map<string, string> = new Map(), dirs: Map<
   };
 }
 
+function createDirMap(entries: [string, { name: string; type: 'file' | 'directory' }[]][]): Map<string, { name: string; type: 'file' | 'directory' }[]> {
+  const map = new Map<string, { name: string; type: 'file' | 'directory' }[]>();
+  for (const [key, value] of entries) {
+    map.set(key, value);
+  }
+  return map;
+}
+
+function createFileMap(entries: [string, string][]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const [key, value] of entries) {
+    map.set(key, value);
+  }
+  return map;
+}
+
 describe('MonorepoDetector', () => {
   let mockFileSystem: ReturnType<typeof createMockFileSystem>;
   let manifestRegistry: ManifestRegistry;
