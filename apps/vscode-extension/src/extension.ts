@@ -6,9 +6,10 @@ import type { ChatService } from '@nexipi/models';
 import { createChatService } from '@nexipi/models';
 import { createProviderRegistry } from '@nexipi/models';
 import type { StreamEvent, Message, ConversationId, MessageId } from '@nexipi/shared';
-import { PersistenceFoundation, PersistenceServiceOptions } from '@nexipi/persistence';
-import { PersistencePortService, createPersistenceService, SqlJsConversationRepository, SqlJsMessageRepository } from '@nexipi/persistence';
-import { PersistenceAdapter, createPersistenceAdapter } from '@nexipi/models';
+import { PersistenceFoundation } from '@nexipi/persistence';
+import type { PersistencePortService } from '@nexipi/persistence';
+import { createPersistenceService, SqlJsConversationRepository, SqlJsMessageRepository } from '@nexipi/persistence';
+import { createPersistenceAdapter } from '@nexipi/models';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -252,14 +253,14 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             return;
           }
 
-          let conversationId = payload.conversationId as ConversationId | undefined;
+          let conversationId = payload.conversationId;
           if (!conversationId) {
             const conversation = this._chatService.createConversation();
             conversationId = conversation.id;
           }
 
           try {
-            await this._chatService.sendMessage(conversationId!, payload.content);
+            await this._chatService.sendMessage(conversationId as ConversationId, payload.content);
           } catch (error) {
             const err = error instanceof Error ? error : new Error(String(error));
             this._logger.error('Failed to send message', { error: err.message });
@@ -475,7 +476,7 @@ async function initializePersistence(
   return persistenceService;
 }
 
-function getWorkspaceId(context: vscode.ExtensionContext): string {
+function getWorkspaceId(_context: vscode.ExtensionContext): string {
   // Use workspace folder name or a hash of the workspace path for isolation
   const workspaceFolders = vscode.workspace.workspaceFolders;
   if (workspaceFolders && workspaceFolders.length > 0) {

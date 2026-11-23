@@ -15,7 +15,8 @@ import {
   PersistenceFoundation,
   SqlJsConversationRepository,
   SqlJsMessageRepository,
-  PersistenceService as FoundationPersistenceServiceClass,
+  PersistencePortService,
+  createPersistenceService,
 } from '@nexipi/persistence';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -128,7 +129,7 @@ describe('ChatService - Persistence Integration', () => {
     messageRepo = new SqlJsMessageRepository(foundationService.getRawDatabase());
 
     persistenceAdapter = createPersistenceAdapter({
-      persistencePort: new FoundationPersistenceServiceClass(
+      persistencePort: createPersistenceService(
         conversationRepo,
         messageRepo,
         foundationService
