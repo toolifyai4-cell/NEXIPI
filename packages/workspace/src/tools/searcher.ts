@@ -480,6 +480,97 @@ export class CodeSearcher {
     };
   }
 
+  /**
+   * Returns the candidate files for a workspace query without performing any
+   * content matching. Reuses the same traversal, ignore-engine, include/exclude
+   * filtering, symlink safety, and workspace-boundary checks as `search()`.
+   *
+   * This is intentionally a narrow addition so the lexical finder can reuse
+   * candidate discovery without creating a second traversal implementation.
+   */
+  async getCandidates(options: {
+    includePatterns?: readonly string[] | undefined;
+    excludePatterns?: readonly string[] | undefined;
+    signal?: AbortSignal | undefined;
+  }): Promise<{
+    candidates: Array<{
+      readonly absPath: string;
+      readonly relPath: string;
+      readonly stat: FileStat;
+    }>;
+    truncated: boolean;
+  }> {
+    const absRoot = normalizePath(this.workspaceFolder.uri);
+
+    let rootStat: FileStat;
+    try {
+      rootStat = await validateSymlinkFreePath(this.fileSystem, absRoot, absRoot, options.signal);
+    } catch (error) {
+      if (isAbortError(error)) {
+        throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Candidate discovery cancelled', {
+          path: this.workspaceFolder.uri,
+        });
+      }
+      throw createToolError(
+        ToolErrorCode.TOOL_FILESYSTEM_ERROR,
+        `Unable to verify workspace root safely: ${error instanceof Error ? error.message : String(error)}`,
+        { path: this.workspaceFolder.uri, cause: error instanceof Error ? error : undefined }
+      );
+    }
+    if (rootStat.type !== 'directory') {
+      throw createToolError(ToolErrorCode.TOOL_NOT_A_DIRECTORY, 'Workspace root is not a directory', {
+        path: this.workspaceFolder.uri,
+      });
+    }
+
+    const ignoreEngine = new IgnoreEngine({
+      fileSystem: this.fileSystem,
+      workspaceFolder: this.workspaceFolder,
+      root: absRoot,
+      config: {
+        enableMandatorySafetyExclusions: true,
+        enableDefaultExclusions: true,
+        userExclusions: [],
+        caseSensitive: false,
+      },
+    });
+    try {
+      await ignoreEngine.loadGitignore(absRoot);
+    } catch {
+      // Unreadable gitignore must not block candidate discovery.
+    }
+
+    const candidates: Array<{ absPath: string; relPath: string; stat: FileStat }> = [];
+    let candidateTruncated = false;
+
+    await this.traverseForCandidates(
+      absRoot,
+      '',
+      ignoreEngine,
+      candidates,
+      [],
+      options.includePatterns,
+      options.excludePatterns,
+      options.signal,
+      {
+        get truncated() {
+          return candidateTruncated;
+        },
+        set truncated(v: boolean) {
+          candidateTruncated = v;
+        },
+      }
+    );
+
+    const maxCandidateFiles = this.config.maxCandidateFiles;
+    if (candidates.length > maxCandidateFiles) {
+      candidates.length = maxCandidateFiles;
+      candidateTruncated = true;
+    }
+
+    return { candidates, truncated: candidateTruncated };
+  }
+
   private async traverseForCandidates(
     absDir: string,
     relDir: string,

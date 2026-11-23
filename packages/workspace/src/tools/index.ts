@@ -92,3 +92,4 @@ export {
 export { FileReader, createFileReader } from './reader.js';
 export { DirectoryLister, createDirectoryLister } from './lister.js';
 export { CodeSearcher, createCodeSearcher } from './searcher.js';
+export { LexicalFinder, createLexicalFinder, type LexicalFinderOptions } from './lexical-finder.js';
