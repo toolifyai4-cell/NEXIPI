@@ -14,3 +14,4 @@ export * from './orchestration/scan-types.js';
 export * from './orchestration/scan-errors.js';
 export * from './orchestration/scan-index.js';
 export * from './orchestration/workspace-scan-orchestrator.js';
+export * from './ranking/index.js';
