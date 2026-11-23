@@ -1,7 +1,7 @@
 # NexiPi
 
 <p align="center">
-  <img src="LOGO/NexiPi%20Teal%20Ribbon%20Icon.png" alt="NexiPi Logo" width="140">
+  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="140">
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@
 </p>
 
 <p align="center">
-  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="600">
+  <img src="LOGO/NexiPi%20Teal%20Ribbon%20Icon.png" alt="NexiPi Teal Ribbon Icon" width="600">
 </p>
 
 ---
