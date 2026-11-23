@@ -448,5 +448,6 @@ MIT License - see [LICENSE](LICENSE) for details.
   <a href="https://github.com/your-org/nexipi/discussions">💬 Discussions</a>
 </p>
 
-![alt text](<Minimalist Teal and Black Geometric Logo.png>)
-![alt text](NexiPi 3D on Black.png)
+
+![alt text](<NexiPi Teal Ribbon Icon.png>)
+![alt text](<NexiPi 3D Logo on Black.png>)
