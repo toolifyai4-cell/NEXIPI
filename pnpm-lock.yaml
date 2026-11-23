@@ -231,6 +231,9 @@ importers:
       ignore:
         specifier: ^7.0.16
         version: 7.0.16
+      typescript:
+        specifier: ^5.3.0
+        version: 5.9.3
       zod:
         specifier: ^3.22.0
         version: 3.25.76
@@ -238,9 +241,6 @@ importers:
       '@types/node':
         specifier: ^20.10.0
         version: 20.19.43
-      typescript:
-        specifier: ^5.3.0
-        version: 5.9.3
       vitest:
         specifier: ^1.0.0
         version: 1.6.1(@types/node@20.19.43)(jsdom@31.0.0)
@@ -3429,7 +3429,6 @@ packages:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
     hasBin: true
-    dev: true
 
   /uc.micro@1.0.6:
     resolution: {integrity: sha512-8Y75pvTYkLJW2hWQHXxoqRgV7qb9B+9vFEtidML+7koHUFapnVJAZ6cKs+Qjz5Aw3aZWHMC6u0wJE3At+nSGwA==}
