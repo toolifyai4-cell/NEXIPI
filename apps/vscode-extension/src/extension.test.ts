@@ -149,7 +149,7 @@ vi.mock('vscode', () => ({
     });
 
     it('should handle openSettings message and execute workbench.action.openSettings command', async () => {
-      extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       // Get the registered provider
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
@@ -172,14 +172,14 @@ vi.mock('vscode', () => ({
       messageHandler({ type: 'openSettings', payload: { reason: 'user_click' } });
 
       // Verify command was executed with correct arguments
-      expect(mockExecuteCommand).toHaveBeenCalledWith(
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
         'workbench.action.openSettings',
         '@ext:nexipi.nexipi'
       );
     });
 
     it('should handle openSettings message with model_status_click reason', async () => {
-      extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
         .mock.calls[0];
@@ -197,7 +197,7 @@ vi.mock('vscode', () => ({
 
       messageHandler({ type: 'openSettings', payload: { reason: 'model_status_click' } });
 
-      expect(mockExecuteCommand).toHaveBeenCalledWith(
+      expect(vscode.commands.executeCommand).toHaveBeenCalledWith(
         'workbench.action.openSettings',
         '@ext:nexipi.nexipi'
       );
@@ -234,7 +234,7 @@ vi.mock('vscode', () => ({
     });
 
     it('should handle sendMessage and send messageCreated/messageUpdated events', async () => {
-      extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
         .mock.calls[0];
@@ -273,7 +273,7 @@ vi.mock('vscode', () => ({
     });
 
     it('should handle newChat message and send state update', async () => {
-      extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
         .mock.calls[0];
@@ -306,7 +306,7 @@ vi.mock('vscode', () => ({
     });
 
     it('should send initial state on ready message', async () => {
-      extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       const registerCall = (vscode.window.registerWebviewViewProvider as ReturnType<typeof vi.fn>)
         .mock.calls[0];
