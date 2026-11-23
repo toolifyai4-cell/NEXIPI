@@ -122,7 +122,7 @@ describe('ChatService - Persistence Integration', () => {
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexipi-chat-persistence-test-'));
     dbPath = path.join(tempDir, 'test.db');
 
-    foundationService = new PersistenceFoundation(dbPath);
+    foundationService = new PersistenceFoundation({ dbPath });
     await foundationService.init();
     conversationRepo = new SqlJsConversationRepository(foundationService.getRawDatabase());
     messageRepo = new SqlJsMessageRepository(foundationService.getRawDatabase());

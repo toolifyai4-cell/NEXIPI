@@ -1,10 +1,14 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
 import { defaultConfig } from '@nexipi/core';
 import type { Logger, LogLevel } from '@nexipi/shared';
 import type { ChatService } from '@nexipi/models';
 import { createChatService } from '@nexipi/models';
 import { createProviderRegistry } from '@nexipi/models';
 import type { StreamEvent, Message, ConversationId, MessageId } from '@nexipi/shared';
+import { PersistenceFoundation, PersistenceServiceOptions } from '@nexipi/persistence';
+import { PersistencePortService, createPersistenceService, SqlJsConversationRepository, SqlJsMessageRepository } from '@nexipi/persistence';
+import { PersistenceAdapter, createPersistenceAdapter } from '@nexipi/models';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -12,6 +16,7 @@ interface NexiPiContext {
   logger: Logger;
   disposables: vscode.Disposable[];
   chatService: ChatService;
+  persistenceService?: PersistencePortService;
 }
 
 function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Logger {
@@ -420,7 +425,68 @@ function registerCommands(
   return disposables;
 }
 
-export function activate(context: vscode.ExtensionContext): void {
+async function initializePersistence(
+  context: vscode.ExtensionContext,
+  logger: Logger
+): Promise<PersistencePortService> {
+  // Use globalStorageUri for application-wide data persistence
+  const storagePath = context.globalStorageUri.fsPath;
+  const dbPath = path.join(storagePath, 'nexipi.db');
+
+  logger.info('Initializing persistence', { storagePath, dbPath });
+
+  // Ensure storage directory exists
+  try {
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(storagePath));
+  } catch {
+    // Directory may already exist
+  }
+
+  // Create locateFile function to resolve WASM file location
+  const extensionPath = context.extensionPath;
+  const locateFile = (file: string): string => {
+    if (file === 'sql-wasm.wasm') {
+      // In development, the WASM file is copied to dist/
+      // In packaged extension, it's also in dist/
+      return vscode.Uri.joinPath(vscode.Uri.file(extensionPath), 'dist', file).fsPath;
+    }
+    return file;
+  };
+
+  const foundationService = new PersistenceFoundation({
+    dbPath,
+    locateFile,
+  });
+
+  await foundationService.init();
+
+  const conversationRepo = new SqlJsConversationRepository(foundationService.getRawDatabase());
+  const messageRepo = new SqlJsMessageRepository(foundationService.getRawDatabase());
+
+  const persistenceService = createPersistenceService(
+    conversationRepo,
+    messageRepo,
+    foundationService
+  );
+
+  await persistenceService.initialize();
+
+  logger.info('Persistence initialized successfully');
+  return persistenceService;
+}
+
+function getWorkspaceId(context: vscode.ExtensionContext): string {
+  // Use workspace folder name or a hash of the workspace path for isolation
+  const workspaceFolders = vscode.workspace.workspaceFolders;
+  if (workspaceFolders && workspaceFolders.length > 0) {
+    // Use the first workspace folder's name as the workspace ID
+    const firstFolder = workspaceFolders[0];
+    return firstFolder?.name ?? 'default';
+  }
+  return 'default';
+}
+
+export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration('nexipi');
   const logLevel = config.get<LogLevel>('nexipi.logLevel', 'info');
 
@@ -433,11 +499,39 @@ export function activate(context: vscode.ExtensionContext): void {
     `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
   );
 
+  // Initialize persistence
+  let persistenceService: PersistencePortService;
+  try {
+    persistenceService = await initializePersistence(context, logger);
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to initialize persistence', { error: err.message });
+    updateStatusBar(statusBarItem, 'error', 'Persistence init failed');
+    void vscode.window.showErrorMessage(`Failed to initialize NexiPi persistence: ${err.message}`);
+    throw err;
+  }
+
+  const workspaceId = getWorkspaceId(context);
+  logger.info('Workspace ID for persistence', { workspaceId });
+
+  // Create persistence adapter
+  const persistenceAdapter = createPersistenceAdapter({
+    persistencePort: persistenceService,
+    workspaceId,
+  });
+
+  await persistenceAdapter.initialize();
+
   const providerRegistry = createProviderRegistry();
   const chatService = createChatService({
     providerRegistry,
     logger,
+    persistenceAdapter,
+    workspaceId,
   });
+
+  // Initialize chat service (loads conversations from persistence)
+  await chatService.initialize();
 
   const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger, chatService);
 
@@ -447,6 +541,7 @@ export function activate(context: vscode.ExtensionContext): void {
     logger,
     disposables: [],
     chatService,
+    persistenceService,
   };
 
   const sidebarDisposable = vscode.window.registerWebviewViewProvider(
@@ -476,10 +571,14 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(...nexipiContext.disposables);
 
-  // Dispose chat service on deactivation
+  // Dispose chat service and persistence on deactivation
   context.subscriptions.push({
     dispose: async () => {
+      logger.info('Disposing chat service and persistence');
       await chatService.dispose();
+      persistenceAdapter.dispose();
+      // Note: persistenceService.dispose() is called by persistenceAdapter.dispose()
+      // which closes the foundation service since it owns it
     },
   });
 

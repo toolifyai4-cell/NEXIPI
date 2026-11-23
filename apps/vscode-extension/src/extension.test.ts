@@ -30,20 +30,38 @@ vi.mock('vscode', () => ({
       }),
     })),
     onDidChangeConfiguration: vi.fn(),
+    workspaceFolders: [],
   },
   commands: {
     executeCommand: vi.fn(),
     registerCommand: vi.fn(() => ({ dispose: vi.fn() })),
   },
   Uri: {
-    joinPath: vi.fn((base: unknown, ...paths: string[]) => ({
-      toString: () => `file://${base}/${paths.join('/')}`,
+    joinPath: vi.fn((base: unknown, ...paths: string[]) => {
+      let basePath: string;
+      if (typeof base === 'string') {
+        basePath = base;
+      } else if (base && typeof base === 'object' && 'fsPath' in base) {
+        basePath = (base as { fsPath: string }).fsPath;
+      } else {
+        basePath = '';
+      }
+      const fullPath = [basePath, ...paths].join('/').replace(/\/+/g, '/');
+      return {
+        toString: () => `file://${fullPath}`,
+        fsPath: fullPath,
+      };
+    }),
+    file: vi.fn((path: string) => ({
+      fsPath: path,
     })),
   },
   ViewColumn: {},
   WebviewViewProvider: vi.fn(),
   ExtensionContext: {
     subscriptions: [],
+    globalStorageUri: { fsPath: '/tmp/globalStorage' },
+    extensionPath: 'C:/DNET/NEXIPI/apps/vscode-extension',
   },
   StatusBarAlignment: { Right: 1 },
   CancellationToken: {},
@@ -54,18 +72,6 @@ vi.mock('vscode', () => ({
     })),
   },
 }));
-
-describe('vscode-extension', () => {
-  let mockOutputChannel: ReturnType<typeof vscode.window.createOutputChannel>;
-  let mockStatusBarItem: ReturnType<typeof vscode.window.createStatusBarItem>;
-  let mockExecuteCommand: ReturnType<typeof vi.fn>;
-
-  beforeEach(() => {
-    vi.clearAllMocks();
-    mockOutputChannel = vscode.window.createOutputChannel();
-    mockStatusBarItem = vscode.window.createStatusBarItem();
-    mockExecuteCommand = vscode.commands.executeCommand as ReturnType<typeof vi.fn>;
-  });
 
   it('should export activate function', async () => {
     const mod = await import('./extension.js');
@@ -105,7 +111,12 @@ describe('vscode-extension', () => {
 
   describe('NexiPiSidebarProvider message handling', () => {
     let extensionModule: { activate: (context: unknown) => void };
-    let mockContext: { extensionUri: { toString: () => string }; subscriptions: unknown[] };
+    let mockContext: { 
+      extensionUri: { toString: () => string }; 
+      subscriptions: unknown[];
+      globalStorageUri: { fsPath: string };
+      extensionPath: string;
+    };
     let mockWebviewView: {
       webview: {
         onDidReceiveMessage: (handler: (msg: unknown) => void) => void;
@@ -120,6 +131,8 @@ describe('vscode-extension', () => {
       mockContext = {
         extensionUri: { toString: () => 'file:///test' },
         subscriptions: [],
+        globalStorageUri: { fsPath: '/tmp/globalStorage' },
+        extensionPath: 'C:/DNET/NEXIPI/apps/vscode-extension',
       };
       mockWebviewView = {
         webview: {
@@ -323,4 +336,3 @@ describe('vscode-extension', () => {
       );
     });
   });
-});

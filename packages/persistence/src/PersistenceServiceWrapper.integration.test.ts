@@ -399,7 +399,7 @@ describe('PersistenceService - Integration Tests', () => {
     });
 
     it('should persist data across close and reopen with shared foundation', async () => {
-      const foundation1 = new FoundationPersistenceService(dbPath);
+      const foundation1 = new FoundationPersistenceService({ dbPath });
       await foundation1.init();
       const conversationRepo1 = new SqlJsConversationRepository(foundation1.getRawDatabase());
       const messageRepo1 = new SqlJsMessageRepository(foundation1.getRawDatabase());
@@ -430,7 +430,7 @@ describe('PersistenceService - Integration Tests', () => {
       expect(fs.existsSync(dbPath)).toBe(true);
 
       // Phase 2: Reopen and verify
-      const foundation2 = new FoundationPersistenceService(dbPath);
+      const foundation2 = new FoundationPersistenceService({ dbPath });
       await foundation2.init();
       const conversationRepo2 = new SqlJsConversationRepository(foundation2.getRawDatabase());
       const messageRepo2 = new SqlJsMessageRepository(foundation2.getRawDatabase());
@@ -450,7 +450,7 @@ describe('PersistenceService - Integration Tests', () => {
     });
 
     it('should persist updates across close and reopen', async () => {
-      const foundation1 = new FoundationPersistenceService(dbPath);
+      const foundation1 = new FoundationPersistenceService({ dbPath });
       await foundation1.init();
       const conversationRepo1 = new SqlJsConversationRepository(foundation1.getRawDatabase());
       const service1 = new PersistenceService(conversationRepo1, new SqlJsMessageRepository(foundation1.getRawDatabase()), foundation1);
@@ -461,7 +461,7 @@ describe('PersistenceService - Integration Tests', () => {
       foundation1.save();
       foundation1.close();
 
-      const foundation2 = new FoundationPersistenceService(dbPath);
+      const foundation2 = new FoundationPersistenceService({ dbPath });
       await foundation2.init();
       const conversationRepo2 = new SqlJsConversationRepository(foundation2.getRawDatabase());
       const service2 = new PersistenceService(conversationRepo2, new SqlJsMessageRepository(foundation2.getRawDatabase()), foundation2);

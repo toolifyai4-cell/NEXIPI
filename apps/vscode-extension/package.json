@@ -5,9 +5,10 @@
   "version": "0.0.1",
   "publisher": "nexipi",
   "private": true,
+  "type": "module",
   "main": "./dist/extension.js",
   "scripts": {
-    "build": "tsc -b",
+    "build": "tsc -b && node ./scripts/copy-wasm.mjs",
     "dev": "tsc -b --watch",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
@@ -116,6 +117,7 @@
   "devDependencies": {
     "@nexipi/core": "workspace:*",
     "@nexipi/models": "workspace:*",
+    "@nexipi/persistence": "workspace:*",
     "@nexipi/shared": "workspace:*",
     "@nexipi/ui": "workspace:*",
     "@types/node": "^20.10.0",

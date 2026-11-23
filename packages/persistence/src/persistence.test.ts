@@ -321,7 +321,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
 
   it('should persist data across close and reopen', async () => {
     // Phase 1: Create database, insert data, save and close
-    const service1 = new PersistenceService(dbPath);
+    const service1 = new PersistenceService({ dbPath });
     await service1.init();
 
     const db1 = service1.getRawDatabase();
@@ -341,7 +341,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
     expect(fs.existsSync(dbPath)).toBe(true);
 
     // Phase 2: Reopen database and verify data
-    const service2 = new PersistenceService(dbPath);
+    const service2 = new PersistenceService({ dbPath });
     await service2.init();
 
     const db2 = service2.getRawDatabase();
@@ -372,7 +372,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
 
   it('should handle multiple save/close/reopen cycles', async () => {
     // Cycle 1
-    const service1 = new PersistenceService(dbPath);
+    const service1 = new PersistenceService({ dbPath });
     await service1.init();
     const db1 = service1.getRawDatabase();
     db1.exec(
@@ -383,7 +383,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
     service1.close();
 
     // Cycle 2 - reopen, add more data
-    const service2 = new PersistenceService(dbPath);
+    const service2 = new PersistenceService({ dbPath });
     await service2.init();
     const db2 = service2.getRawDatabase();
     db2.exec(
@@ -394,7 +394,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
     service2.close();
 
     // Cycle 3 - reopen and verify both
-    const service3 = new PersistenceService(dbPath);
+    const service3 = new PersistenceService({ dbPath });
     await service3.init();
     const db3 = service3.getRawDatabase();
     const result = db3.exec('SELECT count(*) as count FROM conversations');
@@ -403,7 +403,7 @@ describe('PersistenceService - File Persistence (Close/Reopen)', () => {
   });
 
   it('should throw when saving without dbPath', async () => {
-    const service = new PersistenceService();
+    const service = new PersistenceService({});
     await service.init();
     expect(() => service.save()).toThrow('No database path configured');
     service.close();
@@ -418,7 +418,7 @@ describe('PersistenceService - Error Handling', () => {
     // Write invalid data
     fs.writeFileSync(dbPath, 'not a sqlite database');
 
-    const service = new PersistenceService(dbPath);
+    const service = new PersistenceService({ dbPath });
     await expect(service.init()).rejects.toThrow('file is not a database');
 
     fs.rmSync(tempDir, { recursive: true, force: true });
@@ -433,7 +433,7 @@ describe('PersistenceService - Error Handling', () => {
     // Try to save to a path inside the blocking file (should fail on all platforms)
     const invalidPath = path.join(blockingFile, 'test.db');
 
-    const service = new PersistenceService(invalidPath);
+    const service = new PersistenceService({ dbPath: invalidPath });
     await service.init();
 
     expect(() => service.save()).toThrow();
@@ -446,7 +446,7 @@ describe('PersistenceService - Error Handling', () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexipi-test-'));
     const dbPath = path.join(tempDir, 'nonexistent.db');
 
-    const service = new PersistenceService(dbPath);
+    const service = new PersistenceService({ dbPath });
     await service.init(); // Should create new database
     expect(service.isInitialized()).toBe(true);
     service.close();
@@ -455,7 +455,7 @@ describe('PersistenceService - Error Handling', () => {
   });
 
   it('should handle invalid SQL operations', async () => {
-    const service = new PersistenceService();
+    const service = new PersistenceService({});
     await service.init();
     const db = service.getRawDatabase();
 

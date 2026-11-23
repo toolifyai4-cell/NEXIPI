@@ -143,15 +143,22 @@ interface SqlJsModule {
   Database: new (data?: Uint8Array) => SQLDatabase;
 }
 
+export interface PersistenceServiceOptions {
+  dbPath?: string;
+  locateFile?: (file: string) => string;
+}
+
 export class PersistenceService {
   private readonly dbPath: string | undefined;
+  private readonly locateFile: ((file: string) => string) | undefined;
   private db: SQLDatabase | null = null;
   private sqlModule: SqlJsModule | null = null;
   private isClosed = false;
   private wasInitialized = false;
 
-  constructor(dbPath?: string) {
-    this.dbPath = dbPath;
+  constructor(options: PersistenceServiceOptions = {}) {
+    this.dbPath = options.dbPath;
+    this.locateFile = options.locateFile;
   }
 
   async init(): Promise<void> {
@@ -166,7 +173,10 @@ export class PersistenceService {
     }
 
     try {
-      this.sqlModule = await initSqlJs();
+      this.sqlModule = await initSqlJs({
+        locateFile: this.locateFile,
+        useOldExtensionFunctions: true,
+      });
     } catch (error) {
       throw new PersistenceError(
         'Failed to initialize sql.js',

@@ -66,6 +66,9 @@ importers:
       '@nexipi/models':
         specifier: workspace:*
         version: link:../../packages/models
+      '@nexipi/persistence':
+        specifier: workspace:*
+        version: link:../../packages/persistence
       '@nexipi/shared':
         specifier: workspace:*
         version: link:../../packages/shared

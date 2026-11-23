@@ -1,21 +1,30 @@
 {
-  "extends": "../../tsconfig.json",
   "compilerOptions": {
+    "target": "ES2022",
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "lib": ["ES2022"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true,
     "outDir": "./dist",
     "rootDir": "./src",
     "tsBuildInfoFile": "./dist/tsconfig.tsbuildinfo",
-    "module": "NodeNext",
-    "target": "ES2022",
-    "lib": ["ES2022"],
     "types": ["vscode", "node"],
     "baseUrl": ".",
     "paths": {
       "@nexipi/core": ["../../packages/core/dist"],
+      "@nexipi/models": ["../../packages/models/dist"],
+      "@nexipi/persistence": ["../../packages/persistence/dist"],
       "@nexipi/shared": ["../../packages/shared/dist"],
       "@nexipi/ui": ["../../packages/ui"]
     }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"],
-  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/shared" }]
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "**/*.spec.ts"]
 }

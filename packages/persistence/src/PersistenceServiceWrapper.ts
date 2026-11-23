@@ -27,7 +27,7 @@ import type {
   MessageListResult as RepoMessageListResult,
   DeleteResult as RepoDeleteResult,
 } from './repositories.js';
-import { PersistenceError, PersistenceService as FoundationPersistenceService } from './PersistenceService.js';
+import { PersistenceError, PersistenceService as FoundationPersistenceService, type PersistenceServiceOptions } from './PersistenceService.js';
 import type { ConversationId, MessageId } from '@nexipi/shared';
 
 function toRepoConversationInput(input: CreateConversationInput): RepoCreateConversationInput {
@@ -138,11 +138,12 @@ export class PersistenceService implements IPersistencePort {
   constructor(
     conversationRepository: ConversationRepository,
     messageRepository: MessageRepository,
-    foundationService?: FoundationPersistenceService
+    foundationService?: FoundationPersistenceService,
+    options?: PersistenceServiceOptions
   ) {
     this.conversationRepository = conversationRepository;
     this.messageRepository = messageRepository;
-    this.foundationService = foundationService ?? new FoundationPersistenceService();
+    this.foundationService = foundationService ?? new FoundationPersistenceService(options);
     this.ownsFoundationService = foundationService === undefined;
   }
 
@@ -251,7 +252,8 @@ export class PersistenceService implements IPersistencePort {
 export function createPersistenceService(
   conversationRepository: ConversationRepository,
   messageRepository: MessageRepository,
-  foundationService?: FoundationPersistenceService
+  foundationService?: FoundationPersistenceService,
+  options?: PersistenceServiceOptions
 ): PersistenceService {
-  return new PersistenceService(conversationRepository, messageRepository, foundationService);
+  return new PersistenceService(conversationRepository, messageRepository, foundationService, options);
 }

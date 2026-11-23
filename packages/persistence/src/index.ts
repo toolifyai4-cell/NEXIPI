@@ -10,6 +10,7 @@ export {
   createConversationId,
   createMessageId,
   SQLDatabase,
+  PersistenceServiceOptions,
 } from './PersistenceService.js';
 
 export {
@@ -47,6 +48,6 @@ export {
 } from './port.js';
 
 export {
-  PersistenceService,
+  PersistenceService as PersistencePortService,
   createPersistenceService,
 } from './PersistenceServiceWrapper.js';
