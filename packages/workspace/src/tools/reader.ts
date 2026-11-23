@@ -152,15 +152,19 @@ export class FileReader {
 
     checkCancelled(options.signal, options.uri);
 
-    // Reject directories and symlinks (unless symlinks are explicitly followed).
+    // Symbolic links are never followed or read. The FileSystemProvider
+    // abstraction has no readlink/realpath API, so symlink targets cannot be
+    // resolved or validated against the workspace root. Reject unconditionally.
+    if (stat.type === 'symbolicLink') {
+      throw createToolError(
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
+        'Symbolic links are not allowed for reading',
+        { path: options.uri }
+      );
+    }
+
+    // Reject directories and any other non-file entries.
     if (stat.type !== 'file') {
-      if (stat.type === 'symbolicLink' && !this.config.followSymlinks) {
-        throw createToolError(
-          ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
-          'Symbolic links are not allowed for reading',
-          { path: options.uri }
-        );
-      }
       throw createToolError(ToolErrorCode.TOOL_NOT_A_FILE, 'Path is not a file', {
         path: options.uri,
       });

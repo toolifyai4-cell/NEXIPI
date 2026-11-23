@@ -262,17 +262,28 @@ describe('DirectoryLister', () => {
       expect(result.entries.some(e => e.relativePath.startsWith('.git/'))).toBe(false);
     });
 
-    it('should exclude sensitive files', async () => {
+    it('should exclude sensitive files (.env, keys, certificates)', async () => {
+      vfs.addFile('/root/id_rsa', '-----BEGIN RSA PRIVATE KEY-----\n');
+      vfs.addFile('/root/cert.pem', '-----BEGIN CERTIFICATE-----\n');
+      vfs.addFile('/root/config.crt', 'cert data\n');
+      vfs.addDirEntry('/root', 'id_rsa', 'file');
+      vfs.addDirEntry('/root', 'cert.pem', 'file');
+      vfs.addDirEntry('/root', 'config.crt', 'file');
+
       const result = await lister.listDirectory({
         uri: makeUri('/root'),
         recursive: true,
         workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
       });
-      expect(result.entries.some(e => e.name === '.env')).toBe(false);
+      const names = result.entries.map(e => e.name);
+      expect(names).not.toContain('.env');
+      expect(names).not.toContain('id_rsa');
+      expect(names).not.toContain('cert.pem');
+      expect(names).not.toContain('config.crt');
       expect(result.entries.some(e => e.isSensitive)).toBe(false);
     });
 
-    it('should handle symbolic links safely (skipped by default)', async () => {
+    it('should skip symbolic links to files', async () => {
       vfs.addDirEntry('/root', 'link.ts', 'symbolicLink');
       vfs.stats.set('/root/link.ts', {
         type: 'symbolicLink',
@@ -281,6 +292,69 @@ describe('DirectoryLister', () => {
         ctime: Date.now(),
       });
       const result = await lister.listDirectory({
+        uri: makeUri('/root'),
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      expect(result.entries.some(e => e.name === 'link.ts')).toBe(false);
+    });
+
+    it('should not traverse into symlinked directories', async () => {
+      vfs.addDirEntry('/root', 'escape', 'symbolicLink');
+      vfs.stats.set('/root/escape', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      // Populate the symlink target so a traversal-following impl would descend into it.
+      vfs.addDir('/escape', [{ name: 'secret.txt', type: 'file' }]);
+      vfs.addFile('/escape/secret.txt', 'classified\n');
+
+      const result = await lister.listDirectory({
+        uri: makeUri('/root'),
+        recursive: true,
+        maxDepth: 10,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      // The symlinked directory itself is not listed, and its target is not traversed.
+      expect(result.entries.some(e => e.name === 'escape')).toBe(false);
+      expect(result.entries.some(e => e.relativePath === 'escape/secret.txt')).toBe(false);
+      expect(result.entries.some(e => e.name === 'secret.txt')).toBe(false);
+    });
+
+    it('should skip symlinks encountered during recursive listing', async () => {
+      vfs.addDirEntry('/root/sub', 'link-out', 'symbolicLink');
+      vfs.stats.set('/root/sub/link-out', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      const result = await lister.listDirectory({
+        uri: makeUri('/root'),
+        recursive: true,
+        maxDepth: 10,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+      });
+      expect(result.entries.some(e => e.relativePath === 'sub/link-out')).toBe(false);
+      // Real nested files are still listed.
+      expect(result.entries.some(e => e.relativePath === 'sub/deep/file5.ts')).toBe(true);
+    });
+
+    it('should ignore followSymlinks in config (symlinks never enabled)', async () => {
+      vfs.addDirEntry('/root', 'link.ts', 'symbolicLink');
+      vfs.stats.set('/root/link.ts', {
+        type: 'symbolicLink',
+        size: 0,
+        mtime: Date.now(),
+        ctime: Date.now(),
+      });
+      const strictLister = createDirectoryLister({
+        fileSystem: vfs,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        config: { followSymlinks: true } as unknown as Partial<DirectoryListConfig>,
+      });
+      const result = await strictLister.listDirectory({
         uri: makeUri('/root'),
         workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
       });

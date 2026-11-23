@@ -467,7 +467,7 @@ describe('FileReader', () => {
       );
     });
 
-    it('should reject symbolic links by default', async () => {
+    it('should reject symbolic links regardless of configuration', async () => {
       vfs.addFile('/root/real.ts', 'real\n');
       vfs.addDir('/root', [{ name: 'link.ts', type: 'symbolicLink' }]);
       vfs.stats.set('/root/link.ts', {
@@ -476,8 +476,23 @@ describe('FileReader', () => {
         mtime: Date.now(),
         ctime: Date.now(),
       });
+      // Default config: symlinks are rejected.
       await expectToolError(
         reader.readFile({
+          uri: makeUri('/root/link.ts'),
+          workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        }),
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED
+      );
+      // Attempting to enable symlink following via config must not enable it:
+      // followSymlinks is no longer a supported config option and is ignored.
+      const strictReader = createFileReader({
+        fileSystem: vfs,
+        workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
+        config: { followSymlinks: true } as unknown as Partial<FileReadConfig>,
+      });
+      await expectToolError(
+        strictReader.readFile({
           uri: makeUri('/root/link.ts'),
           workspaceFolder: makeWorkspaceFolder('file:///root', 'root'),
         }),

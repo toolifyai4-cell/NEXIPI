@@ -27,8 +27,6 @@ export const FileReadConfigSchema = z.object({
   respectIgnoreRules: z.boolean().default(true),
   /** Whether to reject sensitive files (credentials, keys, etc.). */
   respectSensitiveFiles: z.boolean().default(true),
-  /** Whether symbolic links may be followed when reading. Defaults to false. */
-  followSymlinks: z.boolean().default(false),
 });
 
 export type FileReadConfig = z.infer<typeof FileReadConfigSchema>;
@@ -40,7 +38,6 @@ export const defaultFileReadConfig: FileReadConfig = {
   enableBinaryDetection: true,
   respectIgnoreRules: true,
   respectSensitiveFiles: true,
-  followSymlinks: false,
 };
 
 export function validateFileReadConfig(config: unknown): FileReadConfig {
@@ -69,8 +66,6 @@ export const DirectoryListConfigSchema = z.object({
   recursive: z.boolean().default(false),
   /** Whether to include hidden files/directories (leading dot). */
   includeHidden: z.boolean().default(false),
-  /** Whether to follow symbolic links. Defaults to false. */
-  followSymlinks: z.boolean().default(false),
   /** Whether to apply IgnoreEngine exclusions. */
   respectIgnoreRules: z.boolean().default(true),
   /** Whether to exclude sensitive files from results. */
@@ -84,7 +79,6 @@ export const defaultDirectoryListConfig: DirectoryListConfig = {
   maxEntries: 10000,
   recursive: false,
   includeHidden: false,
-  followSymlinks: false,
   respectIgnoreRules: true,
   respectSensitiveFiles: true,
 };

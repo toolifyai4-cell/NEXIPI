@@ -127,14 +127,14 @@ export class DirectoryLister {
       );
     }
 
+    if (stat.type === 'symbolicLink') {
+      throw createToolError(
+        ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
+        'Symbolic links are not allowed for listing',
+        { path: options.uri }
+      );
+    }
     if (stat.type !== 'directory') {
-      if (stat.type === 'symbolicLink' && !this.config.followSymlinks) {
-        throw createToolError(
-          ToolErrorCode.TOOL_SYMLINK_NOT_ALLOWED,
-          'Symbolic links are not allowed for listing',
-          { path: options.uri }
-        );
-      }
       throw createToolError(ToolErrorCode.TOOL_NOT_A_DIRECTORY, 'Path is not a directory', {
         path: options.uri,
       });
@@ -298,50 +298,10 @@ export class DirectoryLister {
         continue;
       }
 
+      // Symbolic links are never followed or traversed. The FileSystemProvider
+      // abstraction has no readlink/realpath API, so symlink targets cannot be
+      // resolved or validated against the workspace root. Skip unconditionally.
       if (entry.type === 'symbolicLink') {
-        if (!this.config.followSymlinks) {
-          continue;
-        }
-        try {
-          const targetStat = await this.fileSystem.stat(absEntry);
-          if (targetStat.type === 'directory') {
-            if (depth < maxDepth) {
-              await this.traverseDirectory(
-                absEntry,
-                relEntry,
-                depth + 1,
-                maxDepth,
-                ignoreEngine,
-                entries,
-                errors,
-                state,
-                signal,
-                filterByType,
-                includePatterns,
-                maxEntries
-              );
-            }
-          } else if (targetStat.type === 'file') {
-            await this.collectFileEntry(
-              absEntry,
-              relEntry,
-              targetStat,
-              ignoreEngine,
-              entries,
-              state,
-              signal,
-              filterByType,
-              includePatterns,
-              maxEntries
-            );
-          }
-        } catch (error) {
-          errors.push({
-            path: absEntry,
-            message: error instanceof Error ? error.message : String(error),
-            isFatal: false,
-          });
-        }
         continue;
       }
 
