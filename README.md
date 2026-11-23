@@ -1,7 +1,7 @@
 # NexiPi
 
 <p align="center">
-  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="500
+  <img src="LOGO/NexiPi%203D%20Logo%20on%20Black.png" alt="NexiPi 3D Logo" width="600">
 </p>
 
 <p align="center">
