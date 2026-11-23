@@ -23,10 +23,10 @@ export class VSCodeWorkspaceProvider implements WorkspaceProvider {
   private readonly disposables: vscode.Disposable[] = [];
   private disposed = false;
 
-  async getWorkspaceFolders(): Promise<readonly WorkspaceFolder[]> {
+  getWorkspaceFolders(): Promise<readonly WorkspaceFolder[]> {
     this.throwIfDisposed();
     const folders = vscode.workspace.workspaceFolders ?? [];
-    return folders.map((folder, index) => toWorkspaceFolder(folder, index));
+    return Promise.resolve(folders.map((folder, index) => toWorkspaceFolder(folder, index)));
   }
 
   onWorkspaceFoldersChange(
@@ -34,7 +34,7 @@ export class VSCodeWorkspaceProvider implements WorkspaceProvider {
   ): WorkspaceProviderSubscription {
     this.throwIfDisposed();
 
-    const disposable = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
+    const disposable: vscode.Disposable = vscode.workspace.onDidChangeWorkspaceFolders((event) => {
       listener({
         added: event.added.map((folder) => toWorkspaceFolder(folder, folder.index)),
         removed: event.removed.map((folder) => toWorkspaceFolder(folder, folder.index)),
@@ -46,7 +46,13 @@ export class VSCodeWorkspaceProvider implements WorkspaceProvider {
     });
 
     this.disposables.push(disposable);
-    return { unsubscribe: () => disposable.dispose() };
+
+    const subscription: WorkspaceProviderSubscription = {
+      unsubscribe: () => {
+        disposable.dispose();
+      },
+    };
+    return subscription;
   }
 
   dispose(): void {

@@ -43,7 +43,20 @@ vi.mock('vscode', () => ({
   workspace: {
     getConfiguration: vi.fn(() => mockConfiguration),
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
+    workspaceFolders: [],
+    onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
+    fs: {
+      readFile: vi.fn(),
+      readDirectory: vi.fn(),
+      stat: vi.fn(),
+    },
+    createFileSystemWatcher: vi.fn(),
   },
+  Uri: {
+    parse: vi.fn(),
+  },
+  RelativePattern: vi.fn(),
+  FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 3 },
   StatusBarAlignment: { Right: 1 },
   ExtensionContext: vi.fn(),
 }));

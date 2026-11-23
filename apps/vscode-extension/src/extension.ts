@@ -10,6 +10,9 @@ import { PersistenceFoundation } from '@nexipi/persistence';
 import type { PersistencePortService } from '@nexipi/persistence';
 import { createPersistenceService, SqlJsConversationRepository, SqlJsMessageRepository } from '@nexipi/persistence';
 import { createPersistenceAdapter } from '@nexipi/models';
+import { WorkspaceManager } from './workspace/workspace-manager.js';
+import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
+import { VSCodeFileSystemProvider } from './workspace/vscode-file-system-provider.js';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -25,6 +28,7 @@ let gChatService: ChatService | undefined;
 let gPersistenceService: PersistencePortService | undefined;
 let gPersistenceAdapter: { dispose: () => void } | undefined;
 let gLogger: Logger | undefined;
+let gWorkspaceManager: WorkspaceManager | undefined;
 
 function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Logger {
   const levels: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -506,6 +510,32 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
   );
 
+  // --- Workspace intelligence (Phase 08 Stage F) ---
+  // Create and initialize the WorkspaceManager. Initialization kicks off the
+  // initial full scan in the background so extension activation is not blocked.
+  const workspaceProvider = new VSCodeWorkspaceProvider();
+  const fileSystem = new VSCodeFileSystemProvider();
+  const workspaceManager = new WorkspaceManager(workspaceProvider, fileSystem, { logger });
+  gWorkspaceManager = workspaceManager;
+
+  workspaceManager.onStatusChange((status) => {
+    if (status.disposed) {
+      updateStatusBar(statusBarItem, 'error', 'Workspace disposed');
+      return;
+    }
+    const progress = status.progress;
+    const detail = progress
+      ? `${progress.stage} (${progress.filesDiscovered} files)`
+      : `idle (${status.orchestrator.activeScanCount} active)`;
+    updateStatusBar(statusBarItem, 'active', `Workspace: ${detail}`);
+  });
+
+  // Non-blocking: do not await so activation is not blocked by a large scan.
+  void workspaceManager.initialize().catch((error) => {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to initialize workspace manager', { error: err.message });
+  });
+
   // Initialize persistence
   let persistenceService: PersistencePortService;
   try {
@@ -620,7 +650,17 @@ export async function deactivate(): Promise<void> {
 
   logger.info('Starting async deactivation sequence');
 
-  // 1. Stop and dispose ChatService (waits for active streams to settle)
+  // 1. Dispose workspace management and stop workspace activity.
+  // Workspace cleanup errors are logged and must not prevent persistence saving.
+  try {
+    gWorkspaceManager?.dispose();
+    gLogger?.info('Workspace manager disposed');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    gLogger?.error('Failed to dispose workspace manager', { error: err.message });
+  }
+
+  // 2. Stop and dispose ChatService (waits for active streams to settle)
   try {
     await chatService.dispose();
     logger.info('ChatService disposed successfully');
@@ -629,7 +669,7 @@ export async function deactivate(): Promise<void> {
     logger.error('Failed to dispose ChatService', { error: err.message });
   }
 
-  // 2. Save the database to disk
+  // 3. Save the database to disk
   try {
     persistenceService.save();
     logger.info('Database saved successfully on deactivation');

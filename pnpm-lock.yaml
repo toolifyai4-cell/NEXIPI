@@ -75,6 +75,9 @@ importers:
       '@nexipi/ui':
         specifier: workspace:*
         version: link:../../packages/ui
+      '@nexipi/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
       '@types/node':
         specifier: ^20.10.0
         version: 20.19.43

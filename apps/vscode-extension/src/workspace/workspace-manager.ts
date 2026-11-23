@@ -4,15 +4,20 @@ import {
   type FileChange,
   type IncrementalRefreshResult as IncrementalRefreshResultType,
   type OrchestratorStatus as OrchestratorStatusType,
+  type ScanId,
   type ScanOptions,
   type ScanProgress as ScanProgressType,
   type WorkspaceFolderId,
   type ScanResult as ScanResultType,
+  type WorkspaceProviderSubscription,
+  type ContextSelectionOptions,
+  RelevanceRanker,
+  ContextSelector,
 } from '@nexipi/workspace';
 import type { Logger } from '@nexipi/shared';
-import { VSCodeFileSystemProvider } from './vscode-file-system-provider.js';
+import type { VSCodeFileSystemProvider } from './vscode-file-system-provider.js';
 import { VSCodeFileWatcher, type FileWatchEvent } from './vscode-file-watcher.js';
-import { VSCodeWorkspaceProvider } from './vscode-workspace-provider.js';
+import type { VSCodeWorkspaceProvider } from './vscode-workspace-provider.js';
 
 /**
  * Snapshot of workspace intelligence status exposed to the extension UI.
@@ -61,7 +66,7 @@ export class WorkspaceManager {
   private initializing: Promise<void> | null = null;
 
   private readonly watchers = new Map<string, VSCodeFileWatcher>();
-  private folderChangeSubscription: { dispose(): void } | null = null;
+  private folderChangeSubscription: WorkspaceProviderSubscription | null = null;
 
   private readonly statusListeners = new Set<(status: WorkspaceStatus) => void>();
   private readonly pendingChanges = new Map<string, FileChange>();
@@ -172,8 +177,68 @@ export class WorkspaceManager {
     return result;
   }
 
-  async cancel(scanId?: string): Promise<boolean> {
+  async cancel(scanId?: ScanId): Promise<boolean> {
     return this.orchestrator.cancel(scanId);
+  }
+
+  /* ======================== Ranking and context selection ======================== */
+
+  /**
+   * Rank and select files relevant to a query from the latest scan result.
+   *
+   * This reuses the workspace package's {@link RelevanceRanker} and
+   * {@link ContextSelector} without duplicating their algorithms.
+   *
+   * IMPORTANT: The selected files are file references/metadata only. They are
+   * NOT file contents and are NOT delivered to the AI model. Actual AI
+   * context delivery (safe file-content retrieval, content limits, sensitive
+   * file protection, request construction) is out of scope for this stage.
+   *
+   * Returns null when no scan result is available yet (e.g. empty workspace
+   * before the first scan completes, or scan error/cancellation).
+   */
+  selectContext(
+    query: string,
+    options: {
+      readonly signal?: AbortSignal;
+      readonly maxFileCount?: number;
+      readonly maxBudget?: number;
+      readonly minRelevanceScore?: number;
+      readonly enableDiversity?: boolean;
+      readonly maxPerDirectory?: number;
+      readonly maxPerProject?: number;
+      readonly priorityMentions?: readonly string[];
+    } = {}
+  ): {
+    readonly query: string;
+    readonly ranking: ReturnType<RelevanceRanker['rankToRankedFiles']>;
+    readonly selection: ReturnType<ContextSelector['select']>;
+  } | null {
+    const result = this.orchestrator.getLatestResult();
+    if (!result) {
+      return null;
+    }
+
+    const ranker = new RelevanceRanker();
+    const ranking = ranker.rankToRankedFiles(
+      { query, signal: options.signal },
+      result.files
+    );
+
+    const selectionOptions: ContextSelectionOptions = {
+      maxFileCount: options.maxFileCount ?? 20,
+      maxBudget: options.maxBudget ?? 4096,
+      minRelevanceScore: options.minRelevanceScore ?? 0,
+      enableDiversity: options.enableDiversity ?? true,
+      maxPerDirectory: options.maxPerDirectory ?? 5,
+      maxPerProject: options.maxPerProject ?? 10,
+      priorityMentions: options.priorityMentions,
+      signal: options.signal,
+    };
+    const selector = new ContextSelector(selectionOptions);
+    const selection = selector.select(ranking.rankedFiles);
+
+    return { query, ranking, selection };
   }
 
   /* ======================== Incremental refresh (watcher-driven) ======================== */
@@ -186,7 +251,7 @@ export class WorkspaceManager {
    * caller should fall back to a full scan.
    */
   async requestIncrementalRefresh(params: {
-    readonly changes: ReadonlyArray<FileChange>;
+    readonly changes: readonly FileChange[];
     readonly workspaceId?: string;
   }): Promise<IncrementalRefreshResultType> {
     return this.orchestrator.requestIncrementalRefresh(params);
@@ -338,7 +403,7 @@ export class WorkspaceManager {
     }
     this.watchers.clear();
 
-    this.folderChangeSubscription?.dispose();
+    this.folderChangeSubscription?.unsubscribe();
     this.folderChangeSubscription = null;
 
     // The orchestrator disposes its internal WorkspaceDiscovery and
