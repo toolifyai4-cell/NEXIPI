@@ -3,9 +3,9 @@ import type { FileReadConfig } from './config.js';
 import type { DirectoryListConfig } from './config.js';
 
 /**
- * Kind of read/search tool supported in Phase 09 Stage B.
+ * Kind of read/search/list tool supported in Phase 09.
  */
-export type ToolKind = 'read' | 'list';
+export type ToolKind = 'read' | 'list' | 'search';
 
 /**
  * Structured result of reading a file.
@@ -102,6 +102,79 @@ export interface ListDirectoryOptions {
 }
 
 /**
- * Union of tool results returned by Stage B capabilities.
+ * A single match within a searched file.
+ *
+ * Line numbers are one-based. Columns are zero-based, with `startColumn`
+ * inclusive and `endColumn` exclusive. `matchedText` is the exact substring
+ * that matched (possibly truncated for very long matches).
  */
-export type ToolResult = ReadFileResult | ListDirectoryResult;
+export interface SearchMatch {
+  readonly lineNumber: number;
+  readonly startColumn: number;
+  readonly endColumn: number;
+  readonly matchedText: string;
+}
+
+/**
+ * The result of searching a single file.
+ */
+export interface SearchFileResult {
+  readonly uri: string;
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly matches: readonly SearchMatch[];
+  readonly matchCount: number;
+  /** Whether per-file match limit was reached for this file. */
+  readonly truncated: boolean;
+  /** Whether the file was skipped and not searched. */
+  readonly skipped: boolean;
+  /** Reason the file was skipped, if any. */
+  readonly skipReason: 'binary' | 'sensitive' | 'tooLarge' | 'readError' | 'ignored' | undefined;
+}
+
+/**
+ * Structured result of a code search.
+ */
+export interface CodeSearchResult {
+  readonly kind: 'search';
+  readonly uri: string;
+  readonly absolutePath: string;
+  readonly relativePath: string;
+  readonly mode: 'literal' | 'regex';
+  readonly query: string;
+  readonly caseSensitive: boolean;
+  readonly wholeWord: boolean;
+  readonly files: readonly SearchFileResult[];
+  readonly filesSearched: number;
+  readonly filesSkipped: number;
+  readonly totalMatches: number;
+  /** Whether any resource limit caused truncation. */
+  readonly truncated: boolean;
+  /** Which limit was reached, if any. */
+  readonly limitReached: 'maxCandidateFiles' | 'maxTotalBytesRead' | 'maxTotalResults' | 'maxOutputSize' | undefined;
+  readonly cancelled: boolean;
+  readonly completed: boolean;
+  readonly errors: readonly DiscoveryError[];
+}
+
+/**
+ * Options for searching workspace source files.
+ */
+export interface CodeSearchOptions {
+  readonly workspaceFolder: { readonly uri: string; readonly id: string };
+  readonly query: string;
+  readonly mode: 'literal' | 'regex';
+  readonly caseSensitive?: boolean | undefined;
+  readonly wholeWord?: boolean | undefined;
+  /** Number of context lines to include around each match. */
+  readonly contextLines?: number | undefined;
+  readonly includePatterns?: readonly string[] | undefined;
+  readonly excludePatterns?: readonly string[] | undefined;
+  readonly signal?: AbortSignal | undefined;
+  readonly config?: Partial<CodeSearchConfig> | undefined;
+}
+
+/**
+ * Union of tool results returned by Phase 09 capabilities.
+ */
+export type ToolResult = ReadFileResult | ListDirectoryResult | CodeSearchResult;
