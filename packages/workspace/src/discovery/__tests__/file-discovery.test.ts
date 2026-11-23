@@ -81,7 +81,7 @@ class VirtualFileSystem implements FileSystemProvider {
   }
 
   async stat(uri: string): Promise<FileStat> {
-    const key = uri.replace(/\\/g, '/').replace(/\/+$/, '');
+    const key = uri.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
     const stat = this.stats.get(key);
     if (!stat) {
       throw new Error(`ENOENT: no such file or directory, stat '${uri}'`);
@@ -118,7 +118,7 @@ function createService(
 }
 
 function makeVfs(tree: Record<string, unknown>, rootUri: string = 'file:///root'): VirtualFileSystem {
-  return new VirtualFileSystem(tree, rootUri.replace(/^file:\/\//, '').replace(/\/+$/, ''));
+  return new VirtualFileSystem(tree, rootUri.replace(/^file:\/\//, '').replace(/^\/+/, '').replace(/\/+$/, ''));
 }
 
 describe('FileDiscoveryService', () => {
