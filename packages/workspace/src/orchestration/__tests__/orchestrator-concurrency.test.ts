@@ -5,9 +5,7 @@ import {
   makeWorkspaceFolder,
   VirtualFileSystem,
   createTestOrchestrator,
-  waitForEvent,
   startScanBlockedAtAnalysis,
-  captureEvents,
   flushMicrotasks,
 } from './test-helpers.js';
 
@@ -27,13 +25,10 @@ describe('WorkspaceScanOrchestrator concurrency', () => {
 
     // Starting a second scan cancels the first (cancel-previous).
     const p2 = orch.startFullScan();
-    let cancelled1 = false;
-    try {
-      await p1;
-    } catch {
-      cancelled1 = true;
-    }
-    expect(cancelled1).toBe(true);
+    const result1 = await p1;
+    expect(result1.state).toBe('cancelled');
+    expect(result1.cancelled).toBe(true);
+    expect(result1.completed).toBe(false);
 
     release1();
     const result2 = await p2;
@@ -162,7 +157,6 @@ describe('WorkspaceScanOrchestrator concurrency', () => {
     );
     const p2 = orch.startFullScan();
     await flushMicrotasks();
-    await waitForEvent(orch, 'scan:progress', (e) => e.stage === 'analyzing-projects');
     expect(started.length).toBe(2);
 
     await orch.cancel(started[0]!);

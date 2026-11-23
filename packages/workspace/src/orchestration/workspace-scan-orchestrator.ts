@@ -282,12 +282,12 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
   }
 
   async requestIncrementalRefresh(params: {
-    changes: readonly {
+    changes: ReadonlyArray<{
       type: FileChangeType;
       absolutePath: string;
       previousAbsolutePath?: string;
       timestamp?: number;
-    }[];
+    }>,
     workspaceId?: string;
   }): Promise<IncrementalRefreshResult> {
     this.throwIfDisposed();
@@ -1200,6 +1200,7 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
         stage: 'initializing',
         progress: initialProgress(next.scanId, next.workspaceId, Date.now()),
         lastEmitTime: Date.now(),
+        abandoned: false,
       };
       this.activeScans.set(active.scanId, active);
       this.transitionScanState(active, 'queued');
