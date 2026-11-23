@@ -15,8 +15,15 @@ function makeVsFolder(uri: string, name: string, index: number) {
   return { uri, name, index } as unknown as vscode.WorkspaceFolder;
 }
 
-function makeFakeUri(path: string) {
-  return { scheme: 'file', path, toString: () => `file://${path}` } as unknown as vscode.Uri;
+function makeFakeUri(uriString: string) {
+  const schemeMatch = uriString.match(/^([a-z][a-z0-9+.-]*):\/\//i);
+  if (schemeMatch) {
+    const scheme = schemeMatch[1];
+    const path = uriString.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '');
+    return { scheme, path, toString: () => uriString } as unknown as vscode.Uri;
+  }
+  // No scheme: real VS Code Uri.parse returns an empty scheme.
+  return { scheme: '', path: uriString, toString: () => uriString } as unknown as vscode.Uri;
 }
 
 function setupWorkspaceApi(initialFolders: vscode.WorkspaceFolder[]) {
@@ -51,7 +58,7 @@ function setupWatcherApi() {
   vi.mocked(vscode.workspace.createFileSystemWatcher).mockReturnValue(watcher as any);
   (vscode.RelativePattern as any) = vi.fn();
   (vscode.Uri as any) = {
-    parse: vi.fn((uri: string) => makeFakeUri(uri.replace(/^[a-z][a-z0-9+.-]*:\/\//i, ''))),
+    parse: vi.fn((uri: string) => makeFakeUri(uri)),
   };
   return watcher;
 }
@@ -258,4 +265,110 @@ describe('WorkspaceManager', () => {
     sub.dispose();
     manager.dispose();
   });
+
+  /* ======================== URI / Windows path regression ======================== */
+
+  function assertNormalizedPath(uri: string, expected: string) {
+    vi.useFakeTimers();
+    const manager = createManager(50);
+    const refreshSpy = vi.spyOn(orchestratorOf(manager), 'requestIncrementalRefresh');
+    // Prevent the flush's full-scan fallback from running a real scan on a
+    // manager that is about to be disposed.
+    vi.spyOn(manager, 'startFullScan').mockResolvedValue({
+      workspaceId: 'ws_stub',
+    } as any);
+    manager.onWatcherEvent({ type: 'created', absolutePath: uri, timestamp: Date.now() });
+    expect(refreshSpy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(50);
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    const call = refreshSpy.mock.calls[0][0];
+    expect(call.changes[0].absolutePath).toBe(expected);
+    refreshSpy.mockRestore();
+    vi.useRealTimers();
+    manager.dispose();
+  }
+
+  it('normalizes Windows drive-letter file URIs correctly', async () => {
+    assertNormalizedPath('file:///C:/Users/test/project/file.ts', '/C:/Users/test/project/file.ts');
+  });
+
+  it('normalizes Windows paths containing spaces', async () => {
+    assertNormalizedPath('file:///C:/Users/test/my project/file.ts', '/C:/Users/test/my project/file.ts');
+  });
+
+  it('normalizes Windows paths with percent-encoded characters', async () => {
+    assertNormalizedPath('file:///C:/Users/test/my%20project/file.ts', '/C:/Users/test/my%20project/file.ts');
+  });
+
+  it('normalizes Windows paths with non-ASCII characters', async () => {
+    assertNormalizedPath('file:///C:/Users/test/プロジェクト/file.ts', '/C:/Users/test/プロジェクト/file.ts');
+  });
+
+  it('preserves Unix file URIs with leading slash', async () => {
+    assertNormalizedPath('file:///root/a.ts', '/root/a.ts');
+  });
+
+  it('preserves remote and virtual URI schemes unchanged', async () => {
+    assertNormalizedPath('ssh://remote/home/user/project', 'ssh://remote/home/user/project');
+    assertNormalizedPath('vscode-remote://remote+ssh/home/user/project', 'vscode-remote://remote+ssh/home/user/project');
+  });
+
+  it('normalizes rename old and new paths consistently', async () => {
+    vi.useFakeTimers();
+    const manager = createManager(50);
+    const refreshSpy = vi.spyOn(orchestratorOf(manager), 'requestIncrementalRefresh');
+    vi.spyOn(manager, 'startFullScan').mockResolvedValue({
+      workspaceId: 'ws_stub',
+    } as any);
+
+    manager.onWatcherEvent({
+      type: 'renamed',
+      absolutePath: 'file:///C:/Users/test/project/new.ts',
+      previousAbsolutePath: 'file:///C:/Users/test/project/old.ts',
+      timestamp: Date.now(),
+    });
+
+    expect(refreshSpy).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(50);
+
+    expect(refreshSpy).toHaveBeenCalledTimes(1);
+    const call = refreshSpy.mock.calls[0][0];
+    expect(call.changes).toHaveLength(1);
+    expect(call.changes[0].type).toBe('renamed');
+    expect(call.changes[0].absolutePath).toBe('/C:/Users/test/project/new.ts');
+    expect(call.changes[0].previousAbsolutePath).toBe('/C:/Users/test/project/old.ts');
+
+    refreshSpy.mockRestore();
+    vi.useRealTimers();
+    manager.dispose();
+  });
+
+  it('does not double-decode percent-encoded paths', async () => {
+    // %25 is an encoded '%'. The path component preserves encoding; no manual decode.
+    assertNormalizedPath('file:///C:/Users/test/my%25project/file.ts', '/C:/Users/test/my%25project/file.ts');
+  });
+
+  it('round-trips through filesystem provider consistently', async () => {
+    const manager = createManager();
+    const fsReadSpy = vi.spyOn(mockFs, 'readFile').mockResolvedValue(Buffer.from('x'));
+
+    const fileSystem = new VSCodeFileSystemProvider();
+    await fileSystem.readFile('/C:/Users/test/project/file.ts');
+
+    expect(fsReadSpy).toHaveBeenCalledTimes(1);
+    const calledUri = fsReadSpy.mock.calls[0][0];
+    expect(calledUri.toString()).toBe('file:///C:/Users/test/project/file.ts');
+
+    fsReadSpy.mockRestore();
+    manager.dispose();
+  });
+
+  // Access the module-private function for round-trip testing.
+  function toWorkspaceAbsolutePathForTest(uriString: string): string {
+    const uri = vscode.Uri.parse(uriString);
+    if (uri.scheme === 'file') {
+      return uri.path.replace(/\\/g, '/').replace(/\/+$/, '');
+    }
+    return uriString;
+  }
 });

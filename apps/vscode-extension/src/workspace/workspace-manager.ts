@@ -435,13 +435,21 @@ function toFileChange(event: FileWatchEvent): FileChange {
 
 /**
  * Strip the `file://` scheme from a URI string so it matches the workspace
- * package's internal path convention (e.g. `/root/a.ts`). Non-file URIs are
- * returned unchanged.
+ * package's internal path convention (e.g. `/root/a.ts`). Non-file URIs
+ * (remote / virtual) are preserved unchanged.
+ *
+ * Uses `vscode.Uri.parse` so that:
+ * - Windows drive-letter paths (`file:///C:/Users/...`) keep the drive letter
+ *   instead of gaining a spurious leading slash.
+ * - Percent-encoded segments are preserved (no manual decoding / double-decoding).
+ * - The path component retains its leading slash so `toVsCodeUri` can
+ *   correctly reconstruct `file://` URIs for round-trip consistency.
  */
 function toWorkspaceAbsolutePath(uriString: string): string {
-  let p = uriString;
-  if (p.startsWith('file://')) {
-    p = p.slice('file://'.length);
+  const uri = vscode.Uri.parse(uriString);
+  if (uri.scheme === 'file') {
+    return uri.path.replace(/\\/g, '/').replace(/\/+$/, '');
   }
-  return p.replace(/\\/g, '/').replace(/\/+$/, '');
+  // Remote / virtual URI schemes are preserved unchanged.
+  return uriString;
 }

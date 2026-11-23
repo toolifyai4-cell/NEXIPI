@@ -114,13 +114,15 @@
       ]
     }
   },
-  "devDependencies": {
+  "dependencies": {
     "@nexipi/core": "workspace:*",
     "@nexipi/models": "workspace:*",
     "@nexipi/persistence": "workspace:*",
+    "@nexipi/workspace": "workspace:*"
+  },
+  "devDependencies": {
     "@nexipi/shared": "workspace:*",
     "@nexipi/ui": "workspace:*",
-    "@nexipi/workspace": "workspace:*",
     "@types/node": "^20.10.0",
     "@types/vscode": "^1.85.0",
     "typescript": "^5.3.0",

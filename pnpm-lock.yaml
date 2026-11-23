@@ -59,7 +59,7 @@ importers:
         version: 5.9.3
 
   apps/vscode-extension:
-    devDependencies:
+    dependencies:
       '@nexipi/core':
         specifier: workspace:*
         version: link:../../packages/core
@@ -69,15 +69,16 @@ importers:
       '@nexipi/persistence':
         specifier: workspace:*
         version: link:../../packages/persistence
+      '@nexipi/workspace':
+        specifier: workspace:*
+        version: link:../../packages/workspace
+    devDependencies:
       '@nexipi/shared':
         specifier: workspace:*
         version: link:../../packages/shared
       '@nexipi/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@nexipi/workspace':
-        specifier: workspace:*
-        version: link:../../packages/workspace
       '@types/node':
         specifier: ^20.10.0
         version: 20.19.43
