@@ -81,6 +81,7 @@ export interface IPersistencePort {
   initialize(): Promise<void>;
   isAvailable(): boolean;
   dispose(): void;
+  save(): void;
 
   createConversation(input: CreateConversationInput): Promise<ConversationResult>;
   getConversation(id: ConversationId): Promise<ConversationResult>;

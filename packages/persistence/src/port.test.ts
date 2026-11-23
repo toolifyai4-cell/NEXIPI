@@ -20,6 +20,10 @@ class MockPersistencePort implements IPersistencePort {
     this.available = false;
   }
 
+  save(): void {
+    this.assertAvailable();
+  }
+
   async createConversation(): Promise<any> {
     this.assertAvailable();
     return { conversation: null, error: new PersistenceError('Not implemented') };

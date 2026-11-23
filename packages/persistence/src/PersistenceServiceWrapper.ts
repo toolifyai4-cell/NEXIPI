@@ -173,6 +173,11 @@ export class PersistenceService implements IPersistencePort {
     }
   }
 
+  save(): void {
+    this.assertAvailable();
+    this.foundationService.save();
+  }
+
   async createConversation(input: CreateConversationInput): Promise<ConversationResult> {
     this.assertAvailable();
     const result = await this.conversationRepository.create(toRepoConversationInput(input));

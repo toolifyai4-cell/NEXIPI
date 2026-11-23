@@ -577,6 +577,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     dispose: async () => {
       logger.info('Disposing chat service and persistence');
       await chatService.dispose();
+      // Save database to disk before closing
+      try {
+        persistenceService.save();
+        logger.info('Database saved successfully on deactivation');
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error('Failed to save database on deactivation', { error: err.message });
+      }
       persistenceAdapter.dispose();
       // Note: persistenceService.dispose() is called by persistenceAdapter.dispose()
       // which closes the foundation service since it owns it
@@ -588,7 +596,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 }
 
 export function deactivate(): void {
-  const outputChannel = vscode.window.createOutputChannel('NexiPi');
-  outputChannel.appendLine(`[${new Date().toISOString()}] [INFO] NexiPi extension deactivated`);
-  outputChannel.dispose();
+  // Extension cleanup is handled via context.subscriptions in activate()
+  // This function is called when the extension is deactivated
 }
