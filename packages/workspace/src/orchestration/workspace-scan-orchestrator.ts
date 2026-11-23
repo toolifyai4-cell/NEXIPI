@@ -5,6 +5,7 @@ import {
   defaultEngineConfig,
   createEventEmitter,
   type EventEmitter,
+  type EventSubscription,
 } from '@nexipi/core';
 import type {
   WorkspaceProvider,
@@ -19,6 +20,7 @@ import type {
   Workspace,
   WorkspaceFolder,
   WorkspaceFolderId,
+  WorkspaceChangeEvent,
   FileMetadata,
   DiscoveryError,
   ProjectRoot,
@@ -131,6 +133,7 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
   private latestResult: ScanResult | null = null;
   private latestProgress: ScanProgress | null = null;
   private cachedWorkspace: Workspace | null = null;
+  private workspaceChangeSubscription: EventSubscription | null = null;
 
   constructor(
     provider: WorkspaceProvider,
@@ -166,6 +169,15 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       fileSystem,
       logger: this.logger,
     });
+
+    // Subscribe to workspace change events so the cached workspace is
+    // invalidated whenever the workspace identity or folder set changes.
+    // This prevents stale workspace state from being reused across scans.
+    this.workspaceChangeSubscription = this.workspaceDiscovery
+      .getEventEmitter()
+      .on('workspace:changed', (payload) => {
+        this.handleWorkspaceChanged(payload.event);
+      });
   }
 
   /* ======================== Public API ======================== */
@@ -475,6 +487,11 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       this.workspaceDiscovery.dispose();
     } catch {
       // Ignore.
+    }
+
+    if (this.workspaceChangeSubscription) {
+      this.workspaceChangeSubscription.unsubscribe();
+      this.workspaceChangeSubscription = null;
     }
 
     for (const engine of this.ignoreEngines.values()) {
@@ -1427,6 +1444,35 @@ export class WorkspaceScanOrchestrator implements ScanEventEmitter {
       errors: [],
       timestamp: Date.now(),
     };
+  }
+
+  /**
+   * Handle a workspace change event from WorkspaceDiscovery.
+   *
+   * Invalidates the cached workspace so the next call to resolveWorkspace()
+   * resolves the current workspace from discovery rather than reusing stale
+   * state. This is called whenever the workspace identity or folder set
+   * changes (folder added, removed, or changed).
+   */
+  private handleWorkspaceChanged(event: WorkspaceChangeEvent): void {
+    if (this.disposed) {
+      return;
+    }
+    const previousId = this.cachedWorkspace?.id;
+    const previousFolderCount = this.cachedWorkspace?.folders.length ?? 0;
+
+    // Always invalidate the cache on a workspace change. WorkspaceDiscovery
+    // has already updated its current workspace to the new folder set, so the
+    // next resolveWorkspace() will read the fresh workspace. Nulling the cache
+    // ensures old workspace state cannot be incorrectly reused.
+    this.cachedWorkspace = null;
+
+    this.logger.debug('Workspace cache invalidated due to workspace change', {
+      eventType: event.type,
+      folderUri: event.folder.uri,
+      previousWorkspaceId: previousId,
+      previousFolderCount,
+    });
   }
 
   private async resolveWorkspace(): Promise<Workspace> {

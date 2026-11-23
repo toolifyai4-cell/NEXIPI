@@ -22,7 +22,8 @@
       "@nexipi/models": ["../../packages/models/dist"],
       "@nexipi/persistence": ["../../packages/persistence/dist"],
       "@nexipi/shared": ["../../packages/shared/dist"],
-      "@nexipi/ui": ["../../packages/ui"]
+      "@nexipi/ui": ["../../packages/ui"],
+      "@nexipi/workspace": ["../../packages/workspace/dist"]
     }
   },
   "include": ["src/**/*"],
