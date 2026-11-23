@@ -336,3 +336,58 @@ vi.mock('vscode', () => ({
       );
     });
   });
+
+  describe('Shutdown sequence regression tests', () => {
+    let extensionModule: { activate: (context: unknown) => Promise<void>; deactivate: () => Promise<void> };
+    let mockContext: {
+      extensionUri: { toString: () => string };
+      subscriptions: { dispose: ReturnType<typeof vi.fn> }[];
+      globalStorageUri: { fsPath: string };
+      extensionPath: string;
+    };
+
+    beforeEach(async () => {
+      vi.resetModules();
+      extensionModule = await import('./extension.js');
+
+      mockContext = {
+        extensionUri: { toString: () => 'file:///test' },
+        subscriptions: [],
+        globalStorageUri: { fsPath: '/tmp/globalStorage' },
+        extensionPath: 'C:/DNET/NEXIPI/apps/vscode-extension',
+      };
+    });
+
+    it('should export deactivate function that returns a Promise', async () => {
+      expect(typeof extensionModule.deactivate).toBe('function');
+      
+      const result = extensionModule.deactivate();
+      expect(result).toBeInstanceOf(Promise);
+      await result; // Should not throw when called without activation
+    });
+
+    it('should be idempotent - repeated deactivate calls should not throw', async () => {
+      await extensionModule.deactivate();
+      await extensionModule.deactivate(); // Second call should not throw
+      await extensionModule.deactivate(); // Third call should not throw
+    });
+
+    it('should register synchronous disposal in context.subscriptions during activate', async () => {
+      const initialSubscriptionsLength = mockContext.subscriptions.length;
+      
+      await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
+      
+      // Should have added at least one subscription for synchronous cleanup
+      expect(mockContext.subscriptions.length).toBeGreaterThan(initialSubscriptionsLength);
+      
+      // The last added subscription should be the synchronous disposal
+      const syncDisposal = mockContext.subscriptions[mockContext.subscriptions.length - 1];
+      expect(typeof syncDisposal.dispose).toBe('function');
+    });
+
+    it('should not throw when deactivate is called without prior activate', async () => {
+      // Fresh module instance without activate() called
+      const freshModule = await import('./extension.js');
+      await expect(freshModule.deactivate()).resolves.not.toThrow();
+    });
+  });

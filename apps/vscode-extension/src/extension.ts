@@ -20,6 +20,12 @@ interface NexiPiContext {
   persistenceService?: PersistencePortService;
 }
 
+// Module-level variables for access in deactivate()
+let gChatService: ChatService | undefined;
+let gPersistenceService: PersistencePortService | undefined;
+let gPersistenceAdapter: { dispose: () => void } | undefined;
+let gLogger: Logger | undefined;
+
 function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Logger {
   const levels: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
   const currentLevel = levels[level];
@@ -534,6 +540,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Initialize chat service (loads conversations from persistence)
   await chatService.initialize();
 
+  // Store for deactivate()
+  gChatService = chatService;
+  gPersistenceService = persistenceService;
+  gPersistenceAdapter = persistenceAdapter;
+  gLogger = logger;
+
   const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger, chatService);
 
   const nexipiContext: NexiPiContext = {
@@ -572,30 +584,61 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   context.subscriptions.push(...nexipiContext.disposables);
 
-  // Dispose chat service and persistence on deactivation
+  // Synchronous cleanup for context.subscriptions (not awaited by VS Code)
   context.subscriptions.push({
-    dispose: async () => {
-      logger.info('Disposing chat service and persistence');
-      await chatService.dispose();
-      // Save database to disk before closing
-      try {
-        persistenceService.save();
-        logger.info('Database saved successfully on deactivation');
-      } catch (error) {
-        const err = error instanceof Error ? error : new Error(String(error));
-        logger.error('Failed to save database on deactivation', { error: err.message });
-      }
-      persistenceAdapter.dispose();
+    dispose: () => {
+      gLogger?.info('Synchronous disposal of persistence adapter');
+      // Note: Async disposal is handled in deactivate() which IS awaited by VS Code
+      gPersistenceAdapter?.dispose();
       // Note: persistenceService.dispose() is called by persistenceAdapter.dispose()
       // which closes the foundation service since it owns it
     },
   });
 
-  logger.info('Extension activated successfully');
+  gLogger.info('Extension activated successfully');
   updateStatusBar(statusBarItem, 'active');
 }
 
-export function deactivate(): void {
-  // Extension cleanup is handled via context.subscriptions in activate()
-  // This function is called when the extension is deactivated
+// Track if deactivate has been called to ensure idempotency
+let isDeactivated = false;
+
+export async function deactivate(): Promise<void> {
+  if (isDeactivated) {
+    gLogger?.info('deactivate() called again, skipping (idempotent)');
+    return;
+  }
+  isDeactivated = true;
+
+  const logger = gLogger;
+  const chatService = gChatService;
+  const persistenceService = gPersistenceService;
+
+  if (!logger || !chatService || !persistenceService) {
+    logger?.warn('deactivate() called but services not initialized');
+    return;
+  }
+
+  logger.info('Starting async deactivation sequence');
+
+  // 1. Stop and dispose ChatService (waits for active streams to settle)
+  try {
+    await chatService.dispose();
+    logger.info('ChatService disposed successfully');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to dispose ChatService', { error: err.message });
+  }
+
+  // 2. Save the database to disk
+  try {
+    persistenceService.save();
+    logger.info('Database saved successfully on deactivation');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to save database on deactivation', { error: err.message });
+    // Re-throw to signal failure to VS Code
+    throw err;
+  }
+
+  logger.info('Async deactivation sequence completed');
 }
