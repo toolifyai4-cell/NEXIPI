@@ -73,28 +73,31 @@ export function validateToolExecutionServiceConfig(input: unknown): ToolExecutio
   return merged as unknown as ToolExecutionServiceConfig;
 }
 
-function cancelledResult(toolName: string): ToolExecutionResult {
+function cancelledResult(toolName?: string): ToolExecutionResult {
+  const name = toolName ?? 'unknown';
   return {
     kind: 'failure',
-    error: createToolError(ToolErrorCode.TOOL_CANCELLED, `Tool '${toolName}' was cancelled`, { toolName }),
+    error: createToolError(ToolErrorCode.TOOL_CANCELLED, `Tool '${name}' was cancelled`, { toolName: name }),
     truncated: false,
     executionMs: 0,
   };
 }
 
-function timeoutResult(toolName: string): ToolExecutionResult {
+function timeoutResult(toolName?: string): ToolExecutionResult {
+  const name = toolName ?? 'unknown';
   return {
     kind: 'failure',
-    error: createToolError(ToolErrorCode.TOOL_TIMEOUT, `Tool '${toolName}' exceeded its per-execution time limit`, { toolName }),
+    error: createToolError(ToolErrorCode.TOOL_TIMEOUT, `Tool '${name}' exceeded its per-execution time limit`, { toolName: name }),
     truncated: false,
     executionMs: 0,
   };
 }
 
-function resourceLimitResult(toolName: string, message: string): ToolExecutionResult {
+function resourceLimitResult(toolName?: string, message: string): ToolExecutionResult {
+  const name = toolName ?? 'unknown';
   return {
     kind: 'failure',
-    error: createToolError(ToolErrorCode.TOOL_RESOURCE_LIMIT, message, { toolName }),
+    error: createToolError(ToolErrorCode.TOOL_RESOURCE_LIMIT, message, { toolName: name }),
     truncated: false,
     executionMs: 0,
   };

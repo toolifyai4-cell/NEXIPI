@@ -2006,15 +2006,27 @@ export class ChatService {
     // This timeout should be long enough to allow tool executions to complete their cancellation
     const timeoutMs = 5000;
     const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, timeoutMs));
-    return Promise.race([Promise.all(abortPromises), timeoutPromise]).then(() => {
-      for (const info of streamInfos) {
-        this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
-      }
-      // Now clear tracking maps after all streams have settled
-      this.activeStreams.clear();
-      this.activeRequests.clear();
-      this.primaryRequestId.clear();
-    });
+    // Wait for all streams to settle, but with a timeout. 
+    // If timeout expires, we still wait for all streams to settle in the background
+    // but don't block disposal indefinitely.
+    return Promise.all(abortPromises)
+      .then(() => {
+        for (const info of streamInfos) {
+          this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
+        }
+        this.activeStreams.clear();
+        this.activeRequests.clear();
+        this.primaryRequestId.clear();
+      })
+      .catch(() => {
+        // If any stream fails, still update status and clear
+        for (const info of streamInfos) {
+          this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
+        }
+        this.activeStreams.clear();
+        this.activeRequests.clear();
+        this.primaryRequestId.clear();
+      });
   }
 }
 

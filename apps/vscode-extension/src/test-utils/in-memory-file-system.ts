@@ -1,4 +1,4 @@
-import type { FileSystemProvider, FileStat } from '@nexipi/workspace';
+import type { FileSystemProvider, FileStat, DirectoryEntry } from '@nexipi/workspace';
 
 type FileType = 'file' | 'directory' | 'symbolicLink';
 const FileTypeValues = {
@@ -42,48 +42,26 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
     }
   }
 
-  writeFile(path: string, content: string | Uint8Array): void {
-    const normalized = this.normalizePath(path);
-    this.ensureDirectory(normalized.substring(0, normalized.lastIndexOf('/')) || '/');
-    const contentBytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
-    this.files.set(normalized, {
-      content: contentBytes,
-      mtime: Date.now(),
-      type: FileTypeValues.File,
-    });
-  }
-
-  readFile(path: string): Uint8Array {
-    const normalized = this.normalizePath(path);
+  async readFile(uri: string): Promise<string> {
+    const normalized = this.normalizePath(uri);
     const file = this.files.get(normalized);
     if (!file) {
       const error = new Error(`File not found: ${normalized}`) as any;
       error.code = 'ENOENT';
       throw error;
     }
-    return file.content;
+    return new TextDecoder().decode(file.content);
   }
 
-  deleteFile(path: string): void {
-    const normalized = this.normalizePath(path);
-    this.files.delete(normalized);
-  }
-
-  createDirectory(path: string): void {
-    const normalized = this.normalizePath(path);
-    this.directories.add(normalized);
-    this.ensureDirectory(normalized);
-  }
-
-  readDirectory(path: string): [string, FileType][] {
-    const normalized = this.normalizePath(path);
+  async readDirectory(uri: string): Promise<readonly DirectoryEntry[]> {
+    const normalized = this.normalizePath(uri);
     if (!this.directories.has(normalized)) {
       const error = new Error(`Directory not found: ${normalized}`) as any;
       error.code = 'ENOENT';
       throw error;
     }
     
-    const entries: [string, FileType][] = [];
+    const entries: DirectoryEntry[] = [];
     const prefix = normalized === '/' ? '' : `${normalized}/`;
     const prefixLen = prefix.length;
     
@@ -92,7 +70,7 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
       if (filePath.startsWith(prefix)) {
         const relative = filePath.substring(prefixLen);
         if (!relative.includes('/')) {
-          entries.push([relative, fileInfo.type]);
+          entries.push({ name: relative, type: fileInfo.type });
         }
       }
     }
@@ -102,7 +80,7 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
       if (dirPath !== normalized && dirPath.startsWith(prefix)) {
         const relative = dirPath.substring(prefixLen);
         if (!relative.includes('/')) {
-          entries.push([relative, FileTypeValues.Directory]);
+          entries.push({ name: relative, type: FileTypeValues.Directory });
         }
       }
     }
@@ -110,8 +88,8 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
     return entries;
   }
 
-  stat(path: string): FileStat {
-    const normalized = this.normalizePath(path);
+  async stat(uri: string): Promise<FileStat> {
+    const normalized = this.normalizePath(uri);
     
     if (this.files.has(normalized)) {
       const file = this.files.get(normalized)!;
@@ -139,12 +117,12 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
     throw error;
   }
 
-  lstat(path: string): FileStat {
-    return this.stat(path);
+  async lstat(uri: string): Promise<FileStat> {
+    return this.stat(uri);
   }
 
-  exists(path: string): boolean {
-    const normalized = this.normalizePath(path);
+  async exists(uri: string): Promise<boolean> {
+    const normalized = this.normalizePath(uri);
     return this.files.has(normalized) || this.directories.has(normalized);
   }
 
@@ -154,6 +132,28 @@ export class InMemoryFileSystemProvider implements FileSystemProvider {
 
   readSymbolicLink(path: string): string {
     throw new Error('Symbolic links not supported');
+  }
+
+  writeFile(path: string, content: string | Uint8Array): void {
+    const normalized = this.normalizePath(path);
+    this.ensureDirectory(normalized.substring(0, normalized.lastIndexOf('/')) || '/');
+    const contentBytes = typeof content === 'string' ? new TextEncoder().encode(content) : content;
+    this.files.set(normalized, {
+      content: contentBytes,
+      mtime: Date.now(),
+      type: FileTypeValues.File,
+    });
+  }
+
+  deleteFile(path: string): void {
+    const normalized = this.normalizePath(path);
+    this.files.delete(normalized);
+  }
+
+  createDirectory(path: string): void {
+    const normalized = this.normalizePath(path);
+    this.directories.add(normalized);
+    this.ensureDirectory(normalized);
   }
 
   dispose(): void {

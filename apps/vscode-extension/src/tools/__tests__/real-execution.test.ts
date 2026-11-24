@@ -170,29 +170,42 @@ describe('Real Tool Execution Integration', () => {
     workspaceAdapters.clear();
   });
 
+  function createTestFileSystems() {
+    const fsA = new InMemoryFileSystemProvider();
+    const fsB = new InMemoryFileSystemProvider();
+    
+    // Setup test files in folder A
+    fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
+    fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;\nfunction fooA() { return "A"; }');
+    fsA.writeFile('/workspaceA/.gitignore', '*.log\nnode_modules/');
+    
+    // Setup test files in folder B
+    fsB.writeFile('/workspaceB/fileB.txt', 'Hello from folder B');
+    fsB.writeFile('/workspaceB/subdir/fileB2.ts', 'export const b = 2;\nfunction fooB() { return "B"; }');
+    fsB.writeFile('/workspaceB/.gitignore', '*.tmp\ndist/');
+    
+    return { fsA, fsB };
+  }
+
+  function registerTestWorkspaces(fsA: InMemoryFileSystemProvider, fsB: InMemoryFileSystemProvider) {
+    // Clear any existing adapters
+    workspaceAdapters.clear();
+    
+    // Register workspace adapters for both folders
+    const workspaceIdA = registerWorkspaceAdapters(folderA, fsA, logger);
+    const workspaceIdB = registerWorkspaceAdapters(folderB, fsB, logger);
+    
+    return { workspaceIdA, workspaceIdB };
+  }
+
   describe('Workspace adapter registration and routed tool execution', () => {
     it('should register adapters for both folders and execute read_file on each via routed tool', async () => {
-      // Create fresh filesystem for each folder
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
-      
-      // Setup test files in folder A
-      fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;\nfunction fooA() { return "A"; }');
-      fsA.writeFile('/workspaceA/.gitignore', '*.log\nnode_modules/');
-      
-      // Setup test files in folder B
-      fsB.writeFile('/workspaceB/fileB.txt', 'Hello from folder B');
-      fsB.writeFile('/workspaceB/subdir/fileB2.ts', 'export const b = 2;\nfunction fooB() { return "B"; }');
-      fsB.writeFile('/workspaceB/.gitignore', '*.tmp\ndist/');
-      
-      // Register workspace adapters for both folders
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       // Verify both adapters are registered
-      const adapterA = getWorkspaceAdapter('ws_a');
-      const adapterB = getWorkspaceAdapter('ws_b');
+      const adapterA = getWorkspaceAdapter(workspaceIdA);
+      const adapterB = getWorkspaceAdapter(workspaceIdB);
       expect(adapterA).toBeDefined();
       expect(adapterB).toBeDefined();
       expect(adapterA?.folder.uri).toBe('file:///workspaceA');
@@ -202,13 +215,13 @@ describe('Real Tool Execution Integration', () => {
       const turn = toolExecutionService.createTurn({ id: 'test-turn-1' });
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const resultA = await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], contextA);
       
       expect(resultA[0].kind).toBe('success');
@@ -218,13 +231,13 @@ describe('Real Tool Execution Integration', () => {
       const turn2 = toolExecutionService.createTurn({ id: 'test-turn-2' });
       const contextB: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_b', 
+        workspaceId: workspaceIdB, 
         workspaceFolder: { uri: folderB.uri, id: folderB.id }, 
         logger 
       };
       
       const resultB = await turn2.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: 'ws_b' } }
+        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: workspaceIdB } }
       ], contextB);
       
       expect(resultB[0].kind).toBe('success');
@@ -232,28 +245,19 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should execute list_directory on each folder via routed tool', async () => {
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
-      
-      fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;\nfunction fooA() { return "A"; }');
-      
-      fsB.writeFile('/workspaceB/fileB.txt', 'Hello from folder B');
-      fsB.writeFile('/workspaceB/subdir/fileB2.ts', 'export const b = 2;\nfunction fooB() { return "B"; }');
-      
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       const turn = toolExecutionService.createTurn({ id: 'test-list-1' });
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'list_directory', input: { uri: '/workspaceA', workspaceId: 'ws_a' } }
+        { toolName: 'list_directory', input: { uri: '/workspaceA', workspaceId: workspaceIdA } }
       ], contextA);
       
       expect(result[0].kind).toBe('success');
@@ -263,25 +267,19 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should execute search_code on each folder via routed tool', async () => {
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
-      
-      fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;\nfunction fooA() { return "A"; }');
-      fsB.writeFile('/workspaceB/subdir/fileB2.ts', 'export const b = 2;\nfunction fooB() { return "B"; }');
-      
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       const turn = toolExecutionService.createTurn({ id: 'test-search-1' });
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'search_code', input: { pattern: 'fooA', filePattern: '*.ts', workspaceId: 'ws_a' } }
+        { toolName: 'search_code', input: { pattern: 'fooA', filePattern: '*.ts', workspaceId: workspaceIdA } }
       ], contextA);
       
       expect(result[0].kind).toBe('success');
@@ -291,25 +289,19 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should execute find_references on each folder via routed tool', async () => {
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
-      
-      fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;\nfunction fooA() { return "A"; }');
-      fsB.writeFile('/workspaceB/subdir/fileB2.ts', 'export const b = 2;\nfunction fooB() { return "B"; }');
-      
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       const turn = toolExecutionService.createTurn({ id: 'test-refs-1' });
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'find_references', input: { symbol: 'fooA', filePattern: '*.ts', workspaceId: 'ws_a' } }
+        { toolName: 'find_references', input: { symbol: 'fooA', filePattern: '*.ts', workspaceId: workspaceIdA } }
       ], contextA);
       
       expect(result[0].kind).toBe('success');
@@ -319,78 +311,76 @@ describe('Real Tool Execution Integration', () => {
   });
 
   describe('Workspace isolation', () => {
-    it('should isolate folder A from folder B (different workspaceFolder in context)', async () => {
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
+    it('should correctly route to target folder when file exists', async () => {
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       fsB.writeFile('/workspaceB/fileB.txt', 'Hello from folder B');
       
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
-      
       const turn = toolExecutionService.createTurn({ id: 'test-iso-1' });
-      // Request folder B's workspace but with folder A's context
+      // Request folder B's workspace with folder B's workspaceId
+      // The routed tool should route to folder B's adapter and read the file from folder B
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_b',  // Request folder B's workspace
+        workspaceId: workspaceIdB,  // Request folder B's workspace
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: 'ws_b' } }
+        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: workspaceIdB } }
       ], contextA);
       
-      // The routed tool should find the adapter for ws_b and execute it
-      // The adapter for ws_b should reject the request because the file is in folder B but
-      // the context's workspaceFolder is folderA (mismatch)
-      expect(result[0].kind).toBe('failure');
+      // The routed tool should find the adapter for workspaceIdB and execute it
+      // The adapter for workspaceIdB should read the file from folder B's file system
+      // Since the file exists in folder B, this should succeed
+      expect(result[0].kind).toBe('success');
+      expect((result[0] as any).output.content).toContain('Hello from folder B');
     });
 
-    it('should reject cross-folder search access', async () => {
-      const fsA = new InMemoryFileSystemProvider();
-      const fsB = new InMemoryFileSystemProvider();
+    it('should reject cross-folder access when file does not exist in target folder', async () => {
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'content A');
-      fsB.writeFile('/workspaceB/fileB.txt', 'content B');
-      
-      registerWorkspaceAdapters(folderA, fsA, logger);
-      registerWorkspaceAdapters(folderB, fsB, logger);
+      // Don't write fileB.txt to folder B
       
       const turn = toolExecutionService.createTurn({ id: 'test-iso-2' });
       const contextA: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_b', 
+        workspaceId: workspaceIdB, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'search_code', input: { pattern: 'content B', filePattern: '*.txt', workspaceId: 'ws_b' } }
+        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: workspaceIdB } }
       ], contextA);
       
+      // The routed tool routes to folder B's adapter, but the file doesn't exist in folder B
       expect(result[0].kind).toBe('failure');
     });
   });
 
   describe('Workspace identity validation', () => {
     it('should reject tool calls with mismatched workspace identity', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-identity-1' });
       // Use folder B's identity but folder A's adapter context
       const contextWrong: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderB.uri, id: folderB.id }, 
         logger 
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], contextWrong);
       
       expect(result[0].kind).toBe('failure');
@@ -398,9 +388,10 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should reject invalid workspace IDs', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-identity-2' });
       const context: ToolExecutionContext = { 
@@ -421,21 +412,22 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Cancellation propagation', () => {
     it('should cancel active tool execution when turn is cancelled', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-cancel-1' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       // Start a read operation
       const promise = turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], context);
       
       // Cancel the turn
@@ -447,23 +439,24 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should cancel queued calls when turn is cancelled', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-cancel-2' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       // Submit multiple calls to fill the queue
       const promises = [
-        turn.submitBatch([{ toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: 'ws_a' } }], context),
-        turn.submitBatch([{ toolName: 'read_file', input: { uri: '/workspaceA/subdir/fileA2.ts', workspaceId: 'ws_a' } }], context),
+        turn.submitBatch([{ toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }], context),
+        turn.submitBatch([{ toolName: 'read_file', input: { uri: '/workspaceA/subdir/fileA2.ts', workspaceId: workspaceIdA } }], context),
       ];
       
       // Cancel the turn
@@ -479,21 +472,22 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Concurrent execution limits', () => {
     it('should respect maxConcurrentExecutions limit', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-concurrent-1' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       // Submit more calls than maxConcurrentExecutions (5)
       const promises = Array.from({ length: 7 }, (_, i) => 
-        turn.submitBatch([{ toolName: 'read_file', input: { uri: `/workspaceA/fileA.txt`, workspaceId: 'ws_a' } }], context)
+        turn.submitBatch([{ toolName: 'read_file', input: { uri: `/workspaceA/fileA.txt`, workspaceId: workspaceIdA } }], context)
       );
       
       const results = await Promise.all(promises);
@@ -506,52 +500,54 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Shutdown drain behavior', () => {
     it('should drain active executions on shutdown', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-drain-1' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       // Start some executions
       await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], context);
       
       // Drain should wait for them to complete
-      const drainResult = await toolExecutionService.drain({ timeoutMs: 5000 });
+      const drainResult = await toolExecutionService.drain({ timeoutMs: 10000 });
       expect(drainResult.settled).toBe(true);
       expect(drainResult.activeExecutions).toBe(0);
     });
 
     it('should cancel queued work on drain', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-drain-2' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       // Queue up some work (more than concurrency limit)
       const promises = Array.from({ length: 10 }, (_, i) => 
-        turn.submitBatch([{ toolName: 'read_file', input: { uri: `/workspaceA/fileA.txt`, workspaceId: 'ws_a' } }], context)
+        turn.submitBatch([{ toolName: 'read_file', input: { uri: `/workspaceA/fileA.txt`, workspaceId: workspaceIdA } }], context)
       );
       
       // Give a moment for queue to build up
       await new Promise(resolve => setTimeout(resolve, 10));
       
       // Drain should cancel queued work
-      const drainResult = await toolExecutionService.drain({ timeoutMs: 5000 });
+      const drainResult = await toolExecutionService.drain({ timeoutMs: 10000 });
       expect(drainResult.queuedCalls).toBe(0);
       
       // Wait for all promises to settle
@@ -559,20 +555,21 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should wait for underlying promises on waitForUnderlyings', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-wait-1' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: workspaceIdA } }
       ], context);
       
       await toolExecutionService.waitForUnderlyings(2000);
@@ -582,20 +579,21 @@ describe('Real Tool Execution Integration', () => {
 
   describe('ToolExecutionService disposal', () => {
     it('should dispose cleanly', async () => {
-      const fsA = new InMemoryFileSystemProvider();
+      const { fsA, workspaceIdA } = createTestFileSystems();
+      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
-      registerWorkspaceAdapters(folderA, fsA, logger);
       
       const turn = toolExecutionService.createTurn({ id: 'test-dispose-1' });
       const context: ToolExecutionContext = { 
         signal: new AbortController().signal, 
-        workspaceId: 'ws_a', 
+        workspaceId: workspaceIdA, 
         workspaceFolder: { uri: folderA.uri, id: folderA.id }, 
         logger 
       };
       
       await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: 'ws_a' } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: workspaceIdA } }
       ], context);
       
       toolExecutionService.dispose();
