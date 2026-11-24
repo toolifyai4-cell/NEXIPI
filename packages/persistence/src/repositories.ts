@@ -111,7 +111,7 @@ function mapMessageRow(row: unknown[]): MessageRecord {
   return {
     id: row[0] as string,
     conversation_id: row[1] as string,
-    role: row[2] as 'user' | 'assistant' | 'system',
+    role: row[2] as 'user' | 'assistant' | 'system' | 'tool',
     content: row[3] as string,
     status: row[4] as 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled',
     timestamp: row[5] as number,

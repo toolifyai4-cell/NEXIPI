@@ -1079,4 +1079,625 @@ describe('ChatService - Tool Calling Integration', () => {
       await nonToolChatService.dispose();
     });
   });
+
+  describe('Resource leak prevention', () => {
+    it('should complete turn when model error occurs after tool execution', async () => {
+      const conversationId = chatService.createConversation('Model Error After Turn').id;
+
+      // First response has tool calls, second response throws error
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        // Second model request throws
+        Promise.reject(new Error('Model provider error')),
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        const resp = responses[responseIndex++];
+        if (resp instanceof Promise) throw await resp;
+        return resp;
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Tool should have been executed and turn completed
+      expect(toolMessages.length).toBe(1);
+      
+      // Verify turn is completed by checking service state
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    });
+
+    it('should complete turn when cancelled during tool execution', async () => {
+      const conversationId = chatService.createConversation('Cancelled During Turn').id;
+
+      // Register slow tool
+      toolRegistry.unregister('get_weather');
+      toolRegistry.register(makeToolDefinition({
+        execute: vi.fn().mockImplementation(async () => {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return { temperature: 22 };
+        }),
+      }));
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Cancelled.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 50)); // Let tool start
+
+      chatService.cancelMessage(assistantMessageId);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const messages = chatService.getMessages(conversationId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
+      expect(assistantMsg?.status).toBe('cancelled');
+
+      // Verify turn is cleaned up
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    });
+
+    it('should complete turn on successful tool execution', async () => {
+      const conversationId = chatService.createConversation('Successful Turn').id;
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Weather retrieved.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(1);
+
+      // Verify turn is completed
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    });
+
+    it('should complete turn when tool execution fails', async () => {
+      const conversationId = chatService.createConversation('Tool Execution Failure').id;
+
+      // Register a tool that fails
+      toolRegistry.unregister('get_weather');
+      toolRegistry.register(makeToolDefinition({
+        execute: vi.fn().mockRejectedValue(new Error('API error')),
+      }));
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Tool failed.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(1);
+
+      // Verify turn is completed
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    });
+  });
+
+  describe('Persistence round-trip', () => {
+    it('should persist and load tool messages correctly', async () => {
+      // Create a chat service with persistence
+      const persistenceAdapter = {
+        initialize: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        createConversation: vi.fn().mockResolvedValue({ conversation: { id: 'test-conv', workspaceId: 'test', title: 'Test', createdAt: Date.now(), updatedAt: Date.now(), metadata: {} }, error: null }),
+        getConversation: vi.fn().mockResolvedValue({ conversation: null, error: null }),
+        listConversations: vi.fn().mockResolvedValue({ conversations: [], error: null }),
+        updateConversation: vi.fn().mockResolvedValue({ conversation: null, error: null }),
+        deleteConversation: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+        createMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        getMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        listMessages: vi.fn().mockResolvedValue({ messages: [], error: null }),
+        updateMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        deleteMessage: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+        deleteMessagesByConversation: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+      } as any;
+
+      const persistentChatService = createChatService({
+        providerRegistry,
+        defaultProvider: providerId,
+        defaultModel: modelId,
+        toolRegistry,
+        toolExecutionService,
+        persistenceAdapter,
+      });
+
+      const conversationId = persistentChatService.createConversation('Persistence Test').id;
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Weather retrieved.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await persistentChatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = persistentChatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(1);
+      expect(toolMessages[0].metadata?.toolCallId).toBe('call-1');
+      expect(toolMessages[0].metadata?.toolName).toBe('get_weather');
+
+      // Verify the persistence adapter was called with correct tool message
+      const createMessageCalls = persistenceAdapter.createMessage.mock.calls;
+      const toolMessageCall = createMessageCalls.find(call => call[0].role === 'tool');
+      expect(toolMessageCall).toBeDefined();
+      expect(toolMessageCall[0].content).toContain('temperature');
+      expect(toolMessageCall[0].metadata?.toolCallId).toBe('call-1');
+      expect(toolMessageCall[0].metadata?.toolName).toBe('get_weather');
+
+      await persistentChatService.dispose();
+    });
+
+    it('should persist assistant message with toolCalls metadata', async () => {
+      const persistenceAdapter = {
+        initialize: vi.fn().mockResolvedValue(undefined),
+        close: vi.fn().mockResolvedValue(undefined),
+        createConversation: vi.fn().mockResolvedValue({ conversation: { id: 'test-conv', workspaceId: 'test', title: 'Test', createdAt: Date.now(), updatedAt: Date.now(), metadata: {} }, error: null }),
+        getConversation: vi.fn().mockResolvedValue({ conversation: null, error: null }),
+        listConversations: vi.fn().mockResolvedValue({ conversations: [], error: null }),
+        updateConversation: vi.fn().mockResolvedValue({ conversation: null, error: null }),
+        deleteConversation: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+        createMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        getMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        listMessages: vi.fn().mockResolvedValue({ messages: [], error: null }),
+        updateMessage: vi.fn().mockResolvedValue({ message: null, error: null }),
+        deleteMessage: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+        deleteMessagesByConversation: vi.fn().mockResolvedValue({ deleted: true, error: null }),
+      } as any;
+
+      const persistentChatService = createChatService({
+        providerRegistry,
+        defaultProvider: providerId,
+        defaultModel: modelId,
+        toolRegistry,
+        toolExecutionService,
+        persistenceAdapter,
+      });
+
+      const conversationId = persistentChatService.createConversation('Assistant ToolCalls Persistence').id;
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [
+                { id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } },
+                { id: 'call-2', name: 'get_weather', arguments: { location: 'LA' } },
+              ],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Weather retrieved.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await persistentChatService.sendMessage(conversationId, 'Weather in NYC and LA');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = persistentChatService.getMessages(conversationId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
+      expect(assistantMsg?.metadata?.toolCalls).toBeDefined();
+      expect(assistantMsg?.metadata?.toolCalls).toHaveLength(2);
+
+      // Verify persistence adapter was called with assistant message containing toolCalls
+      const createMessageCalls = persistenceAdapter.createMessage.mock.calls;
+      const assistantMessageCall = createMessageCalls.find(call => 
+        call[0].id === assistantMessageId && call[0].role === 'assistant'
+      );
+      expect(assistantMessageCall).toBeDefined();
+      expect(assistantMessageCall[0].metadata?.toolCalls).toBeDefined();
+      expect(assistantMessageCall[0].metadata?.toolCalls).toHaveLength(2);
+
+      await persistentChatService.dispose();
+    });
+  });
+
+  describe('Batch and iteration limits', () => {
+    it('should execute 6 calls in one response across 2 batches', async () => {
+      const conversationId = chatService.createConversation('Six Calls One Response').id;
+
+      // Register 6 tools
+      for (let i = 0; i < 6; i++) {
+        toolRegistry.register(makeToolDefinition({
+          name: `tool_${i}`,
+          execute: vi.fn().mockResolvedValue({ result: i }),
+        }));
+      }
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 6 }, (_, i) => ({
+                id: `call-${i}`,
+                name: `tool_${i}`,
+                arguments: { value: i },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Done.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call 6 tools');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // All 6 should execute (split into 2 batches of 5 and 1)
+      expect(toolMessages.length).toBe(6);
+    });
+
+    it('should enforce 25-call total limit across multiple responses', async () => {
+      const conversationId = chatService.createConversation('25 Call Limit').id;
+
+      let callCount = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount <= 5) {
+          // Each response returns 5 tool calls
+          return {
+            id: `response-${callCount}`,
+            model: modelId,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                toolCalls: Array.from({ length: 5 }, (_, i) => ({
+                  id: `call-${callCount}-${i}`,
+                  name: 'get_weather',
+                  arguments: { location: `City ${callCount}-${i}` },
+                })),
+              },
+              finishReason: 'tool_calls',
+            }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            finishReason: 'tool_calls',
+          };
+        } else {
+          // 6th response - should not be reached due to limit
+          return {
+            id: `response-${callCount}`,
+            model: modelId,
+            choices: [{
+              index: 0,
+              message: { role: 'assistant', content: 'Should not reach here', finishReason: 'stop' },
+            }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            finishReason: 'stop',
+          };
+        }
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call many tools');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Should only execute 25 calls (5 responses × 5 calls)
+      expect(toolMessages.length).toBe(25);
+
+      // The 6th response should not be reached
+      expect(callCount).toBeLessThanOrEqual(5);
+    });
+
+    it('should handle 10 calls in one response correctly', async () => {
+      const conversationId = chatService.createConversation('Ten Calls One Response').id;
+
+      for (let i = 0; i < 10; i++) {
+        toolRegistry.register(makeToolDefinition({
+          name: `tool_${i}`,
+          execute: vi.fn().mockResolvedValue({ result: i }),
+        }));
+      }
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 10 }, (_, i) => ({
+                id: `call-${i}`,
+                name: `tool_${i}`,
+                arguments: { value: i },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Done.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call 10 tools');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // All 10 should execute (2 batches of 5)
+      expect(toolMessages.length).toBe(10);
+    });
+
+    it('should reject calls beyond 25 limit with TOOL_RESOURCE_LIMIT', async () => {
+      const conversationId = chatService.createConversation('Reject Beyond 25').id;
+
+      // First response: 20 calls
+      // Second response: 10 calls (should only execute 5, reject 5)
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 20 }, (_, i) => ({
+                id: `call-1-${i}`,
+                name: 'get_weather',
+                arguments: { location: `City ${i}` },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 10 }, (_, i) => ({
+                id: `call-2-${i}`,
+                name: 'get_weather',
+                arguments: { location: `City ${i}` },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-3',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Limit reached.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call 30 tools');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Should execute 25 total (20 + 5), reject 5
+      expect(toolMessages.length).toBe(25);
+      
+      // Check that 5 calls have TOOL_RESOURCE_LIMIT error
+      const limitErrors = toolMessages.filter(m => {
+        const content = JSON.parse(m.content);
+        return content.error?.code === 'TOOL_RESOURCE_LIMIT';
+      });
+      expect(limitErrors.length).toBe(5);
+    });
+  });
 });

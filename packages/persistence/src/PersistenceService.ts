@@ -22,7 +22,7 @@ export function validateConversation(data: unknown): z.infer<typeof Conversation
 export const MessageValidationSchema = z.object({
   id: z.string().min(1),
   conversation_id: z.string().min(1),
-  role: z.enum(['user', 'assistant', 'system']),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
   content: z.string(),
   status: z.enum(['pending', 'streaming', 'completed', 'failed', 'cancelled']),
   timestamp: z.number().int().nonnegative(),
@@ -46,7 +46,7 @@ export interface Conversation {
 export interface Message {
   id: string;
   conversation_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
   timestamp: number;
