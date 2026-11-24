@@ -56,6 +56,8 @@ interface WorkspaceAdapterSet {
   readonly searchCode: (input: unknown, context: ToolExecutionContext) => Promise<CodeSearchResult>;
   readonly findReferences: (input: unknown, context: ToolExecutionContext) => Promise<ReferenceDiscoveryResult>;
   readonly computedWorkspaceId: string;
+  /** Internal marker to indicate workspace is being removed */
+  __closing?: boolean;
 }
 
 // Registry version token for atomicity - incremented on any registry change
@@ -137,13 +139,25 @@ export function registerWorkspaceAdapters(
   return workspaceId;
 }
 
-export function unregisterWorkspaceAdapters(
+export async function unregisterWorkspaceAdapters(
   folderUri: string,
   logger: Logger
-): void {
+): Promise<void> {
   // Find and remove by folder URI
   for (const [workspaceId, adapterSet] of workspaceAdapters.entries()) {
     if (adapterSet.folder.uri === folderUri) {
+      // Mark workspace as closing to prevent new leases
+      beginWorkspaceRemoval(workspaceId);
+      
+      // Wait for active leases to release (with timeout)
+      try {
+        await waitForLeasesToRelease(workspaceId, 10000);
+        logger.info('All leases released for workspace', { workspaceId });
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.warn('Timeout waiting for leases, proceeding with removal', { workspaceId, error: err.message });
+      }
+      
       workspaceAdapters.delete(workspaceId);
       workspaceAdaptersVersion++;
       logger.info('Unregistered workspace adapters', { workspaceId, folderUri, version: workspaceAdaptersVersion });
@@ -167,6 +181,100 @@ export function hasWorkspaceAdapter(workspaceId: string): boolean {
 
 export function getWorkspaceAdapter(workspaceId: string): WorkspaceAdapterSet | undefined {
   return workspaceAdapters.get(workspaceId);
+}
+
+// --- Resource Lease Mechanism for Workspace Operations ---
+// Tracks active operations per workspace to prevent premature disposal of filesystem resources.
+
+interface WorkspaceLease {
+  readonly workspaceId: string;
+  readonly acquiredAt: number;
+  readonly abortSignal: AbortSignal;
+}
+
+const workspaceLeases = new Map<string, Set<WorkspaceLease>>();
+
+function acquireLease(workspaceId: string, signal: AbortSignal): WorkspaceLease {
+  const lease: WorkspaceLease = {
+    workspaceId,
+    acquiredAt: Date.now(),
+    abortSignal: signal,
+  };
+  let leases = workspaceLeases.get(workspaceId);
+  if (!leases) {
+    leases = new Set();
+    workspaceLeases.set(workspaceId, leases);
+  }
+  leases.add(lease);
+  return lease;
+}
+
+function releaseLease(workspaceId: string, lease: WorkspaceLease): void {
+  const leases = workspaceLeases.get(workspaceId);
+  if (leases) {
+    leases.delete(lease);
+    if (leases.size === 0) {
+      workspaceLeases.delete(workspaceId);
+    }
+  }
+}
+
+function getTotalActiveLeases(): number {
+  let total = 0;
+  for (const leases of workspaceLeases.values()) {
+    total += leases.size;
+  }
+  return total;
+}
+
+function hasActiveLeases(workspaceId: string): boolean {
+  const leases = workspaceLeases.get(workspaceId);
+  return leases !== undefined && leases.size > 0;
+}
+
+async function waitForLeasesToRelease(
+  workspaceId: string,
+  timeoutMs: number,
+  pollIntervalMs = 50
+): Promise<void> {
+  const startTime = Date.now();
+  for (;;) {
+    if (!hasActiveLeases(workspaceId)) return;
+    if (Date.now() - startTime > timeoutMs) {
+      throw new Error(`Timeout waiting for leases to release on workspace ${workspaceId}`);
+    }
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+async function waitForAllLeasesToRelease(
+  timeoutMs: number,
+  pollIntervalMs = 50
+): Promise<void> {
+  const startTime = Date.now();
+  for (;;) {
+    if (getTotalActiveLeases() === 0) return;
+    if (Date.now() - startTime > timeoutMs) {
+      const remaining = getTotalActiveLeases();
+      throw new Error(`Timeout waiting for ${remaining} leases to release`);
+    }
+    await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+  }
+}
+
+function beginWorkspaceRemoval(workspaceId: string): void {
+  // Mark workspace as closing - no new leases can be acquired
+  // We use a special marker in the adapters map to indicate closing state
+  const adapter = workspaceAdapters.get(workspaceId);
+  if (adapter) {
+    // Store a marker that this workspace is closing
+    adapter.__closing = true;
+  }
+}
+
+function isWorkspaceClosing(workspaceId: string): boolean {
+  const adapter = workspaceAdapters.get(workspaceId);
+  return adapter ? !!adapter.__closing : false;
 }
 
 // --- Routed tool definitions (single registration per capability) ---
@@ -216,8 +324,11 @@ export function createRoutedReadFileTool(): ToolDefinition {
         throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
       }
       
+      if (isWorkspaceClosing(workspaceId)) {
+        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+      }
+      
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      const versionAtLookup = getWorkspaceAdaptersVersion();
       
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
@@ -226,15 +337,16 @@ export function createRoutedReadFileTool(): ToolDefinition {
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
       
-      // Verify registry hasn't changed during async boundary (defense-in-depth)
-      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
-        throw new Error(`Workspace registry changed during tool lookup, retry required`);
+      // Acquire lease to protect workspace resources during operation
+      const lease = acquireLease(workspaceId, context.signal);
+      try {
+        return await adapter.readFile(
+          { uri, lineStart, lineEnd, workspaceFolder: adapter.folder, signal: context.signal },
+          folderContext
+        );
+      } finally {
+        releaseLease(workspaceId, lease);
       }
-      
-      return adapter.readFile(
-        { uri, lineStart, lineEnd, workspaceFolder: adapter.folder, signal: context.signal },
-        folderContext
-      );
     },
   };
 }
@@ -260,8 +372,11 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
         throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
       }
       
+      if (isWorkspaceClosing(workspaceId)) {
+        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+      }
+      
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      const versionAtLookup = getWorkspaceAdaptersVersion();
       
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
@@ -270,15 +385,16 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
       
-      // Verify registry hasn't changed during async boundary (defense-in-depth)
-      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
-        throw new Error(`Workspace registry changed during tool lookup, retry required`);
+      // Acquire lease to protect workspace resources during operation
+      const lease = acquireLease(workspaceId, context.signal);
+      try {
+        return await adapter.listDirectory(
+          { uri, workspaceFolder: adapter.folder, signal: context.signal },
+          folderContext
+        );
+      } finally {
+        releaseLease(workspaceId, lease);
       }
-      
-      return adapter.listDirectory(
-        { uri, workspaceFolder: adapter.folder, signal: context.signal },
-        folderContext
-      );
     },
   };
 }
@@ -304,8 +420,11 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
         throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
       }
       
+      if (isWorkspaceClosing(workspaceId)) {
+        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+      }
+      
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      const versionAtLookup = getWorkspaceAdaptersVersion();
       
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
@@ -314,15 +433,16 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
       
-      // Verify registry hasn't changed during async boundary (defense-in-depth)
-      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
-        throw new Error(`Workspace registry changed during tool lookup, retry required`);
+      // Acquire lease to protect workspace resources during operation
+      const lease = acquireLease(workspaceId, context.signal);
+      try {
+        return await adapter.searchCode(
+          { pattern, workspaceFolder: adapter.folder, filePattern, caseSensitive, signal: context.signal },
+          folderContext
+        );
+      } finally {
+        releaseLease(workspaceId, lease);
       }
-      
-      return adapter.searchCode(
-        { pattern, workspaceFolder: adapter.folder, filePattern, caseSensitive, signal: context.signal },
-        folderContext
-      );
     },
   };
 }
@@ -348,8 +468,11 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
         throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
       }
       
+      if (isWorkspaceClosing(workspaceId)) {
+        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+      }
+      
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      const versionAtLookup = getWorkspaceAdaptersVersion();
       
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
@@ -358,15 +481,16 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
       
-      // Verify registry hasn't changed during async boundary (defense-in-depth)
-      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
-        throw new Error(`Workspace registry changed during tool lookup, retry required`);
+      // Acquire lease to protect workspace resources during operation
+      const lease = acquireLease(workspaceId, context.signal);
+      try {
+        return await adapter.findReferences(
+          { symbol, workspaceFolder: adapter.folder, filePattern, signal: context.signal },
+          folderContext
+        );
+      } finally {
+        releaseLease(workspaceId, lease);
       }
-      
-      return adapter.findReferences(
-        { symbol, workspaceFolder: adapter.folder, filePattern, signal: context.signal },
-        folderContext
-      );
     },
   };
 }
@@ -949,7 +1073,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const folderChangeSubscription = workspaceProvider.onWorkspaceFoldersChange((event) => {
     // Unregister adapters for removed folders.
     for (const folder of event.removed) {
-      unregisterWorkspaceAdapters(folder.uri, logger);
+      void unregisterWorkspaceAdapters(folder.uri, logger);
     }
 
     // Register adapters for added folders.
@@ -1130,8 +1254,18 @@ export async function deactivate(): Promise<void> {
     logger.warn('ToolExecutionService underlying wait completed with timeout', { error: err.message });
   }
 
-  // 4. Dispose workspace management and stop workspace activity.
-  //    Now safe because ChatService and ToolExecutionService have stopped using filesystem.
+  // 4. Wait for all workspace leases to release before disposing workspace manager.
+  //    This ensures no active operation is using the filesystem when it's disposed.
+  try {
+    await waitForAllLeasesToRelease(10000);
+    logger.info('All workspace leases released');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.warn('Timeout waiting for leases, proceeding with workspace disposal', { error: err.message });
+  }
+
+  // 5. Dispose workspace management and stop workspace activity.
+  //    Now safe because all leases have been released.
   try {
     gWorkspaceManager?.dispose();
     gLogger?.info('Workspace manager disposed');
@@ -1140,15 +1274,16 @@ export async function deactivate(): Promise<void> {
     gLogger?.error('Failed to dispose workspace manager', { error: err.message });
   }
 
-  // 5. Clear tool registry references and workspace adapters.
+  // 6. Clear tool registry references and workspace adapters.
   workspaceAdapters.clear();
+  workspaceLeases.clear();
   if (toolRegistry) {
     logger.debug('ToolRegistry references cleared');
   }
   gToolRegistry = undefined;
   gToolExecutionService = undefined;
 
-  // 6. Save the database to disk, then dispose persistence adapter.
+  // 7. Save the database to disk, then dispose persistence adapter.
   try {
     persistenceService.save();
     logger.info('Database saved successfully on deactivation');
@@ -1158,7 +1293,7 @@ export async function deactivate(): Promise<void> {
     throw err;
   }
 
-  // 7. Dispose persistence adapter (closes foundation service)
+  // 8. Dispose persistence adapter (closes foundation service)
   try {
     gPersistenceAdapter?.dispose();
     logger.info('Persistence adapter disposed');

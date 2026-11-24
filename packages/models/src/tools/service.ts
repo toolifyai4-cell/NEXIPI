@@ -396,6 +396,9 @@ export class ToolExecutionService {
   private closing = false;
   private turnCounter = 0;
   private readonly activeUnderlyings: Set<Promise<unknown>> = new Set();
+  private drainPromise: Promise<void> | null = null;
+  private drainResolve: (() => void) | null = null;
+  private drainReject: ((error: Error) => void) | null = null;
 
   constructor(executor: ToolExecutor, options: ToolExecutionServiceOptions = {}) {
     this.executor = executor;
@@ -430,7 +433,7 @@ export class ToolExecutionService {
    * Returns a result indicating whether all work settled.
    */
   async drain(options: ToolExecutionServiceDrainOptions): Promise<ToolExecutionServiceDrainResult> {
-    const { timeoutMs, pollIntervalMs = 50 } = options;
+    const { timeoutMs } = options;
     const startTime = Date.now();
 
     if (this.disposed) {
@@ -442,8 +445,19 @@ export class ToolExecutionService {
       };
     }
 
+    // If drain is already in progress, wait for it
+    if (this.drainPromise) {
+      await this.drainPromise;
+    }
+
     // Enter closing state: prevent new turns and new submissions
     this.closing = true;
+
+    // Create a promise that resolves when all active executions complete
+    this.drainPromise = new Promise<void>((resolve, reject) => {
+      this.drainResolve = resolve;
+      this.drainReject = reject;
+    });
 
     // Cancel all queued entries
     for (const entry of this.globalQueue) {
@@ -461,26 +475,27 @@ export class ToolExecutionService {
     }
 
     // Wait for active executions to complete or timeout
-    for (;;) {
+    try {
+      const timeoutPromise = new Promise<void>((_, reject) => {
+        setTimeout(() => reject(new Error('drain timeout')), timeoutMs);
+      });
+      
+      await Promise.race([this.drainPromise, timeoutPromise]);
+      
+      return {
+        settled: true,
+        activeExecutions: 0,
+        queuedCalls: 0,
+        elapsedMs: Date.now() - startTime,
+      };
+    } catch {
       const snapshot = this.getGlobalSnapshot();
-      if (snapshot.activeExecutions === 0 && snapshot.queuedCalls === 0) {
-        return {
-          settled: true,
-          activeExecutions: 0,
-          queuedCalls: 0,
-          elapsedMs: Date.now() - startTime,
-        };
-      }
-      if (Date.now() - startTime > timeoutMs) {
-        return {
-          settled: false,
-          activeExecutions: snapshot.activeExecutions,
-          queuedCalls: snapshot.queuedCalls,
-          elapsedMs: Date.now() - startTime,
-        };
-      }
-      // Yield to allow async completions
-      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      return {
+        settled: false,
+        activeExecutions: snapshot.activeExecutions,
+        queuedCalls: snapshot.queuedCalls,
+        elapsedMs: Date.now() - startTime,
+      };
     }
   }
 
@@ -488,6 +503,12 @@ export class ToolExecutionService {
     if (this.disposed) return;
     this.disposed = true;
     this.closing = true;
+    
+    // Signal drain completion if in progress
+    if (this.drainPromise && this.drainResolve) {
+      this.drainResolve();
+    }
+    
     for (const turn of this.turns) {
       turn.dispose();
     }
@@ -499,7 +520,13 @@ export class ToolExecutionService {
   /** Internal: track an underlying execution promise for drain purposes. */
   trackUnderlying(promise: Promise<unknown>): void {
     this.activeUnderlyings.add(promise);
-    promise.finally(() => this.activeUnderlyings.delete(promise));
+    void promise.finally(() => {
+      this.activeUnderlyings.delete(promise);
+      // Check if drain should complete
+      if (this.closing && this.globalActiveCount === 0 && this.drainResolve) {
+        this.drainResolve();
+      }
+    });
   }
 
   /** Internal: wait for all tracked underlying promises to settle. */
@@ -514,7 +541,7 @@ export class ToolExecutionService {
         return;
       }
       await Promise.race([
-        Promise.all(this.activeUnderlyings),
+        Promise.allSettled(this.activeUnderlyings),
         new Promise(resolve => setTimeout(resolve, 50)),
       ]);
     }
@@ -545,6 +572,12 @@ export class ToolExecutionService {
     this.globalActiveCount--;
     entry.turn.onEntryComplete(entry);
     entry.status = 'completed';
+    
+    // Check if drain should complete
+    if (this.closing && this.globalActiveCount === 0 && this.drainResolve) {
+      this.drainResolve();
+    }
+    
     this.processQueue();
   }
 

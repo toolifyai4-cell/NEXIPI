@@ -2002,9 +2002,10 @@ export class ChatService {
     this.requestQueue.clear();
     this.eventEmitter.removeAllListeners();
     this.logger.info('ChatService disposed');
-    // Ensure all cancelled streams have correct status after promises settle (fallback)
-    // Use a timeout to avoid hanging on providers that ignore abort signals
-    const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, 1000));
+    // Wait for all cancelled streams to settle with a reasonable timeout
+    // This timeout should be long enough to allow tool executions to complete their cancellation
+    const timeoutMs = 1000;
+    const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, timeoutMs));
     return Promise.race([Promise.all(abortPromises), timeoutPromise]).then(() => {
       for (const info of streamInfos) {
         this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
