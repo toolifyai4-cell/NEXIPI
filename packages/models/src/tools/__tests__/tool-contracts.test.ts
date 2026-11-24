@@ -106,14 +106,46 @@ describe('ToolError', () => {
       expect(json.cause).toBe('Original');
       expect(json.stack).toBeDefined();
     });
-  });
 
-  describe('secret safety', () => {
-    it('should redact sensitive context keys', () => {
+    it('should serialize nested cause as message string only, not raw cause object', () => {
+      const inner = new Error('Inner failure with detail');
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Outer failure',
+        { toolName: 'read_file', cause: inner }
+      );
+
+      const json = error.toJSON();
+      expect(json.cause).toBe('Inner failure with detail');
+      expect(json.cause).not.toHaveProperty('stack');
+      expect(json.cause).not.toHaveProperty('name');
+      expect(typeof json.cause).toBe('string');
+    });
+
+    it('should serialize chained ToolError cause as inner message only', () => {
+      const innerToolError = new ToolError(
+        ToolErrorCode.TOOL_TIMEOUT,
+        'Inner tool timeout',
+        { toolName: 'search_code' }
+      );
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Outer failure',
+        { toolName: 'read_file', cause: innerToolError }
+      );
+
+      const json = error.toJSON();
+      expect(json.cause).toBe('Inner tool timeout');
+      expect(json.code).toBe(ToolErrorCode.TOOL_EXECUTION_FAILED);
+    });
+
+    it('should redact sensitive context keys in serialization', () => {
       const context = createSanitizedContext({
         requestId: 'req-1',
         apiKey: 'sk-12345',
         password: 'hunter2',
+        authorization: 'Bearer token',
+        accessToken: 'at-abc',
         normalField: 'visible',
       });
       const error = new ToolError(
@@ -125,6 +157,8 @@ describe('ToolError', () => {
       const json = error.toJSON();
       expect(json.context?.apiKey).toBe('[REDACTED]');
       expect(json.context?.password).toBe('[REDACTED]');
+      expect(json.context?.authorization).toBe('[REDACTED]');
+      expect(json.context?.accessToken).toBe('[REDACTED]');
       expect(json.context?.normalField).toBe('visible');
       expect(json.context?.requestId).toBe('req-1');
     });
@@ -136,6 +170,13 @@ describe('ToolError', () => {
       );
       expect(error.message).not.toContain('secret');
       expect(error.message).not.toContain('apiKey');
+    });
+
+    it('should include stack trace as string consistent with EngineError convention', () => {
+      const error = new ToolError(ToolErrorCode.TOOL_NOT_FOUND, 'Not found');
+      const json = error.toJSON();
+      expect(typeof json.stack).toBe('string');
+      expect(json.stack.length).toBeGreaterThan(0);
     });
   });
 });
@@ -348,7 +389,6 @@ describe('ModelToolDefinition serializability and separation', () => {
         kind: 'success',
         output: undefined,
         truncated: false,
-        cancelled: false,
         executionMs: 0,
       }),
     };
@@ -383,13 +423,11 @@ describe('ToolExecutionContext', () => {
       workspaceId: 'ws_123',
       workspaceFolder: { uri: 'file:///workspace', id: 'ws_123' },
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-      environment: {},
     };
 
     expect(context.signal).toBeInstanceOf(AbortSignal);
     expect(context.workspaceId).toBe('ws_123');
     expect(context.workspaceFolder?.uri).toBe('file:///workspace');
-    expect(context.environment).toEqual({});
   });
 
   it('should allow undefined workspace', () => {
@@ -398,27 +436,84 @@ describe('ToolExecutionContext', () => {
       workspaceId: undefined,
       workspaceFolder: undefined,
       logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
-      environment: {},
     };
     expect(context.workspaceId).toBeUndefined();
     expect(context.workspaceFolder).toBeUndefined();
   });
+
+  it('should not expose an unrestricted environment capability bag', () => {
+    const context: ToolExecutionContext = {
+      signal: new AbortController().signal,
+      workspaceId: undefined,
+      workspaceFolder: undefined,
+      logger: { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} },
+    };
+    expect('environment' in context).toBe(false);
+  });
 });
 
 describe('ToolExecutionResult', () => {
-  it('should represent a successful result', () => {
+  it('should represent a successful result without cancelled property', () => {
     const result: ToolExecutionResult<string> = {
       kind: 'success',
       output: 'file contents',
       truncated: false,
-      cancelled: false,
       executionMs: 42,
     };
     expect(result.kind).toBe('success');
     expect(result.output).toBe('file contents');
     expect(result.truncated).toBe(false);
-    expect(result.cancelled).toBe(false);
     expect(result.executionMs).toBe(42);
+    expect(('cancelled' in result)).toBe(false);
+  });
+
+  it('should not allow a successful result to be marked cancelled', () => {
+    const result: SuccessfulToolExecutionResult = {
+      kind: 'success',
+      output: 'file contents',
+      truncated: false,
+      executionMs: 10,
+    };
+    expect(result.kind).toBe('success');
+    expect('cancelled' in result).toBe(false);
+  });
+
+  it('should represent cancellation as a failure with TOOL_CANCELLED error code', () => {
+    const error = new ToolError(ToolErrorCode.TOOL_CANCELLED, 'Tool was cancelled');
+    const result: ToolExecutionResult = {
+      kind: 'failure',
+      error,
+      truncated: false,
+      executionMs: 5,
+    };
+    expect(result.kind).toBe('failure');
+    if (result.kind === 'failure') {
+      expect(result.error.code).toBe(ToolErrorCode.TOOL_CANCELLED);
+      expect(result.error.message).toBe('Tool was cancelled');
+    }
+  });
+
+  it('should distinguish timeout from cancellation', () => {
+    const timeoutResult: ToolExecutionResult = {
+      kind: 'failure',
+      error: new ToolError(ToolErrorCode.TOOL_TIMEOUT, 'Tool timed out'),
+      truncated: false,
+      executionMs: 30000,
+    };
+    const cancelledResult: ToolExecutionResult = {
+      kind: 'failure',
+      error: new ToolError(ToolErrorCode.TOOL_CANCELLED, 'Tool was cancelled'),
+      truncated: false,
+      executionMs: 5,
+    };
+    expect(timeoutResult.kind).toBe('failure');
+    if (timeoutResult.kind === 'failure') {
+      expect(timeoutResult.error.code).toBe(ToolErrorCode.TOOL_TIMEOUT);
+    }
+    expect(cancelledResult.kind).toBe('failure');
+    if (cancelledResult.kind === 'failure') {
+      expect(cancelledResult.error.code).toBe(ToolErrorCode.TOOL_CANCELLED);
+    }
   });
 
   it('should represent a failed result with ToolError', () => {
@@ -427,7 +522,6 @@ describe('ToolExecutionResult', () => {
       kind: 'failure',
       error,
       truncated: false,
-      cancelled: false,
       executionMs: 10,
     };
     expect(result.kind).toBe('failure');
@@ -442,7 +536,6 @@ describe('ToolExecutionResult', () => {
       kind: 'failure',
       error: createToolError(ToolErrorCode.TOOL_EXECUTION_FAILED, 'boom'),
       truncated: false,
-      cancelled: false,
       executionMs: 5,
     };
     expect(result.kind).toBe('failure');

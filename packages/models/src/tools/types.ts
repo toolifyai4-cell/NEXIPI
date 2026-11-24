@@ -19,9 +19,12 @@ export type ToolCategory = ToolCapability;
 /**
  * Platform-independent execution context passed to a tool's execute function.
  *
- * No VS Code or workspace-package types are imported. Platform capabilities
- * are injected through `environment`; the generic engine never interprets
- * those values.
+ * No VS Code or workspace-package types are imported. The context carries
+ * only the narrowly scoped capabilities needed for execution: cancellation
+ * signal, optional workspace identity, optional workspace folder, and a
+ * logger. No arbitrary capability bag is exposed — future platform
+ * capabilities must be added through explicit, typed fields rather than an
+ * unrestricted `Record<string, unknown>`.
  */
 export interface ToolExecutionContext {
   readonly signal: AbortSignal;
@@ -30,12 +33,6 @@ export interface ToolExecutionContext {
     | { readonly uri: string; readonly id: string }
     | undefined;
   readonly logger: Logger;
-  /**
-   * Extensible, platform-specific capability bag. The generic engine never
-   * interprets these values; they are passed through to tool implementations.
-   * Future platform capabilities must be explicitly injected here.
-   */
-  readonly environment: Readonly<Record<string, unknown>>;
 }
 
 /**
@@ -56,19 +53,34 @@ export interface ToolDefinition {
   ): Promise<ToolExecutionResult>;
 }
 
+/**
+ * Successful tool execution result.
+ *
+ * A successful result is never cancelled. Cancellation is always
+ * represented as a failure carrying `ToolErrorCode.TOOL_CANCELLED`, so
+ * contradictory states (kind === 'success' with cancelled === true) are
+ * unrepresentable.
+ */
 export interface SuccessfulToolExecutionResult<TOutput = unknown> {
   readonly kind: 'success';
   readonly output: TOutput;
   readonly truncated: boolean;
-  readonly cancelled: boolean;
   readonly executionMs: number;
 }
 
+/**
+ * Failed tool execution result.
+ *
+ * Cancellation is represented here with `error.code ===
+ * ToolErrorCode.TOOL_CANCELLED`. Timeout is distinct from cancellation
+ * (`ToolErrorCode.TOOL_TIMEOUT`). Partial output after cancellation is not
+ * serialized as success; callers that need partial results must model them
+ * explicitly in the failure's `ToolError.context` if required.
+ */
 export interface FailedToolExecutionResult {
   readonly kind: 'failure';
   readonly error: ToolError;
   readonly truncated: boolean;
-  readonly cancelled: boolean;
   readonly executionMs: number;
 }
 
