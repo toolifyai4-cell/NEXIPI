@@ -263,77 +263,50 @@ export function createFindReferencesToolDefinition(
       version: '1.0.0',
     },
     execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      const parsed = ReferenceDiscoveryInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return {
-          kind: 'failure',
-          error: createToolError(
-            ToolErrorCode.TOOL_INVALID_ARGUMENTS,
-            `Invalid input for tool 'find_references': ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
-            { toolName: 'find_references' }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
-
-      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-        return {
-          kind: 'failure',
-          error: createToolError(
+      const executeImpl = async (): Promise<ReferenceDiscoveryResult> => {
+        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+          throw createToolError(
             ToolErrorCode.TOOL_RESOURCE_LIMIT,
             'Workspace identity mismatch: tool execution context does not match adapter workspace',
             { toolName: 'find_references' }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
-
-      const options: ReferenceDiscoveryOptions = {
-        workspaceFolder: deps.workspaceFolder,
-        symbol: parsed.data.symbol,
-        classifications: parsed.data.classifications,
-        languages: parsed.data.languages,
-        includePatterns: parsed.data.includePatterns,
-        excludePatterns: parsed.data.excludePatterns,
-        enableLexicalFallback: parsed.data.enableLexicalFallback,
-        signal: context.signal,
-      };
-
-      try {
-        const result: ReferenceDiscoveryResult = await discoverer.find(options);
-        return {
-          kind: 'success',
-          output: result,
-          truncated: result.metadata.truncated,
-          executionMs: 0,
-        };
-      } catch (error) {
-        if (isToolError(error)) {
-          return {
-            kind: 'failure',
-            error: createToolError(error.code, error.message, {
-              toolName: 'find_references',
-              cause: error.cause,
-              context: error.context,
-              retryable: error.retryable,
-            }),
-            truncated: false,
-            executionMs: 0,
-          };
+          );
         }
-        return {
-          kind: 'failure',
-          error: createToolError(
+
+        const rawInput = input as {
+          symbol: string;
+          classifications?: string[];
+          languages?: string[];
+          includePatterns?: string[];
+          excludePatterns?: string[];
+          enableLexicalFallback?: boolean;
+        };
+
+        const options: ReferenceDiscoveryOptions = {
+          workspaceFolder: deps.workspaceFolder,
+          symbol: rawInput.symbol,
+          classifications: rawInput.classifications as ReferenceDiscoveryOptions['classifications'],
+          languages: rawInput.languages as ReferenceDiscoveryOptions['languages'],
+          includePatterns: rawInput.includePatterns,
+          excludePatterns: rawInput.excludePatterns,
+          enableLexicalFallback: rawInput.enableLexicalFallback,
+          signal: context.signal,
+        };
+
+        try {
+          const result: ReferenceDiscoveryResult = await discoverer.find(options);
+          return result;
+        } catch (error) {
+          if (isToolError(error)) {
+            throw error;
+          }
+          throw createToolError(
             ToolErrorCode.TOOL_EXECUTION_FAILED,
             `Tool 'find_references' execution failed`,
             { toolName: 'find_references', cause: error instanceof Error ? error : undefined }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
+          );
+        }
+      };
+      return executeImpl() as unknown as Promise<ToolExecutionResult>;
     },
   };
 }

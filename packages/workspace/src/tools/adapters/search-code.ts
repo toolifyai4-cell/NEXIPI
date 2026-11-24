@@ -127,78 +127,42 @@ export function createSearchCodeToolDefinition(
       version: '1.0.0',
     },
     execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      const parsed = CodeSearchInputSchema.safeParse(input);
-      if (!parsed.success) {
-        return {
-          kind: 'failure',
-          error: createToolError(
-            ToolErrorCode.TOOL_INVALID_ARGUMENTS,
-            `Invalid input for tool 'search_code': ${parsed.error.issues.map(i => `${i.path.join('.')}: ${i.message}`).join('; ')}`,
-            { toolName: 'search_code' }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
-
-      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-        return {
-          kind: 'failure',
-          error: createToolError(
+      const executeImpl = async (): Promise<CodeSearchResult> => {
+        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+          throw createToolError(
             ToolErrorCode.TOOL_RESOURCE_LIMIT,
             'Workspace identity mismatch: tool execution context does not match adapter workspace',
             { toolName: 'search_code' }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
-
-      const options: CodeSearchOptions = {
-        workspaceFolder: deps.workspaceFolder,
-        query: parsed.data.query,
-        mode: parsed.data.mode,
-        caseSensitive: parsed.data.caseSensitive,
-        wholeWord: parsed.data.wholeWord,
-        contextLines: parsed.data.contextLines,
-        includePatterns: parsed.data.includePatterns,
-        excludePatterns: parsed.data.excludePatterns,
-        signal: context.signal,
-      };
-
-      try {
-        const result: CodeSearchResult = await searcher.search(options);
-        return {
-          kind: 'success',
-          output: result,
-          truncated: result.truncated,
-          executionMs: 0,
-        };
-      } catch (error) {
-        if (isToolError(error)) {
-          return {
-            kind: 'failure',
-            error: createToolError(error.code, error.message, {
-              toolName: 'search_code',
-              cause: error.cause,
-              context: error.context,
-              retryable: error.retryable,
-            }),
-            truncated: false,
-            executionMs: 0,
-          };
+          );
         }
-        return {
-          kind: 'failure',
-          error: createToolError(
+
+        const options: CodeSearchOptions = {
+          workspaceFolder: deps.workspaceFolder,
+          query: (input as { query: string }).query,
+          mode: (input as { mode: 'literal' | 'regex' }).mode,
+          caseSensitive: (input as { caseSensitive?: boolean }).caseSensitive,
+          wholeWord: (input as { wholeWord?: boolean }).wholeWord,
+          contextLines: (input as { contextLines?: number }).contextLines,
+          includePatterns: (input as { includePatterns?: string[] }).includePatterns,
+          excludePatterns: (input as { excludePatterns?: string[] }).excludePatterns,
+          signal: context.signal,
+        };
+
+        try {
+          const result: CodeSearchResult = await searcher.search(options);
+          return result;
+        } catch (error) {
+          if (isToolError(error)) {
+            throw error;
+          }
+          throw createToolError(
             ToolErrorCode.TOOL_EXECUTION_FAILED,
             `Tool 'search_code' execution failed`,
             { toolName: 'search_code', cause: error instanceof Error ? error : undefined }
-          ),
-          truncated: false,
-          executionMs: 0,
-        };
-      }
+          );
+        }
+      };
+      return executeImpl() as unknown as Promise<ToolExecutionResult>;
     },
   };
 }
