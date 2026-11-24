@@ -36,12 +36,12 @@ export class ToolError extends EngineError<ToolErrorCode> {
   }
 
   override toJSON(): Record<string, unknown> {
-    const base = super.toJSON();
     return {
-      ...base,
       name: 'ToolError',
+      code: this.code,
       toolName: this.toolName,
       retryable: this.retryable,
+      context: this.context,
     };
   }
 }

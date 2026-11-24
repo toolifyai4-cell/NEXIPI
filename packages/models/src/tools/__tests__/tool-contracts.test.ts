@@ -89,26 +89,31 @@ describe('ToolError', () => {
   });
 
   describe('toJSON', () => {
-    it('should serialize to JSON with all properties', () => {
-      const cause = new Error('Original');
+    it('should serialize only safe diagnostic fields', () => {
+      const cause = new Error('Original failure with secret sk-12345');
+      const context = { requestId: 'req-123', normalField: 'visible' };
       const error = new ToolError(
         ToolErrorCode.TOOL_TIMEOUT,
-        'Timed out',
-        { toolName: 'search_code', cause, retryable: false }
+        'Timed out with key sk-abcde',
+        { toolName: 'search_code', cause, context, retryable: false }
       );
 
       const json = error.toJSON();
       expect(json.name).toBe('ToolError');
       expect(json.code).toBe(ToolErrorCode.TOOL_TIMEOUT);
-      expect(json.message).toBe('Timed out');
       expect(json.toolName).toBe('search_code');
       expect(json.retryable).toBe(false);
-      expect(json.cause).toBe('Original');
-      expect(json.stack).toBeDefined();
+      expect(json.context?.requestId).toBe('req-123');
+      expect(json.context?.normalField).toBe('visible');
+
+      // Unsafe fields must not be serialized
+      expect(json.message).toBeUndefined();
+      expect(json.cause).toBeUndefined();
+      expect(json.stack).toBeUndefined();
     });
 
-    it('should serialize nested cause as message string only, not raw cause object', () => {
-      const inner = new Error('Inner failure with detail');
+    it('should not serialize raw cause object', () => {
+      const inner = new Error('Inner failure with token tok-98765');
       const error = new ToolError(
         ToolErrorCode.TOOL_EXECUTION_FAILED,
         'Outer failure',
@@ -116,16 +121,14 @@ describe('ToolError', () => {
       );
 
       const json = error.toJSON();
-      expect(json.cause).toBe('Inner failure with detail');
-      expect(json.cause).not.toHaveProperty('stack');
-      expect(json.cause).not.toHaveProperty('name');
-      expect(typeof json.cause).toBe('string');
+      expect(json.cause).toBeUndefined();
+      expect(json).not.toHaveProperty('cause');
     });
 
-    it('should serialize chained ToolError cause as inner message only', () => {
+    it('should not serialize chained ToolError cause', () => {
       const innerToolError = new ToolError(
         ToolErrorCode.TOOL_TIMEOUT,
-        'Inner tool timeout',
+        'Inner tool timeout with secret sk-xyz',
         { toolName: 'search_code' }
       );
       const error = new ToolError(
@@ -135,7 +138,7 @@ describe('ToolError', () => {
       );
 
       const json = error.toJSON();
-      expect(json.cause).toBe('Inner tool timeout');
+      expect(json.cause).toBeUndefined();
       expect(json.code).toBe(ToolErrorCode.TOOL_EXECUTION_FAILED);
     });
 
@@ -163,20 +166,91 @@ describe('ToolError', () => {
       expect(json.context?.requestId).toBe('req-1');
     });
 
-    it('should not expose secrets in error message', () => {
+    it('should not expose secrets embedded in the top-level error message in serialized output', () => {
       const error = new ToolError(
-        ToolErrorCode.TOOL_PERMISSION_DENIED,
-        'Access denied to read_file'
+        ToolErrorCode.TOOL_PROVIDER_ERROR,
+        'Failed to authenticate with apiKey sk-live-1234567890abcdef',
+        { toolName: 'read_file' }
       );
-      expect(error.message).not.toContain('secret');
-      expect(error.message).not.toContain('apiKey');
+
+      const json = error.toJSON();
+      expect(json.message).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('sk-live-1234567890abcdef');
+      expect(serialized).not.toContain('apiKey');
     });
 
-    it('should include stack trace as string consistent with EngineError convention', () => {
+    it('should not expose secrets embedded in nested cause message in serialized output', () => {
+      const cause = new Error('Connection failed with token ghp_1234567890abcdef');
+      const error = new ToolError(
+        ToolErrorCode.TOOL_PROVIDER_ERROR,
+        'Provider request failed',
+        { toolName: 'search_code', cause }
+      );
+
+      const json = error.toJSON();
+      expect(json.cause).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('ghp_1234567890abcdef');
+    });
+
+    it('should not expose authorization values embedded in error message in serialized output', () => {
+      const error = new ToolError(
+        ToolErrorCode.TOOL_PERMISSION_DENIED,
+        'Access denied: Authorization: Basic dXNlcjpwYXNz',
+        { toolName: 'read_file' }
+      );
+
+      const json = error.toJSON();
+      expect(json.message).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('dXNlcjpwYXNz');
+      expect(serialized).not.toContain('Authorization');
+    });
+
+    it('should not expose stack trace in serialized output', () => {
       const error = new ToolError(ToolErrorCode.TOOL_NOT_FOUND, 'Not found');
       const json = error.toJSON();
-      expect(typeof json.stack).toBe('string');
-      expect(json.stack.length).toBeGreaterThan(0);
+      expect(json.stack).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('at ');
+      expect(serialized).not.toContain('Error:');
+    });
+
+    it('should not expose sensitive fields in nested cause objects in serialized output', () => {
+      const cause = new Error('Nested failure');
+      (cause as Record<string, unknown>).secretField = 'sk-secret-value';
+      (cause as Record<string, unknown>).api_key = 'ak-hidden';
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Outer failure',
+        { toolName: 'read_file', cause }
+      );
+
+      const json = error.toJSON();
+      expect(json.cause).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('sk-secret-value');
+      expect(serialized).not.toContain('ak-hidden');
+      expect(serialized).not.toContain('secretField');
+    });
+
+    it('should keep safe diagnostic information accessible on the error instance', () => {
+      const cause = new Error('Original failure');
+      const context = { requestId: 'req-123' };
+      const error = new ToolError(
+        ToolErrorCode.TOOL_TIMEOUT,
+        'Timed out',
+        { toolName: 'search_code', cause, context, retryable: true }
+      );
+
+      // Instance retains full diagnostic info internally
+      expect(error.message).toBe('Timed out');
+      expect(error.cause).toBe(cause);
+      expect(error.context).toEqual(context);
+      expect(error.toolName).toBe('search_code');
+      expect(error.retryable).toBe(true);
+      expect(error.stack).toBeDefined();
     });
   });
 });
