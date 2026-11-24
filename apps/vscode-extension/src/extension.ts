@@ -13,6 +13,17 @@ import { createPersistenceAdapter } from '@nexipi/models';
 import { WorkspaceManager } from './workspace/workspace-manager.js';
 import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
 import { VSCodeFileSystemProvider } from './workspace/vscode-file-system-provider.js';
+import { createToolRegistry, type ToolRegistry } from '@nexipi/models/tools';
+import { ToolExecutor } from '@nexipi/models/tools';
+import { ToolExecutionService, type ToolExecutionServiceConfig } from '@nexipi/models/tools';
+import {
+  createReadFileToolDefinition,
+  createListDirectoryToolDefinition,
+  createSearchCodeToolDefinition,
+  createFindReferencesToolDefinition,
+} from '@nexipi/workspace/tools';
+import type { WorkspaceFolder } from '@nexipi/workspace';
+import { createReadOnlyWorkspacePermissionPolicy } from './tools/permission-policy.js';
 
 interface NexiPiContext {
   outputChannel: vscode.OutputChannel;
@@ -21,6 +32,8 @@ interface NexiPiContext {
   disposables: vscode.Disposable[];
   chatService: ChatService;
   persistenceService?: PersistencePortService;
+  toolRegistry: ToolRegistry;
+  toolExecutionService: ToolExecutionService;
 }
 
 // Module-level variables for access in deactivate()
@@ -29,6 +42,8 @@ let gPersistenceService: PersistencePortService | undefined;
 let gPersistenceAdapter: { dispose: () => void } | undefined;
 let gLogger: Logger | undefined;
 let gWorkspaceManager: WorkspaceManager | undefined;
+let gToolRegistry: ToolRegistry | undefined;
+let gToolExecutionService: ToolExecutionService | undefined;
 
 function createLogger(outputChannel: vscode.OutputChannel, level: LogLevel): Logger {
   const levels: Record<LogLevel, number> = { debug: 0, info: 1, warn: 2, error: 3 };
@@ -497,6 +512,103 @@ function getWorkspaceId(_context: vscode.ExtensionContext): string {
   return 'default';
 }
 
+interface WorkspaceToolSet {
+  readonly folderUri: string;
+  readonly folderId: string;
+  readonly toolNames: readonly string[];
+}
+
+function registerWorkspaceTools(
+  folder: WorkspaceFolder,
+  fileSystem: VSCodeFileSystemProvider,
+  toolRegistry: ToolRegistry,
+  logger: Logger
+): WorkspaceToolSet {
+  const toolNames: string[] = [];
+
+  try {
+    const readFileTool = createReadFileToolDefinition({
+      fileSystem,
+      workspaceFolder: folder,
+    });
+    toolRegistry.register(readFileTool);
+    toolNames.push('read_file');
+  } catch (error) {
+    logger.error('Failed to register read_file tool', {
+      folderUri: folder.uri,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const listDirectoryTool = createListDirectoryToolDefinition({
+      fileSystem,
+      workspaceFolder: folder,
+    });
+    toolRegistry.register(listDirectoryTool);
+    toolNames.push('list_directory');
+  } catch (error) {
+    logger.error('Failed to register list_directory tool', {
+      folderUri: folder.uri,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const searchCodeTool = createSearchCodeToolDefinition({
+      fileSystem,
+      workspaceFolder: folder,
+    });
+    toolRegistry.register(searchCodeTool);
+    toolNames.push('search_code');
+  } catch (error) {
+    logger.error('Failed to register search_code tool', {
+      folderUri: folder.uri,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  try {
+    const findReferencesTool = createFindReferencesToolDefinition({
+      fileSystem,
+      workspaceFolder: folder,
+    });
+    toolRegistry.register(findReferencesTool);
+    toolNames.push('find_references');
+  } catch (error) {
+    logger.error('Failed to register find_references tool', {
+      folderUri: folder.uri,
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  logger.info('Registered workspace tools', { folderUri: folder.uri, toolNames });
+  return { folderUri: folder.uri, folderId: folder.id, toolNames };
+}
+
+function unregisterWorkspaceTools(
+  folderUri: string,
+  toolRegistry: ToolRegistry,
+  logger: Logger
+): void {
+  const toolNames = ['read_file', 'list_directory', 'search_code', 'find_references'];
+  for (const name of toolNames) {
+    if (toolRegistry.has(name)) {
+      try {
+        toolRegistry.unregister(name);
+        logger.debug('Unregistered tool', { toolName: name, folderUri });
+      } catch (error) {
+        logger.error('Failed to unregister tool', {
+          toolName: name,
+          folderUri,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+  logger.info('Unregistered all workspace tools for folder', { folderUri });
+}
+
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration('nexipi');
   const logLevel = config.get<LogLevel>('nexipi.logLevel', 'info');
@@ -536,6 +648,57 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.error('Failed to initialize workspace manager', { error: err.message });
   });
 
+  // --- Tool infrastructure (Phase 09 Substage 7) ---
+  // Create tool registry, executor with read-only permission policy, and execution service.
+  const toolRegistry = createToolRegistry();
+  gToolRegistry = toolRegistry;
+
+  const permissionPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
+  const toolExecutor = new ToolExecutor(toolRegistry, { permissionPolicy, logger });
+
+  const toolExecutionServiceConfig: ToolExecutionServiceConfig = {
+    maxIterationsPerTurn: 10,
+    maxCallsPerBatch: 5,
+    maxCallsPerTurn: 25,
+    maxConcurrentExecutions: 5,
+    maxExecutionTimePerToolMs: 30_000,
+    maxTotalExecutionTimePerTurnMs: 120_000,
+    maxQueuedCalls: 100,
+  };
+  const toolExecutionService = new ToolExecutionService(toolExecutor, {
+    config: toolExecutionServiceConfig,
+    logger,
+  });
+  gToolExecutionService = toolExecutionService;
+
+  // Register tools for each current workspace folder.
+  const folders = await workspaceProvider.getWorkspaceFolders();
+  for (const folder of folders) {
+    registerWorkspaceTools(folder, fileSystem, toolRegistry, logger);
+  }
+
+  // Subscribe to workspace folder changes to register/unregister tools dynamically.
+  const folderChangeSubscription = workspaceProvider.onWorkspaceFoldersChange((event) => {
+    // Unregister tools for removed folders.
+    for (const folder of event.removed) {
+      unregisterWorkspaceTools(folder.uri, toolRegistry, logger);
+    }
+
+    // Register tools for added folders.
+    for (const folder of event.added) {
+      registerWorkspaceTools(folder, fileSystem, toolRegistry, logger);
+    }
+
+    // Changed folders (rename) are handled as remove + add by VS Code, but we log for clarity.
+    if (event.changed.length > 0) {
+      logger.info('Workspace folders changed (rename detected)', {
+        changed: event.changed.map((f) => f.uri),
+      });
+    }
+  });
+  // Track subscription for disposal
+  const folderChangeDisposable = { dispose: () => folderChangeSubscription.unsubscribe() };
+
   // Initialize persistence
   let persistenceService: PersistencePortService;
   try {
@@ -565,6 +728,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
     persistenceAdapter,
     workspaceId,
+    toolRegistry,
+    toolExecutionService,
   });
 
   // Initialize chat service (loads conversations from persistence)
@@ -585,6 +750,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     disposables: [],
     chatService,
     persistenceService,
+    toolRegistry,
+    toolExecutionService,
   };
 
   const sidebarDisposable = vscode.window.registerWebviewViewProvider(
@@ -609,6 +776,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     outputChannel,
     statusBarItem,
     sidebarDisposable,
+    folderChangeDisposable,
     ...commandDisposables
   );
 
@@ -642,6 +810,8 @@ export async function deactivate(): Promise<void> {
   const logger = gLogger;
   const chatService = gChatService;
   const persistenceService = gPersistenceService;
+  const toolExecutionService = gToolExecutionService;
+  const toolRegistry = gToolRegistry;
 
   if (!logger || !chatService || !persistenceService) {
     logger?.warn('deactivate() called but services not initialized');
@@ -650,7 +820,17 @@ export async function deactivate(): Promise<void> {
 
   logger.info('Starting async deactivation sequence');
 
-  // 1. Dispose workspace management and stop workspace activity.
+  // 1. Dispose tool execution service (cancels active tool executions and clears turns).
+  // Must be before ChatService disposal so active tool turns are cancelled.
+  try {
+    toolExecutionService?.dispose();
+    logger.info('ToolExecutionService disposed');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to dispose ToolExecutionService', { error: err.message });
+  }
+
+  // 2. Dispose workspace management and stop workspace activity.
   // Workspace cleanup errors are logged and must not prevent persistence saving.
   try {
     gWorkspaceManager?.dispose();
@@ -660,7 +840,7 @@ export async function deactivate(): Promise<void> {
     gLogger?.error('Failed to dispose workspace manager', { error: err.message });
   }
 
-  // 2. Stop and dispose ChatService (waits for active streams to settle)
+  // 3. Stop and dispose ChatService (waits for active streams to settle)
   try {
     await chatService.dispose();
     logger.info('ChatService disposed successfully');
@@ -669,7 +849,16 @@ export async function deactivate(): Promise<void> {
     logger.error('Failed to dispose ChatService', { error: err.message });
   }
 
-  // 3. Save the database to disk
+  // 4. Clear tool registry references (no async disposal needed).
+  if (toolRegistry) {
+    // ToolRegistry doesn't have a dispose method; clearing globals is sufficient.
+    // Individual tool definitions are frozen and shared; no cleanup required.
+    logger.debug('ToolRegistry references cleared');
+  }
+  gToolRegistry = undefined;
+  gToolExecutionService = undefined;
+
+  // 5. Save the database to disk
   try {
     persistenceService.save();
     logger.info('Database saved successfully on deactivation');

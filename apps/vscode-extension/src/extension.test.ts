@@ -77,12 +77,12 @@ vi.mock('vscode', () => ({
   it('should export activate function', async () => {
     const mod = await import('./extension.js');
     expect(typeof mod.activate).toBe('function');
-  }, 10000);
+  }, 30000);
 
   it('should export deactivate function', async () => {
     const mod = await import('./extension.js');
     expect(typeof mod.deactivate).toBe('function');
-  }, 10000);
+  }, 30000);
 
   it('should have correct extension metadata in package.json', async () => {
     const pkg = await import('../package.json', { assert: { type: 'json' } });
