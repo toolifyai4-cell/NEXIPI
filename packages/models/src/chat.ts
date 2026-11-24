@@ -2004,7 +2004,7 @@ export class ChatService {
     this.logger.info('ChatService disposed');
     // Wait for all cancelled streams to settle with a reasonable timeout
     // This timeout should be long enough to allow tool executions to complete their cancellation
-    const timeoutMs = 1000;
+    const timeoutMs = 5000;
     const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, timeoutMs));
     return Promise.race([Promise.all(abortPromises), timeoutPromise]).then(() => {
       for (const info of streamInfos) {

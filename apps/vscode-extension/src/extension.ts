@@ -153,14 +153,18 @@ export async function unregisterWorkspaceAdapters(
       try {
         await waitForLeasesToRelease(workspaceId, 10000);
         logger.info('All leases released for workspace', { workspaceId });
+        
+        // All leases released - safe to remove immediately
+        workspaceAdapters.delete(workspaceId);
+        workspaceAdaptersVersion++;
+        logger.info('Unregistered workspace adapters', { workspaceId, folderUri, version: workspaceAdaptersVersion });
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
-        logger.warn('Timeout waiting for leases, proceeding with removal', { workspaceId, error: err.message });
+        logger.warn('Timeout waiting for leases, scheduling deferred cleanup', { workspaceId, error: err.message });
+        
+        // Timeout - schedule deferred cleanup instead of proceeding immediately
+        scheduleDeferredWorkspaceCleanup(workspaceId, logger);
       }
-      
-      workspaceAdapters.delete(workspaceId);
-      workspaceAdaptersVersion++;
-      logger.info('Unregistered workspace adapters', { workspaceId, folderUri, version: workspaceAdaptersVersion });
       return;
     }
   }
@@ -260,6 +264,42 @@ async function waitForAllLeasesToRelease(
     }
     await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
   }
+}
+
+// Track deferred cleanup operations to ensure exactly-once execution
+const deferredWorkspaceCleanups = new Map<string, { workspaceId: string; logger: Logger; executed: boolean }>();
+
+function scheduleDeferredWorkspaceCleanup(workspaceId: string, logger: Logger): void {
+  // Check if cleanup is already scheduled
+  const existing = deferredWorkspaceCleanups.get(workspaceId);
+  if (existing && !existing.executed) {
+    logger.debug('Deferred cleanup already scheduled', { workspaceId });
+    return;
+  }
+  
+  deferredWorkspaceCleanups.set(workspaceId, { workspaceId, logger, executed: false });
+  
+  // Start background task that waits for leases to release
+  void (async () => {
+    try {
+      // Wait indefinitely for leases to release - no timeout on deferred cleanup
+      await waitForLeasesToRelease(workspaceId, 0); // 0 timeout means wait forever
+      
+      // Leases released - execute cleanup exactly once
+      const entry = deferredWorkspaceCleanups.get(workspaceId);
+      if (entry && !entry.executed) {
+        entry.executed = true;
+        workspaceAdapters.delete(workspaceId);
+        workspaceAdaptersVersion++;
+        entry.logger.info('Deferred workspace cleanup executed', { workspaceId, version: workspaceAdaptersVersion });
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error('Deferred workspace cleanup failed', { workspaceId, error: err.message });
+    } finally {
+      deferredWorkspaceCleanups.delete(workspaceId);
+    }
+  })();
 }
 
 function beginWorkspaceRemoval(workspaceId: string): void {
@@ -1193,6 +1233,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 // Track if deactivate has been called to ensure idempotency
 let isDeactivated = false;
 
+// Track deferred global cleanup for exactly-once execution
+let deferredGlobalCleanup: { executed: boolean; logger: Logger } | null = null;
+
 export async function deactivate(): Promise<void> {
   if (isDeactivated) {
     gLogger?.info('deactivate() called again, skipping (idempotent)');
@@ -1204,7 +1247,6 @@ export async function deactivate(): Promise<void> {
   const chatService = gChatService;
   const persistenceService = gPersistenceService;
   const toolExecutionService = gToolExecutionService;
-  const toolRegistry = gToolRegistry;
 
   if (!logger || !chatService || !persistenceService) {
     logger?.warn('deactivate() called but services not initialized');
@@ -1212,6 +1254,9 @@ export async function deactivate(): Promise<void> {
   }
 
   logger.info('Starting async deactivation sequence');
+
+  // Initialize deferred cleanup tracker
+  deferredGlobalCleanup = { executed: false, logger };
 
   // 1. Stop accepting new work and cancel active ChatService requests/streams.
   //    This initiates cancellation which propagates to ToolExecutionService turns.
@@ -1226,7 +1271,7 @@ export async function deactivate(): Promise<void> {
   // 2. Drain ToolExecutionService - await active executions with timeout.
   //    This ensures tools receive AbortSignal and have time to settle cooperatively.
   try {
-    const drainResult = await toolExecutionService?.drain({ timeoutMs: 5000, pollIntervalMs: 50 });
+    const drainResult = await toolExecutionService?.drain({ timeoutMs: 5000 });
     if (drainResult?.settled) {
       logger.info('ToolExecutionService drained successfully', { elapsedMs: drainResult.elapsedMs });
     } else {
@@ -1259,25 +1304,35 @@ export async function deactivate(): Promise<void> {
   try {
     await waitForAllLeasesToRelease(10000);
     logger.info('All workspace leases released');
+    
+    // All leases released - safe to dispose workspace manager now
+    disposeWorkspaceManagerAndCleanup(logger);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    logger.warn('Timeout waiting for leases, proceeding with workspace disposal', { error: err.message });
+    logger.warn('Timeout waiting for leases, scheduling deferred global cleanup', { error: err.message });
+    
+    // Timeout - schedule deferred global cleanup instead of proceeding
+    scheduleDeferredGlobalCleanup(logger);
   }
 
+  logger.info('Async deactivation sequence initiated (cleanup may continue in background)');
+}
+
+function disposeWorkspaceManagerAndCleanup(logger: Logger): void {
   // 5. Dispose workspace management and stop workspace activity.
   //    Now safe because all leases have been released.
   try {
     gWorkspaceManager?.dispose();
-    gLogger?.info('Workspace manager disposed');
+    logger.info('Workspace manager disposed');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    gLogger?.error('Failed to dispose workspace manager', { error: err.message });
+    logger.error('Failed to dispose workspace manager', { error: err.message });
   }
 
   // 6. Clear tool registry references and workspace adapters.
   workspaceAdapters.clear();
   workspaceLeases.clear();
-  if (toolRegistry) {
+  if (gToolRegistry) {
     logger.debug('ToolRegistry references cleared');
   }
   gToolRegistry = undefined;
@@ -1285,7 +1340,7 @@ export async function deactivate(): Promise<void> {
 
   // 7. Save the database to disk, then dispose persistence adapter.
   try {
-    persistenceService.save();
+    gPersistenceService?.save();
     logger.info('Database saved successfully on deactivation');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
@@ -1303,4 +1358,28 @@ export async function deactivate(): Promise<void> {
   }
 
   logger.info('Async deactivation sequence completed');
+}
+
+function scheduleDeferredGlobalCleanup(logger: Logger): void {
+  if (deferredGlobalCleanup?.executed) {
+    return;
+  }
+  
+  // Start background task that waits for leases to release
+  void (async () => {
+    try {
+      // Wait indefinitely for leases to release - no timeout on deferred cleanup
+      await waitForAllLeasesToRelease(0); // 0 timeout means wait forever
+      
+      // Leases released - execute cleanup exactly once
+      if (deferredGlobalCleanup && !deferredGlobalCleanup.executed) {
+        deferredGlobalCleanup.executed = true;
+        disposeWorkspaceManagerAndCleanup(logger);
+        logger.info('Deferred global cleanup executed');
+      }
+    } catch (error) {
+      const err = error instanceof Error ? error : new Error(String(error));
+      logger.error('Deferred global cleanup failed', { error: err.message });
+    }
+  })();
 }
