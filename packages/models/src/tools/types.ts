@@ -50,7 +50,7 @@ export interface ToolDefinition {
   execute(
     input: unknown,
     context: ToolExecutionContext
-  ): Promise<ToolExecutionResult>;
+  ): Promise<unknown>;
 }
 
 /**

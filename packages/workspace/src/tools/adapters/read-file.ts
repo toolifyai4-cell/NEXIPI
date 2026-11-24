@@ -10,7 +10,6 @@ import {
 import {
   type ToolDefinition,
   type ToolExecutionContext,
-  type ToolExecutionResult,
   ToolErrorCode,
   createToolError,
   isToolError,
@@ -89,44 +88,36 @@ export function createReadFileToolDefinition(
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      // Cast to satisfy ToolDefinition type; ToolExecutor wraps the raw result
-      const executeImpl = async (): Promise<ReadFileResult> => {
-        // Workspace identity check
-        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-          throw createToolError(
-            ToolErrorCode.TOOL_RESOURCE_LIMIT,
-            'Workspace identity mismatch: tool execution context does not match adapter workspace',
-            { toolName: 'read_file' }
-          );
-        }
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<ReadFileResult> => {
+      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          'Workspace identity mismatch: tool execution context does not match adapter workspace',
+          { toolName: 'read_file' }
+        );
+      }
 
-        // Input validation is handled by ToolExecutor against inputSchema
-        const options: ReadFileOptions = {
-          uri: (input as { uri: string }).uri,
-          workspaceFolder: deps.workspaceFolder,
-          lineStart: (input as { lineStart?: number }).lineStart,
-          lineEnd: (input as { lineEnd?: number }).lineEnd,
-          signal: context.signal,
-        };
-
-        try {
-          const result: ReadFileResult = await reader.readFile(options);
-          return result;
-        } catch (error) {
-          if (isToolError(error)) {
-            // Re-throw workspace tool errors (including TOOL_CANCELLED) to preserve error codes
-            throw error;
-          }
-          // Wrap unexpected errors
-          throw createToolError(
-            ToolErrorCode.TOOL_EXECUTION_FAILED,
-            `Tool 'read_file' execution failed`,
-            { toolName: 'read_file', cause: error instanceof Error ? error : undefined }
-          );
-        }
+      const options: ReadFileOptions = {
+        uri: (input as { uri: string }).uri,
+        workspaceFolder: deps.workspaceFolder,
+        lineStart: (input as { lineStart?: number }).lineStart,
+        lineEnd: (input as { lineEnd?: number }).lineEnd,
+        signal: context.signal,
       };
-      return executeImpl() as unknown as Promise<ToolExecutionResult>;
+
+      try {
+        const result: ReadFileResult = await reader.readFile(options);
+        return result;
+      } catch (error) {
+        if (isToolError(error)) {
+          throw error;
+        }
+        throw createToolError(
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          `Tool 'read_file' execution failed`,
+          { toolName: 'read_file', cause: error instanceof Error ? error : undefined }
+        );
+      }
     },
   };
 }

@@ -10,7 +10,6 @@ import {
 import {
   type ToolDefinition,
   type ToolExecutionContext,
-  type ToolExecutionResult,
   ToolErrorCode,
   createToolError,
   isToolError,
@@ -105,42 +104,39 @@ export function createListDirectoryToolDefinition(
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      const executeImpl = async (): Promise<ListDirectoryResult> => {
-        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-          throw createToolError(
-            ToolErrorCode.TOOL_RESOURCE_LIMIT,
-            'Workspace identity mismatch: tool execution context does not match adapter workspace',
-            { toolName: 'list_directory' }
-          );
-        }
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<ListDirectoryResult> => {
+      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          'Workspace identity mismatch: tool execution context does not match adapter workspace',
+          { toolName: 'list_directory' }
+        );
+      }
 
-        const options: ListDirectoryOptions = {
-          uri: (input as { uri: string }).uri,
-          workspaceFolder: deps.workspaceFolder,
-          recursive: (input as { recursive?: boolean }).recursive,
-          maxDepth: (input as { maxDepth?: number }).maxDepth,
-          maxEntries: (input as { maxEntries?: number }).maxEntries,
-          filterByType: (input as { filterByType?: 'file' | 'directory' | 'all' }).filterByType,
-          includePatterns: (input as { includePatterns?: string[] }).includePatterns,
-          signal: context.signal,
-        };
-
-        try {
-          const result: ListDirectoryResult = await lister.listDirectory(options);
-          return result;
-        } catch (error) {
-          if (isToolError(error)) {
-            throw error;
-          }
-          throw createToolError(
-            ToolErrorCode.TOOL_EXECUTION_FAILED,
-            `Tool 'list_directory' execution failed`,
-            { toolName: 'list_directory', cause: error instanceof Error ? error : undefined }
-          );
-        }
+      const options: ListDirectoryOptions = {
+        uri: (input as { uri: string }).uri,
+        workspaceFolder: deps.workspaceFolder,
+        recursive: (input as { recursive?: boolean }).recursive,
+        maxDepth: (input as { maxDepth?: number }).maxDepth,
+        maxEntries: (input as { maxEntries?: number }).maxEntries,
+        filterByType: (input as { filterByType?: 'file' | 'directory' | 'all' }).filterByType,
+        includePatterns: (input as { includePatterns?: string[] }).includePatterns,
+        signal: context.signal,
       };
-      return executeImpl() as unknown as Promise<ToolExecutionResult>;
+
+      try {
+        const result: ListDirectoryResult = await lister.listDirectory(options);
+        return result;
+      } catch (error) {
+        if (isToolError(error)) {
+          throw error;
+        }
+        throw createToolError(
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          `Tool 'list_directory' execution failed`,
+          { toolName: 'list_directory', cause: error instanceof Error ? error : undefined }
+        );
+      }
     },
   };
 }

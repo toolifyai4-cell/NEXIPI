@@ -10,7 +10,6 @@ import {
 import {
   type ToolDefinition,
   type ToolExecutionContext,
-  type ToolExecutionResult,
   ToolErrorCode,
   createToolError,
   isToolError,
@@ -126,43 +125,40 @@ export function createSearchCodeToolDefinition(
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      const executeImpl = async (): Promise<CodeSearchResult> => {
-        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-          throw createToolError(
-            ToolErrorCode.TOOL_RESOURCE_LIMIT,
-            'Workspace identity mismatch: tool execution context does not match adapter workspace',
-            { toolName: 'search_code' }
-          );
-        }
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<CodeSearchResult> => {
+      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          'Workspace identity mismatch: tool execution context does not match adapter workspace',
+          { toolName: 'search_code' }
+        );
+      }
 
-        const options: CodeSearchOptions = {
-          workspaceFolder: deps.workspaceFolder,
-          query: (input as { query: string }).query,
-          mode: (input as { mode: 'literal' | 'regex' }).mode,
-          caseSensitive: (input as { caseSensitive?: boolean }).caseSensitive,
-          wholeWord: (input as { wholeWord?: boolean }).wholeWord,
-          contextLines: (input as { contextLines?: number }).contextLines,
-          includePatterns: (input as { includePatterns?: string[] }).includePatterns,
-          excludePatterns: (input as { excludePatterns?: string[] }).excludePatterns,
-          signal: context.signal,
-        };
-
-        try {
-          const result: CodeSearchResult = await searcher.search(options);
-          return result;
-        } catch (error) {
-          if (isToolError(error)) {
-            throw error;
-          }
-          throw createToolError(
-            ToolErrorCode.TOOL_EXECUTION_FAILED,
-            `Tool 'search_code' execution failed`,
-            { toolName: 'search_code', cause: error instanceof Error ? error : undefined }
-          );
-        }
+      const options: CodeSearchOptions = {
+        workspaceFolder: deps.workspaceFolder,
+        query: (input as { query: string }).query,
+        mode: (input as { mode: 'literal' | 'regex' }).mode,
+        caseSensitive: (input as { caseSensitive?: boolean }).caseSensitive,
+        wholeWord: (input as { wholeWord?: boolean }).wholeWord,
+        contextLines: (input as { contextLines?: number }).contextLines,
+        includePatterns: (input as { includePatterns?: string[] }).includePatterns,
+        excludePatterns: (input as { excludePatterns?: string[] }).excludePatterns,
+        signal: context.signal,
       };
-      return executeImpl() as unknown as Promise<ToolExecutionResult>;
+
+      try {
+        const result: CodeSearchResult = await searcher.search(options);
+        return result;
+      } catch (error) {
+        if (isToolError(error)) {
+          throw error;
+        }
+        throw createToolError(
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          `Tool 'search_code' execution failed`,
+          { toolName: 'search_code', cause: error instanceof Error ? error : undefined }
+        );
+      }
     },
   };
 }

@@ -10,7 +10,6 @@ import {
 import {
   type ToolDefinition,
   type ToolExecutionContext,
-  type ToolExecutionResult,
   ToolErrorCode,
   createToolError,
   isToolError,
@@ -262,51 +261,48 @@ export function createFindReferencesToolDefinition(
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ToolExecutionResult> => {
-      const executeImpl = async (): Promise<ReferenceDiscoveryResult> => {
-        if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
-          throw createToolError(
-            ToolErrorCode.TOOL_RESOURCE_LIMIT,
-            'Workspace identity mismatch: tool execution context does not match adapter workspace',
-            { toolName: 'find_references' }
-          );
-        }
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<ReferenceDiscoveryResult> => {
+      if (context.workspaceId && context.workspaceId !== computedWorkspaceId) {
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          'Workspace identity mismatch: tool execution context does not match adapter workspace',
+          { toolName: 'find_references' }
+        );
+      }
 
-        const rawInput = input as {
-          symbol: string;
-          classifications?: string[];
-          languages?: string[];
-          includePatterns?: string[];
-          excludePatterns?: string[];
-          enableLexicalFallback?: boolean;
-        };
-
-        const options: ReferenceDiscoveryOptions = {
-          workspaceFolder: deps.workspaceFolder,
-          symbol: rawInput.symbol,
-          classifications: rawInput.classifications as ReferenceDiscoveryOptions['classifications'],
-          languages: rawInput.languages as ReferenceDiscoveryOptions['languages'],
-          includePatterns: rawInput.includePatterns,
-          excludePatterns: rawInput.excludePatterns,
-          enableLexicalFallback: rawInput.enableLexicalFallback,
-          signal: context.signal,
-        };
-
-        try {
-          const result: ReferenceDiscoveryResult = await discoverer.find(options);
-          return result;
-        } catch (error) {
-          if (isToolError(error)) {
-            throw error;
-          }
-          throw createToolError(
-            ToolErrorCode.TOOL_EXECUTION_FAILED,
-            `Tool 'find_references' execution failed`,
-            { toolName: 'find_references', cause: error instanceof Error ? error : undefined }
-          );
-        }
+      const rawInput = input as {
+        symbol: string;
+        classifications?: string[];
+        languages?: string[];
+        includePatterns?: string[];
+        excludePatterns?: string[];
+        enableLexicalFallback?: boolean;
       };
-      return executeImpl() as unknown as Promise<ToolExecutionResult>;
+
+      const options: ReferenceDiscoveryOptions = {
+        workspaceFolder: deps.workspaceFolder,
+        symbol: rawInput.symbol,
+        classifications: rawInput.classifications as ReferenceDiscoveryOptions['classifications'],
+        languages: rawInput.languages as ReferenceDiscoveryOptions['languages'],
+        includePatterns: rawInput.includePatterns,
+        excludePatterns: rawInput.excludePatterns,
+        enableLexicalFallback: rawInput.enableLexicalFallback,
+        signal: context.signal,
+      };
+
+      try {
+        const result: ReferenceDiscoveryResult = await discoverer.find(options);
+        return result;
+      } catch (error) {
+        if (isToolError(error)) {
+          throw error;
+        }
+        throw createToolError(
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          `Tool 'find_references' execution failed`,
+          { toolName: 'find_references', cause: error instanceof Error ? error : undefined }
+        );
+      }
     },
   };
 }

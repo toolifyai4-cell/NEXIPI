@@ -519,12 +519,7 @@ describe('ModelToolDefinition serializability and separation', () => {
         idempotent: true,
         version: '1.0.0',
       },
-      execute: async (): Promise<ToolExecutionResult> => ({
-        kind: 'success',
-        output: undefined,
-        truncated: false,
-        executionMs: 0,
-      }),
+      execute: async () => 'file contents',
     };
     expect(typeof executable.execute).toBe('function');
     expect(executable.inputSchema).toBeDefined();
