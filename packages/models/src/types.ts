@@ -6,10 +6,13 @@ import type {
   StreamCompleteEvent,
   StreamErrorEvent,
 } from '@nexipi/shared';
+import type { ModelToolDefinition, JsonSchemaValue } from './tools/schemas.js';
+import { ModelToolDefinitionSchema, JsonSchemaValueSchema } from './tools/schemas.js';
 
 export type ProviderId = string & { readonly __brand: unique symbol };
 
 export type { ModelId, UsageStatistics } from '@nexipi/shared';
+export type { ModelToolDefinition, JsonSchemaValue } from './tools/schemas.js';
 
 export function createProviderId(id: string): ProviderId {
   return id as ProviderId;
@@ -18,6 +21,29 @@ export function createProviderId(id: string): ProviderId {
 export function createModelId(id: string): ModelId {
   return id as ModelId;
 }
+
+/**
+ * Provider-neutral model tool call representation.
+ *
+ * Preserves the model-generated call identifier, tool name, and structured
+ * arguments without lossy string conversion. Arguments are validated as
+ * JSON-compatible values (null, booleans, finite numbers, strings, arrays,
+ * nested objects) via JsonSchemaValue.
+ */
+export interface ModelToolCall {
+  readonly id: string;
+  readonly name: string;
+  readonly arguments: JsonSchemaValue;
+}
+
+export const ModelToolCallSchema = z.object({
+  id: z.string().min(1),
+  name: z.string().min(1),
+  arguments: z.lazy(() => JsonSchemaValueSchema),
+});
+
+export type ModelToolCallInput = z.input<typeof ModelToolCallSchema>;
+export type ModelToolCallOutput = z.output<typeof ModelToolCallSchema>;
 
 export type Modality = 'text' | 'image' | 'audio' | 'video' | 'document';
 
@@ -134,6 +160,7 @@ export interface ModelRequest {
   readonly model: ModelId;
   readonly messages: readonly ModelMessage[];
   readonly parameters?: GenerationParameters | undefined;
+  readonly tools?: readonly ModelToolDefinition[] | undefined;
   readonly metadata?: Record<string, unknown> | undefined;
 }
 
@@ -142,7 +169,7 @@ export const ModelMessageSchema = z.object({
   content: z.union([z.string(), z.array(z.unknown())]),
   name: z.string().optional(),
   toolCallId: z.string().optional(),
-  toolCalls: z.array(z.unknown()).optional(),
+  toolCalls: z.array(ModelToolCallSchema).optional(),
 });
 
 export type ModelMessage = z.output<typeof ModelMessageSchema>;
@@ -228,6 +255,7 @@ export const ModelRequestSchema = z.object({
   model: z.string(),
   messages: z.array(ModelMessageSchema),
   parameters: GenerationParametersSchema.optional(),
+  tools: z.array(z.lazy(() => ModelToolDefinitionSchema)).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 

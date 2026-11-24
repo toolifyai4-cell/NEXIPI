@@ -9,12 +9,12 @@ export type ToolCapability = z.infer<typeof ToolCapabilitySchema>;
  *
  * Structurally excludes functions and class instances (including Zod schema
  * objects), so it is a guarantee that a ModelToolDefinition carries no
- * executable logic.
+ * executable logic. Also excludes non-finite numbers (Infinity, NaN, -Infinity).
  */
 const JsonSchemaValueSchemaInternal: ZodTypeAny = z.lazy(() =>
   z.union([
     z.string(),
-    z.number(),
+    z.number().finite(),
     z.boolean(),
     z.null(),
     z.array(JsonSchemaValueSchemaInternal),
