@@ -577,6 +577,124 @@ describe('types', () => {
       }
     });
 
+    it('should accept shared acyclic references (same object referenced multiple times)', () => {
+      const shared = { value: 'valid', nested: { count: 42 } };
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: {
+          first: shared,
+          second: shared,
+          third: { ref: shared, other: 'data' },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.arguments.first).toStrictEqual(result.data.arguments.second);
+        expect(result.data.arguments.first).toStrictEqual(result.data.arguments.third.ref);
+      }
+    });
+
+    it('should accept shared array references', () => {
+      const sharedArray = ['a', 'b', { nested: true }];
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: {
+          primary: sharedArray,
+          secondary: sharedArray,
+          tertiary: { items: sharedArray },
+        },
+      });
+      expect(result.success).toBe(true);
+      if (result.success) {
+        expect(result.data.arguments.primary).toStrictEqual(result.data.arguments.secondary);
+        expect(result.data.arguments.primary).toStrictEqual(result.data.arguments.tertiary.items);
+      }
+    });
+
+    it('should reject object cycle: parent -> child -> parent', () => {
+      const parent: any = { name: 'parent' };
+      const child: any = { name: 'child', parent };
+      parent.child = child;
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: parent,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
+    it('should reject array cycle: array contains itself', () => {
+      const arr: any = [1, 2];
+      arr.push(arr);
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: arr,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
+    it('should reject nested cycle: a -> b -> c -> a', () => {
+      const a: any = { name: 'a' };
+      const b: any = { name: 'b' };
+      const c: any = { name: 'c' };
+      a.ref = b;
+      b.ref = c;
+      c.ref = a;
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: a,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
+    it('should reject cycle through array: obj -> arr -> obj', () => {
+      const obj: any = { value: 'test' };
+      const arr: any = [obj];
+      obj.arr = arr;
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: obj,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
+    it('should accept deeply nested valid structure', () => {
+      const deep = {
+        level1: {
+          level2: {
+            level3: {
+              level4: {
+                level5: { value: 'deep' },
+              },
+            },
+          },
+        },
+      };
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: deep,
+      });
+      expect(result.success).toBe(true);
+    });
+
     it('should be JSON-serializable', () => {
       const toolCall: ModelToolCall = {
         id: 'call_123',

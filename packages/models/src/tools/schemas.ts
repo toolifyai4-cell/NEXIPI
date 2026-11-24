@@ -13,19 +13,34 @@ export type ToolCapability = z.infer<typeof ToolCapabilitySchema>;
  * Cyclic references are rejected to prevent unbounded recursion during validation.
  */
 function hasCycle(value: unknown): boolean {
-  const seen = new WeakSet<object>();
+  const visiting = new WeakSet<object>();
+  const visited = new WeakSet<object>();
   function check(v: unknown): boolean {
     if (v === null || typeof v !== 'object') {
       return false;
     }
-    if (seen.has(v)) {
+    if (visiting.has(v)) {
       return true;
     }
-    seen.add(v);
-    if (Array.isArray(v)) {
-      return v.some(check);
+    if (visited.has(v)) {
+      return false;
     }
-    return Object.values(v).some(check);
+    visiting.add(v);
+    try {
+      if (Array.isArray(v)) {
+        if (v.some(check)) {
+          return true;
+        }
+      } else {
+        if (Object.values(v).some(check)) {
+          return true;
+        }
+      }
+    } finally {
+      visiting.delete(v);
+      visited.add(v);
+    }
+    return false;
   }
   return check(value);
 }
