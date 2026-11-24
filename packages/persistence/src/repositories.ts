@@ -52,7 +52,7 @@ export interface ConversationRecord {
 export interface CreateMessageInput {
   id: string;
   conversation_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
   timestamp?: number;
@@ -88,7 +88,7 @@ export interface MessageListResult {
 export interface MessageRecord {
   id: string;
   conversation_id: string;
-  role: 'user' | 'assistant' | 'system';
+  role: 'user' | 'assistant' | 'system' | 'tool';
   content: string;
   status: 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
   timestamp: number;

@@ -17,10 +17,15 @@ import {
 import type {
   ModelProvider,
   ModelRequest,
+  ModelResponse,
   ModelId,
   ProviderId,
   GenerationParameters,
   ModelMessage,
+  ModelToolCall,
+  ModelToolDefinition,
+  ModelCapabilities,
+  FinishReason,
 } from './types.js';
 import type { ProviderRegistry } from './registry.js';
 import { createProviderRegistry } from './registry.js';
@@ -33,6 +38,10 @@ import {
 } from '@nexipi/shared';
 import type { PersistenceAdapter } from './persistence-adapter.js';
 import { PersistenceError } from '@nexipi/persistence';
+import type { ToolRegistry } from './tools/registry.js';
+import type { ToolExecutionService, ToolCall } from './tools/service.js';
+import { createToolError, ToolErrorCode } from './tools/errors.js';
+import type { ToolExecutionContext, ToolExecutionResult } from './tools/types.js';
 
 export interface ChatServiceEvents extends EventMap {
   'conversation:created': { conversation: Conversation; timestamp: number };
@@ -69,6 +78,10 @@ export interface ChatServiceOptions {
   workspaceId?: string;
   /** Persistence adapter for durable storage. If not provided, operates in-memory only. */
   persistenceAdapter?: PersistenceAdapter;
+  /** Tool registry for available tool definitions. If not provided, tools are disabled. */
+  toolRegistry?: ToolRegistry;
+  /** Tool execution service for executing tool calls. If not provided, tool calls are not executed. */
+  toolExecutionService?: ToolExecutionService;
 }
 
 type ConcurrencyPolicy = 'queue' | 'cancel-previous' | 'allow-all';
@@ -119,6 +132,8 @@ export class ChatService {
   private readonly primaryRequestId: Map<ConversationId, string> = new Map();
   private readonly persistenceAdapter: PersistenceAdapter | undefined;
   private readonly workspaceId: string;
+  private readonly toolRegistry: ToolRegistry | undefined;
+  private readonly toolExecutionService: ToolExecutionService | undefined;
   private _isDisposed = false;
 
   constructor(options: ChatServiceOptions = {}) {
@@ -140,6 +155,8 @@ export class ChatService {
     this.concurrencyPolicy = options.concurrencyPolicy ?? 'cancel-previous';
     this.workspaceId = options.workspaceId ?? 'default';
     this.persistenceAdapter = options.persistenceAdapter;
+    this.toolRegistry = options.toolRegistry;
+    this.toolExecutionService = options.toolExecutionService;
     this.eventEmitter = new EventEmitter<ChatServiceEvents>({
       onListenerError: (error, eventName) => {
         this.logger.error(`Listener error for event ${eventName}`, { error: error.message });
@@ -177,6 +194,16 @@ export class ChatService {
   /** Get the persistence adapter (if available) */
   getPersistenceAdapter(): PersistenceAdapter | undefined {
     return this.persistenceAdapter;
+  }
+
+  /** Get the tool registry (if available) */
+  getToolRegistry(): ToolRegistry | undefined {
+    return this.toolRegistry;
+  }
+
+  /** Get the tool execution service (if available) */
+  getToolExecutionService(): ToolExecutionService | undefined {
+    return this.toolExecutionService;
   }
 
   /** Check if the service has been disposed */
@@ -943,20 +970,19 @@ export class ChatService {
       return;
     }
 
-    const messages = this.buildModelMessages(conversationId, options.systemPrompt);
-    const request: ModelRequest = {
-      model: modelId,
-      messages,
-      parameters: options.parameters,
-    };
+    // Check if tools are available and model supports tool calling
+    const toolDefinitions = this.getAvailableToolDefinitions(modelMetadata);
+    const hasTools = toolDefinitions.length > 0;
 
-    this.logger.info('Executing model request', {
+    this.logger.info('Starting chat turn', {
       conversationId,
       messageId,
       requestId,
       providerId,
       modelId,
-      messageCount: messages.length,
+      hasTools,
+      toolCount: toolDefinitions.length,
+      supportsToolCalling: modelMetadata.capabilities.toolCalling,
     });
 
     this.eventEmitter.emit('stream:event', {
@@ -965,34 +991,17 @@ export class ChatService {
     });
 
     try {
-      // Check if provider supports streaming
-      const supportsStreaming = typeof provider.executeStream === 'function';
-
-      if (supportsStreaming) {
-        await this.executeStreamingProvider(
-          provider,
-          request,
-          conversationId,
-          messageId,
-          signal,
-          requestId
-        );
-      } else if (typeof provider.execute === 'function') {
-        await this.executeNonStreamingProvider(
-          provider,
-          request,
-          conversationId,
-          messageId,
-          signal,
-          requestId
-        );
-      } else {
-        this.handleStreamError(conversationId, messageId, {
-          code: 'PROVIDER_NOT_SUPPORTED',
-          message: 'Provider does not implement execute or executeStream',
-          retryable: false,
-        });
-      }
+      // Execute the tool calling loop
+      await this.executeToolCallingLoop(
+        provider,
+        modelMetadata,
+        conversationId,
+        messageId,
+        signal,
+        requestId,
+        options,
+        toolDefinitions
+      );
     } catch (error) {
       // Validate that this request is still active (not cancelled/superseded)
       if (!this.activeRequests.has(requestId)) {
@@ -1071,19 +1080,193 @@ export class ChatService {
     }
   }
 
+  private getAvailableToolDefinitions(modelMetadata: { capabilities: ModelCapabilities }): readonly ModelToolDefinition[] {
+    if (!this.toolRegistry || !modelMetadata.capabilities.toolCalling) {
+      return [];
+    }
+    return this.toolRegistry.listDescriptions();
+  }
+
+  private buildModelRequest(
+    conversationId: ConversationId,
+    modelId: ModelId,
+    systemPrompt: string | undefined,
+    toolDefinitions: readonly ModelToolDefinition[],
+    parameters?: GenerationParameters
+  ): ModelRequest {
+    const messages = this.buildModelMessages(conversationId, systemPrompt);
+    const request: ModelRequest = {
+      model: modelId,
+      messages,
+      parameters,
+    };
+    if (toolDefinitions.length > 0) {
+      return { ...request, tools: toolDefinitions };
+    }
+    return request;
+  }
+
+  private async executeToolCallingLoop(
+    provider: ModelProvider,
+    modelMetadata: { capabilities: ModelCapabilities; modelId: ModelId },
+    conversationId: ConversationId,
+    messageId: MessageId,
+    signal: AbortSignal,
+    requestId: string,
+    options: {
+      model?: ModelId;
+      provider?: ProviderId;
+      parameters?: GenerationParameters;
+      systemPrompt?: string;
+    },
+    toolDefinitions: readonly ModelToolDefinition[]
+  ): Promise<void> {
+    const hasTools = toolDefinitions.length > 0 && modelMetadata.capabilities.toolCalling;
+    const maxIterations = this.toolExecutionService?.getConfig().maxIterationsPerTurn ?? 10;
+    let iteration = 0;
+    let accumulatedContent = '';
+    let currentRequest = this.buildModelRequest(conversationId, modelMetadata.modelId, options.systemPrompt, toolDefinitions, options.parameters);
+
+    while (iteration < maxIterations) {
+      iteration++;
+
+      // Check for cancellation before each iteration
+      if (signal.aborted || this._isDisposed || !this.activeRequests.has(requestId)) {
+        this.logger.info('Tool calling loop cancelled', { conversationId, messageId, requestId, iteration });
+        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+        return;
+      }
+
+      this.logger.debug('Model request iteration', { conversationId, messageId, requestId, iteration, hasTools });
+
+      // Execute model request
+      let response: ModelResponse;
+      try {
+        response = await this.executeModelRequest(provider, currentRequest, conversationId, messageId, signal, requestId, accumulatedContent);
+      } catch (error) {
+        if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+          throw error;
+        }
+        throw error;
+      }
+
+      // Process the response
+      if (!response.choices || response.choices.length === 0) {
+        this.logger.warn('Model response has no choices', { conversationId, messageId, requestId });
+        break;
+      }
+      const choice = response.choices[0]!;
+      const finishReason = response.finishReason;
+
+      // Check if response contains tool calls
+      const toolCalls = (choice.message.toolCalls ?? []) as readonly ModelToolCall[];
+      if (toolCalls.length > 0 && hasTools) {
+        // Store the assistant message with tool calls
+        this.updateMessage(conversationId, messageId, {
+          content: accumulatedContent + String(choice.message.content ?? ''),
+          status: 'streaming',
+          metadata: {
+            usage: response.usage,
+            finishReason,
+            toolCalls,
+          },
+        });
+
+        // Execute tool calls
+        const toolResults = await this.executeToolCalls(
+          conversationId,
+          messageId,
+          toolCalls,
+          signal,
+          requestId
+        );
+
+        // Append tool results to conversation
+        this.appendToolResults(conversationId, toolResults);
+
+        // Build new request with tool results for next iteration
+        currentRequest = this.buildModelRequest(conversationId, modelMetadata.modelId, options.systemPrompt, toolDefinitions, options.parameters);
+        accumulatedContent = ''; // Reset accumulated content for next response
+        continue;
+      }
+
+      // No tool calls - final response
+      const finalContent = accumulatedContent + String(choice.message.content ?? '');
+      const isComplete = finishReason === 'stop' || finishReason === 'length' || !hasTools;
+
+      this.updateMessage(conversationId, messageId, {
+        content: finalContent,
+        status: isComplete ? 'completed' : 'streaming',
+        metadata: {
+          usage: response.usage,
+          finishReason,
+        },
+      });
+
+      const completeEvent = createStreamCompleteEvent(
+        conversationId,
+        messageId,
+        finishReason,
+        response.usage
+      );
+      this.eventEmitter.emit('stream:event', { event: completeEvent, timestamp: Date.now() });
+      break;
+    }
+
+    // Check if we hit the iteration limit
+    if (iteration >= maxIterations) {
+      this.logger.warn('Maximum tool calling iterations reached', {
+        conversationId,
+        messageId,
+        requestId,
+        maxIterations,
+      });
+      this.handleStreamError(conversationId, messageId, {
+        code: 'TOOL_RESOURCE_LIMIT',
+        message: `Maximum tool calling iterations (${maxIterations}) exceeded`,
+        retryable: false,
+      });
+    }
+  }
+
+  private async executeModelRequest(
+    provider: ModelProvider,
+    request: ModelRequest,
+    conversationId: ConversationId,
+    messageId: MessageId,
+    signal: AbortSignal,
+    requestId: string,
+    accumulatedContent: string
+  ): Promise<ModelResponse> {
+    const supportsStreaming = typeof provider.executeStream === 'function';
+
+    if (supportsStreaming && !request.tools) {
+      // Use streaming for requests without tools
+      return this.executeStreamingProvider(provider, request, conversationId, messageId, signal, requestId, accumulatedContent);
+    } else if (typeof provider.execute === 'function') {
+      // Use non-streaming for requests with tools or when streaming not available
+      return this.executeNonStreamingProvider(provider, request, conversationId, messageId, signal, requestId);
+    } else {
+      throw new Error('Provider does not implement execute or executeStream');
+    }
+  }
+
   private async executeStreamingProvider(
     provider: ModelProvider,
     request: ModelRequest,
     conversationId: ConversationId,
     messageId: MessageId,
     signal: AbortSignal,
-    requestId: string
-  ): Promise<void> {
+    requestId: string,
+    accumulatedContent: string
+  ): Promise<ModelResponse> {
     if (!provider.executeStream) {
       throw new Error('Provider does not support streaming');
     }
+
     let hasCompleted = false;
-    let accumulatedContent = '';
+    let streamAccumulatedContent = accumulatedContent;
+    let finalResponse: ModelResponse | null = null;
 
     for await (const event of provider.executeStream(request, signal)) {
       // Validate request is still active before processing
@@ -1093,7 +1276,7 @@ export class ChatService {
           requestId,
           eventType: event.type,
         });
-        return;
+        throw new DOMException('Aborted', 'AbortError');
       }
 
       // If service is disposed, stop processing events
@@ -1103,7 +1286,7 @@ export class ChatService {
           requestId,
           eventType: event.type,
         });
-        return;
+        throw new DOMException('Aborted', 'AbortError');
       }
 
       if (signal.aborted) {
@@ -1111,9 +1294,9 @@ export class ChatService {
       }
 
       if (event.type === 'stream:delta') {
-        accumulatedContent += event.delta;
+        streamAccumulatedContent += event.delta;
         this.updateMessage(conversationId, messageId, {
-          content: accumulatedContent,
+          content: streamAccumulatedContent,
           status: 'streaming',
         });
 
@@ -1137,14 +1320,21 @@ export class ChatService {
         }
         hasCompleted = true;
 
-        this.updateMessage(conversationId, messageId, {
-          content: accumulatedContent,
-          status: 'completed',
-          metadata: {
-            usage: event.usage,
-            finishReason: event.finishReason,
-          },
-        });
+        // Build ModelResponse from streaming completion
+        finalResponse = {
+          id: `response-${Date.now()}`,
+          model: request.model,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: streamAccumulatedContent,
+            },
+            finishReason: event.finishReason as FinishReason,
+          }],
+          usage: event.usage ?? { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: event.finishReason as FinishReason,
+        };
 
         this.eventEmitter.emit('stream:event', { event, timestamp: Date.now() });
         break;
@@ -1164,12 +1354,11 @@ export class ChatService {
         }
         hasCompleted = true;
         this.handleStreamError(conversationId, messageId, event.error);
-        break;
+        throw new Error(event.error.message);
       }
     }
 
     // Handle case where generator completes without explicit completion event
-    // (e.g., when signal is aborted and generator exits cleanly or throws AbortError)
     if (!hasCompleted) {
       const currentMessage = this.getMessage(conversationId, messageId);
       const alreadyCancelled = currentMessage?.status === 'cancelled';
@@ -1191,13 +1380,31 @@ export class ChatService {
           });
           this.updateMessage(conversationId, messageId, { status: 'cancelled' });
         }
+        throw new DOMException('Aborted', 'AbortError');
       } else {
-        this.updateMessage(conversationId, messageId, {
-          content: accumulatedContent,
-          status: 'completed',
-        });
+        // Build a response from accumulated content
+        finalResponse = {
+          id: `response-${Date.now()}`,
+          model: request.model,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: streamAccumulatedContent,
+            },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 0, completionTokens: 0, totalTokens: 0 },
+          finishReason: 'stop',
+        };
       }
     }
+
+    if (!finalResponse) {
+      throw new Error('No response received from streaming provider');
+    }
+
+    return finalResponse;
   }
 
   private async executeNonStreamingProvider(
@@ -1207,7 +1414,7 @@ export class ChatService {
     messageId: MessageId,
     signal: AbortSignal,
     requestId: string
-  ): Promise<void> {
+  ): Promise<ModelResponse> {
     this.updateMessage(conversationId, messageId, { status: 'streaming' });
 
     const resultPromise = provider.execute(request, signal);
@@ -1224,7 +1431,7 @@ export class ChatService {
           conversationId,
           requestId,
         });
-        return;
+        throw new DOMException('Aborted', 'AbortError');
       }
 
       if (signal.aborted) {
@@ -1238,34 +1445,10 @@ export class ChatService {
           conversationId,
           messageId,
         });
-        return;
+        throw new DOMException('Aborted', 'AbortError');
       }
 
-      // ModelResponse has choices array with message.content per the provider contract
-      const content =
-        result.choices && result.choices.length > 0
-          ? typeof result.choices[0]?.message.content === 'string'
-            ? result.choices[0].message.content
-            : ''
-          : '';
-
-      const completeEvent = createStreamCompleteEvent(
-        conversationId,
-        messageId,
-        result.finishReason,
-        result.usage
-      );
-
-      this.updateMessage(conversationId, messageId, {
-        content,
-        status: 'completed',
-        metadata: {
-          usage: result.usage,
-          finishReason: result.finishReason,
-        },
-      });
-
-      this.eventEmitter.emit('stream:event', { event: completeEvent, timestamp: Date.now() });
+      return result;
     } catch (error) {
       if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
         throw error;
@@ -1277,13 +1460,227 @@ export class ChatService {
           conversationId,
           messageId,
         });
-        return;
+        throw new DOMException('Aborted', 'AbortError');
       }
-      this.handleStreamError(conversationId, messageId, {
-        code: 'EXECUTION_FAILED',
-        message: error instanceof Error ? error.message : String(error),
-        retryable: true,
+      throw error;
+    }
+  }
+
+  private async executeToolCalls(
+    conversationId: ConversationId,
+    messageId: MessageId,
+    toolCalls: readonly ModelToolCall[],
+    signal: AbortSignal,
+    requestId: string
+  ): Promise<ReadonlyArray<{ toolCall: ModelToolCall; result: ToolExecutionResult }>> {
+    if (!this.toolExecutionService) {
+      this.logger.warn('Tool execution service not available, skipping tool execution');
+      return toolCalls.map(toolCall => ({
+        toolCall,
+        result: {
+          kind: 'failure' as const,
+          error: createToolError(ToolErrorCode.TOOL_EXECUTION_FAILED, 'Tool execution service not configured', {
+            toolName: toolCall.name,
+            retryable: false,
+          }),
+          truncated: false,
+          executionMs: 0,
+        },
+      }));
+    }
+
+    // Validate tool calls
+    const validCalls: ToolCall[] = [];
+    const results: Array<{ toolCall: ModelToolCall; result: ToolExecutionResult }> = [];
+    const seenToolCallIds = new Set<string>();
+
+    for (const toolCall of toolCalls) {
+      // Validate tool call structure
+      if (!toolCall.id || !toolCall.name) {
+        results.push({
+          toolCall,
+          result: {
+            kind: 'failure',
+            error: createToolError(ToolErrorCode.TOOL_INVALID_ARGUMENTS, `Invalid tool call: missing id or name`, {
+              toolName: toolCall.name ?? 'unknown',
+              retryable: false,
+            }),
+            truncated: false,
+            executionMs: 0,
+          },
+        });
+        continue;
+      }
+
+      // Check for duplicate tool call IDs
+      if (seenToolCallIds.has(toolCall.id)) {
+        results.push({
+          toolCall,
+          result: {
+            kind: 'failure',
+            error: createToolError(ToolErrorCode.TOOL_INVALID_ARGUMENTS, `Duplicate tool call ID: ${toolCall.id}`, {
+              toolName: toolCall.name,
+              retryable: false,
+            }),
+            truncated: false,
+            executionMs: 0,
+          },
+        });
+        continue;
+      }
+      seenToolCallIds.add(toolCall.id);
+
+      // Check if tool exists
+      if (!this.toolRegistry?.has(toolCall.name)) {
+        results.push({
+          toolCall,
+          result: {
+            kind: 'failure',
+            error: createToolError(ToolErrorCode.TOOL_NOT_FOUND, `Tool '${toolCall.name}' is not registered`, {
+              toolName: toolCall.name,
+              retryable: false,
+            }),
+            truncated: false,
+            executionMs: 0,
+          },
+        });
+        continue;
+      }
+
+      validCalls.push({
+        toolName: toolCall.name,
+        input: toolCall.arguments,
       });
+    }
+
+    // Execute valid calls through ToolExecutionService
+    if (validCalls.length > 0) {
+      // Create a turn for this batch of tool calls
+      const turn = this.toolExecutionService.createTurn({ id: `${requestId}-turn-${Date.now()}` });
+      
+      // Create execution context
+      const context: ToolExecutionContext = {
+        signal,
+        workspaceId: this.workspaceId,
+        workspaceFolder: undefined,
+        logger: this.logger,
+      };
+
+      // Respect maxCallsPerBatch by splitting into batches
+      const maxCallsPerBatch = this.toolExecutionService.getConfig().maxCallsPerBatch;
+      const executionResults: ToolExecutionResult[] = [];
+
+      for (let i = 0; i < validCalls.length; i += maxCallsPerBatch) {
+        const batch = validCalls.slice(i, i + maxCallsPerBatch);
+        try {
+          const batchResults = await turn.submitBatch(batch, context);
+          executionResults.push(...batchResults);
+        } catch (error) {
+          // Batch-level error (e.g., resource limit exceeded)
+          for (const call of batch) {
+            executionResults.push({
+              kind: 'failure',
+              error: createToolError(ToolErrorCode.TOOL_EXECUTION_FAILED, `Tool execution failed: ${error instanceof Error ? error.message : String(error)}`, {
+                toolName: call.toolName,
+                retryable: false,
+              }),
+              truncated: false,
+              executionMs: 0,
+            });
+          }
+        }
+        
+        // Check for cancellation between batches
+        if (signal.aborted || this._isDisposed || !this.activeRequests.has(requestId)) {
+          break;
+        }
+      }
+      
+      turn.complete();
+
+      // Map results back to tool calls
+      let validIndex = 0;
+      for (const toolCall of toolCalls) {
+        const existingResult = results.find(r => r.toolCall.id === toolCall.id);
+        if (existingResult) {
+          continue; // Already has a validation error result
+        }
+        
+        if (validIndex < executionResults.length) {
+          results.push({
+            toolCall,
+            result: executionResults[validIndex]!,
+          });
+          validIndex++;
+        } else {
+          results.push({
+            toolCall,
+            result: {
+              kind: 'failure',
+              error: createToolError(ToolErrorCode.TOOL_EXECUTION_FAILED, `Tool '${toolCall.name}' execution returned no result`, {
+                toolName: toolCall.name,
+                retryable: false,
+              }),
+              truncated: false,
+              executionMs: 0,
+            },
+          });
+        }
+      }
+    }
+
+    // Ensure all tool calls have results (in order)
+    const orderedResults = toolCalls.map(toolCall => 
+      results.find(r => r.toolCall.id === toolCall.id) ?? {
+        toolCall,
+        result: {
+          kind: 'failure' as const,
+          error: createToolError(ToolErrorCode.TOOL_EXECUTION_FAILED, `Tool '${toolCall.name}' execution returned no result`, {
+            toolName: toolCall.name,
+            retryable: false,
+          }),
+          truncated: false,
+          executionMs: 0,
+        },
+      }
+    );
+
+    return orderedResults;
+  }
+
+  private appendToolResults(
+    conversationId: ConversationId,
+    toolResults: ReadonlyArray<{ toolCall: ModelToolCall; result: ToolExecutionResult }>
+  ): void {
+    for (const { toolCall, result } of toolResults) {
+      let content: string;
+      if (result.kind === 'success') {
+        content = JSON.stringify(result.output);
+      } else {
+        content = JSON.stringify({
+          error: {
+            code: result.error.code,
+            message: result.error.message,
+          },
+        });
+      }
+
+      const toolMessage = this.addMessage(conversationId, 'tool', content, 'completed', {
+        toolCallId: toolCall.id,
+        toolName: toolCall.name,
+        executionMs: result.executionMs,
+        truncated: result.truncated,
+      });
+
+      if (toolMessage) {
+        this.logger.debug('Tool result appended', {
+          conversationId,
+          messageId: toolMessage.id,
+          toolCallId: toolCall.id,
+          toolName: toolCall.name,
+          success: result.kind === 'success',
+        });
+      }
     }
   }
 
@@ -1332,7 +1729,23 @@ export class ChatService {
     for (const msg of recentMessages) {
       if (msg.role === 'user' || msg.role === 'assistant') {
         if (isMessageTerminal(msg) || msg.status === 'streaming') {
-          modelMessages.push({ role: msg.role, content: msg.content });
+          const messageMetadata = msg.metadata ?? {};
+          const modelMessage: ModelMessage = { role: msg.role, content: msg.content };
+          // Include tool calls if present on assistant message
+          if (msg.role === 'assistant' && messageMetadata['toolCalls']) {
+            modelMessage.toolCalls = messageMetadata['toolCalls'] as ModelToolCall[];
+          }
+          modelMessages.push(modelMessage);
+        }
+      } else if (msg.role === 'tool') {
+        // Tool result messages are always included (they are terminal by nature)
+        const messageMetadata = msg.metadata ?? {};
+        if (messageMetadata['toolCallId']) {
+          modelMessages.push({
+            role: 'tool',
+            content: msg.content,
+            toolCallId: messageMetadata['toolCallId'] as string,
+          });
         }
       }
     }

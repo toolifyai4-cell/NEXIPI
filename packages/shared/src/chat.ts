@@ -11,7 +11,7 @@ export function createMessageId(id: string): MessageId {
   return id as MessageId;
 }
 
-export type MessageRole = 'user' | 'assistant' | 'system';
+export type MessageRole = 'user' | 'assistant' | 'system' | 'tool';
 
 export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'failed' | 'cancelled';
 
@@ -36,7 +36,7 @@ export interface Message {
 export const MessageSchema = z.object({
   id: z.string(),
   conversationId: z.string(),
-  role: z.enum(['user', 'assistant', 'system']),
+  role: z.enum(['user', 'assistant', 'system', 'tool']),
   content: z.string(),
   status: MessageStatusSchema,
   timestamp: z.number().int().nonnegative(),
