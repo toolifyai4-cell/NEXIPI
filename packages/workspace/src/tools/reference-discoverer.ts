@@ -408,6 +408,19 @@ export class ReferenceDiscoverer {
           continue;
         }
 
+        // Compute remaining global reference budget before scanning this file.
+        // If the budget is exhausted, do not invoke any scanner for this file.
+        const remainingReferences = maxTotalReferences - totalReferences;
+        if (remainingReferences <= 0) {
+          truncated = true;
+          if (limitReached === undefined) {
+            limitReached = 'maxTotalReferences';
+          }
+          break;
+        }
+
+        const effectivePerFileLimit = Math.min(maxReferencesPerFile, remainingReferences);
+
         // Per-file reference discovery, dispatched by language.
         if (isSyntaxAwareLanguage(detected)) {
           const scriptKind = scriptKindFromExtension(extension);
@@ -441,11 +454,14 @@ export class ReferenceDiscoverer {
             });
           }
 
-          const fileScan = scanSyntaxFile(sourceFile, input.symbol, candidate, maxReferencesPerFile);
+          const fileScan = scanSyntaxFile(sourceFile, input.symbol, candidate, effectivePerFileLimit);
           if (fileScan.truncated) {
             truncated = true;
             if (limitReached === undefined) {
-              limitReached = 'maxReferencesPerFile';
+              // When the effective per-file limit was tightened by the global
+              // budget, the binding constraint is maxTotalReferences.
+              limitReached =
+                effectivePerFileLimit < maxReferencesPerFile ? 'maxTotalReferences' : 'maxReferencesPerFile';
             }
           }
           filesExamined++;
@@ -456,11 +472,12 @@ export class ReferenceDiscoverer {
             continue;
           }
 
-          const fileScan = scanLexicalFile(content, input.symbol, candidate, maxReferencesPerFile);
+          const fileScan = scanLexicalFile(content, input.symbol, candidate, effectivePerFileLimit);
           if (fileScan.truncated) {
             truncated = true;
             if (limitReached === undefined) {
-              limitReached = 'maxReferencesPerFile';
+              limitReached =
+                effectivePerFileLimit < maxReferencesPerFile ? 'maxTotalReferences' : 'maxReferencesPerFile';
             }
           }
           filesExamined++;

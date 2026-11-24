@@ -408,7 +408,8 @@ describe('ReferenceDiscoverer', () => {
     it('respects global maximum file count', async () => {
       const d = createDiscoverer(vfs, 'file:///root', { maxFilesExamined: 2 });
       const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
-      expect(result.metadata.filesExamined).toBeLessThanOrEqual(2);
+      // Only files actually scanned count; skipped files do not consume the budget.
+      expect(result.metadata.filesExamined).toBe(2);
       expect(result.metadata.truncated).toBe(true);
       expect(result.metadata.limitReached).toBe('maxFilesExamined');
       expect(result.metadata.completed).toBe(false);
@@ -417,9 +418,45 @@ describe('ReferenceDiscoverer', () => {
     it('respects global total bytes read', async () => {
       const d = createDiscoverer(vfs, 'file:///root', { maxTotalBytesRead: 10 });
       const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
-      if (result.metadata.truncated) {
-        expect(result.metadata.limitReached).toBe('maxTotalBytesRead');
-      }
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxTotalBytesRead');
+      expect(result.metadata.completed).toBe(false);
+    });
+
+    it('tracks exact byte consumption via maxTotalBytesRead', async () => {
+      // a.js: 'foo()\nconst foo = 1;\nbar.foo\n' = 29 UTF-8 bytes
+      // c.py: 'def foo():\n    return foo\n'             = 26 UTF-8 bytes
+      const byteVfs = new VirtualFileSystem();
+      byteVfs.addFile('/root/a.js', 'foo()\nconst foo = 1;\nbar.foo\n');
+      byteVfs.addFile('/root/c.py', 'def foo():\n    return foo\n');
+      const d = createDiscoverer(byteVfs, 'file:///root', { maxTotalBytesRead: 29 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      // a.js (29 bytes) fits the budget exactly; c.py (26 bytes) would exceed it
+      expect(result.metadata.filesExamined).toBe(1);
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxTotalBytesRead');
+      expect(result.metadata.completed).toBe(false);
+    });
+
+    it('enforces maxTotalBytesRead with multibyte UTF-8 fixtures', async () => {
+      // 'café\n' = 6 UTF-8 bytes (é is 2 bytes); '中\n' = 4 UTF-8 bytes (中 is 3 bytes).
+      expect(Buffer.byteLength('café\n', 'utf8')).toBe(6);
+      expect(Buffer.byteLength('中\n', 'utf8')).toBe(4);
+      const byteVfs = new VirtualFileSystem();
+      byteVfs.addFile('/root/unicode.js', 'café\n');
+      byteVfs.addFile('/root/unicode.py', '中\n');
+      const d = createDiscoverer(byteVfs, 'file:///root', { maxTotalBytesRead: 6 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      // unicode.js (6 bytes) fits the remaining budget exactly and is scanned
+      expect(result.metadata.filesExamined).toBe(1);
+      const js = fileByPath(result, 'unicode.js')!;
+      expect(js.skipped).toBe(false);
+      // unicode.py (4 bytes) would exceed the remaining budget and is rejected before scanning
+      const py = fileByPath(result, 'unicode.py');
+      expect(py?.skipped).toBe(true);
+      expect(py?.skipReason).toBe('tooLarge');
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxTotalBytesRead');
       expect(result.metadata.completed).toBe(false);
     });
 
@@ -444,12 +481,97 @@ describe('ReferenceDiscoverer', () => {
       expect(result.metadata.completed).toBe(false);
     });
 
-    it('respects global maximum output size', async () => {
-      const d = createDiscoverer(vfs, 'file:///root', { maxOutputSize: 40 });
+    it('shares maxTotalReferences across AST and lexical files', async () => {
+      // a.js (AST): exactly 2 discoverable references ('foo()' call, 'const foo = 1'
+      // declaration; 'bar.foo' is a property name and is skipped by the AST finder).
+      // c.py (lexical): 4 discoverable whole-word 'foo' references, but only 2 fit
+      // in the remaining global budget after a.js consumes 2 of the 4-reference limit.
+      const crossVfs = new VirtualFileSystem();
+      crossVfs.addFile('/root/a.js', 'foo()\nconst foo = 1;\nbar.foo\n');
+      crossVfs.addFile('/root/c.py', 'foo\nfoo\nfoo\nfoo\n');
+      const d = createDiscoverer(crossVfs, 'file:///root', { maxTotalReferences: 4, maxReferencesPerFile: 100 });
       const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
-      if (result.metadata.truncated) {
-        expect(result.metadata.limitReached).toBe('maxOutputSize');
-      }
+      // Global shared budget: 4 total references across both finders.
+      expect(result.metadata.totalReferences).toBe(4);
+      // No more than four references are returned.
+      expect(result.metadata.totalReferences).toBeLessThanOrEqual(4);
+      expect(result.metadata.truncated).toBe(true);
+      // c.py has additional discoverable references that were omitted.
+      expect(result.metadata.limitReached).toBe('maxTotalReferences');
+      expect(result.metadata.completed).toBe(false);
+
+      const ajs = fileByPath(result, 'a.js')!;
+      const cpy = fileByPath(result, 'c.py')!;
+      // a.js scanned first (alphabetical), consumes 2 of the 4-reference budget
+      expect(ajs.referenceCount).toBe(2);
+      // c.py receives only the remaining 2 references although it has 4 discoverable;
+      // this proves the lexical scanner is constrained by the remaining global budget,
+      // not merely that two files happen to contain four references in total.
+      expect(cpy.referenceCount).toBe(2);
+      expect(cpy.referenceCount).toBeLessThan(4);
+      expect(ajs.referenceCount + cpy.referenceCount).toBe(4);
+    });
+
+    it('exact limit with complete discovery: all candidates examined, none omitted', async () => {
+      // maxTotalReferences = 4 and the workspace contains exactly 4 discoverable
+      // references (2 AST in a.js, 2 lexical in c.py) with no further matches
+      // anywhere. All candidates are examined and no reference is omitted.
+      const completeVfs = new VirtualFileSystem();
+      completeVfs.addFile('/root/a.js', 'foo()\nconst foo = 1;\nbar.foo\n');
+      completeVfs.addFile('/root/c.py', 'foo\nfoo\n');
+      const d = createDiscoverer(completeVfs, 'file:///root', { maxTotalReferences: 4, maxReferencesPerFile: 100 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      expect(result.metadata.totalReferences).toBe(4);
+      expect(result.metadata.filesExamined).toBe(2);
+      // Contract ambiguity: nothing was truncated (all results returned, all
+      // candidates examined), so completed:true / truncated:false is defensible.
+      // The implementation instead terminates via the post-file limit check and
+      // reports truncated:true / completed:false / limitReached:'maxTotalReferences',
+      // indistinguishable from the omitted-results case at the break point.
+      // This test captures current behavior; see the final report for the
+      // recommended decision.
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.completed).toBe(false);
+      expect(result.metadata.limitReached).toBe('maxTotalReferences');
+    });
+
+    it('exact limit with additional results omitted', async () => {
+      // maxTotalReferences = 4 but the workspace contains more than 4 discoverable
+      // references (2 AST in a.js, 4 lexical in c.py), so the limit prevents
+      // further discovery.
+      const omittedVfs = new VirtualFileSystem();
+      omittedVfs.addFile('/root/a.js', 'foo()\nconst foo = 1;\nbar.foo\n');
+      omittedVfs.addFile('/root/c.py', 'foo\nfoo\nfoo\nfoo\n');
+      const d = createDiscoverer(omittedVfs, 'file:///root', { maxTotalReferences: 4, maxReferencesPerFile: 100 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      expect(result.metadata.totalReferences).toBe(4);
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxTotalReferences');
+      expect(result.metadata.completed).toBe(false);
+    });
+
+    it('stops scanning when remaining global reference budget is zero', async () => {
+      // a.js (AST): 2 matches exhausts a maxTotalReferences of 2
+      const crossVfs = new VirtualFileSystem();
+      crossVfs.addFile('/root/a.js', 'foo()\nconst foo = 1;\nbar.foo\n');
+      crossVfs.addFile('/root/c.py', 'def foo():\n    return foo\n');
+      const d = createDiscoverer(crossVfs, 'file:///root', { maxTotalReferences: 2, maxReferencesPerFile: 100 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      expect(result.metadata.totalReferences).toBe(2);
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxTotalReferences');
+      expect(result.metadata.completed).toBe(false);
+      // Zero remaining budget prevents scanning the second file entirely
+      expect(result.metadata.filesExamined).toBe(1);
+      expect(fileByPath(result, 'c.py')).toBeUndefined();
+    });
+
+    it('respects global maximum output size', async () => {
+      const d = createDiscoverer(vfs, 'file:///root', { maxOutputSize: 1 });
+      const result = await d.find({ symbol: 'foo', workspaceFolder: makeWorkspaceFolder('file:///root', 'root') });
+      expect(result.metadata.truncated).toBe(true);
+      expect(result.metadata.limitReached).toBe('maxOutputSize');
+      expect(result.metadata.completed).toBe(false);
     });
 
     it('reports truncation and limitReached metadata consistently', async () => {
