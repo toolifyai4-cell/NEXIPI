@@ -164,13 +164,41 @@ export interface ModelRequest {
   readonly metadata?: Record<string, unknown> | undefined;
 }
 
-export const ModelMessageSchema = z.object({
-  role: z.enum(['system', 'user', 'assistant', 'tool']),
-  content: z.union([z.string(), z.array(z.unknown())]),
-  name: z.string().optional(),
-  toolCallId: z.string().optional(),
-  toolCalls: z.array(ModelToolCallSchema).optional(),
-});
+export const ModelMessageSchema = z
+  .object({
+    role: z.enum(['system', 'user', 'assistant', 'tool']),
+    content: z.union([z.string(), z.array(z.unknown())]),
+    name: z.string().optional(),
+    toolCallId: z.string().optional(),
+    toolCalls: z.array(ModelToolCallSchema).optional(),
+  })
+  .refine(
+    (msg) => {
+      // toolCallId is required and must be non-empty for tool messages
+      if (msg.role === 'tool') {
+        return typeof msg.toolCallId === 'string' && msg.toolCallId.length > 0;
+      }
+      // toolCallId must not be present on non-tool messages
+      return msg.toolCallId === undefined;
+    },
+    {
+      message: 'toolCallId is required for tool messages and must not be present on other roles',
+      path: ['toolCallId'],
+    }
+  )
+  .refine(
+    (msg) => {
+      // toolCalls are only allowed on assistant messages
+      if (msg.role === 'assistant') {
+        return true;
+      }
+      return msg.toolCalls === undefined || msg.toolCalls.length === 0;
+    },
+    {
+      message: 'toolCalls are only allowed on assistant messages',
+      path: ['toolCalls'],
+    }
+  );
 
 export type ModelMessage = z.output<typeof ModelMessageSchema>;
 export type ModelMessageInput = z.input<typeof ModelMessageSchema>;

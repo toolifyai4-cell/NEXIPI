@@ -549,6 +549,34 @@ describe('types', () => {
       expect(result.success).toBe(true);
     });
 
+    it('should reject cyclic references in arguments', () => {
+      const cyclic: any = { a: 1 };
+      cyclic.self = cyclic;
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: cyclic,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
+    it('should reject cyclic arrays in arguments', () => {
+      const cyclicArr: any = [1, 2];
+      cyclicArr.push(cyclicArr);
+      const result = ModelToolCallSchema.safeParse({
+        id: 'call_123',
+        name: 'test',
+        arguments: cyclicArr,
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.message.includes('Cyclic'))).toBe(true);
+      }
+    });
+
     it('should be JSON-serializable', () => {
       const toolCall: ModelToolCall = {
         id: 'call_123',
@@ -769,6 +797,102 @@ describe('types', () => {
 
       const result = ModelMessageSchema.safeParse(message);
       expect(result.success).toBe(true);
+    });
+
+    it('should reject tool message without toolCallId', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'tool',
+        content: 'File contents here',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCallId'))).toBe(true);
+      }
+    });
+
+    it('should reject tool message with empty toolCallId', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'tool',
+        content: 'File contents here',
+        toolCallId: '',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCallId'))).toBe(true);
+      }
+    });
+
+    it('should reject system message with toolCalls', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'system',
+        content: 'System prompt',
+        toolCalls: [{ id: 'call_1', name: 'test', arguments: {} }],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCalls'))).toBe(true);
+      }
+    });
+
+    it('should reject user message with toolCalls', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'user',
+        content: 'Hello',
+        toolCalls: [{ id: 'call_1', name: 'test', arguments: {} }],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCalls'))).toBe(true);
+      }
+    });
+
+    it('should reject tool message with toolCalls', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'tool',
+        content: 'Result',
+        toolCallId: 'call_1',
+        toolCalls: [{ id: 'call_2', name: 'test', arguments: {} }],
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCalls'))).toBe(true);
+      }
+    });
+
+    it('should reject user message with toolCallId', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'user',
+        content: 'Hello',
+        toolCallId: 'call_1',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCallId'))).toBe(true);
+      }
+    });
+
+    it('should reject assistant message with toolCallId', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'assistant',
+        content: 'Hello',
+        toolCallId: 'call_1',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCallId'))).toBe(true);
+      }
+    });
+
+    it('should reject system message with toolCallId', () => {
+      const result = ModelMessageSchema.safeParse({
+        role: 'system',
+        content: 'System',
+        toolCallId: 'call_1',
+      });
+      expect(result.success).toBe(false);
+      if (!result.success) {
+        expect(result.error.issues.some(i => i.path.includes('toolCallId'))).toBe(true);
+      }
     });
   });
 

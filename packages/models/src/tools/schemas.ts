@@ -10,17 +10,44 @@ export type ToolCapability = z.infer<typeof ToolCapabilitySchema>;
  * Structurally excludes functions and class instances (including Zod schema
  * objects), so it is a guarantee that a ModelToolDefinition carries no
  * executable logic. Also excludes non-finite numbers (Infinity, NaN, -Infinity).
+ * Cyclic references are rejected to prevent unbounded recursion during validation.
  */
-const JsonSchemaValueSchemaInternal: ZodTypeAny = z.lazy(() =>
-  z.union([
-    z.string(),
-    z.number().finite(),
-    z.boolean(),
-    z.null(),
-    z.array(JsonSchemaValueSchemaInternal),
-    z.record(JsonSchemaValueSchemaInternal),
-  ])
-);
+function hasCycle(value: unknown): boolean {
+  const seen = new WeakSet<object>();
+  function check(v: unknown): boolean {
+    if (v === null || typeof v !== 'object') {
+      return false;
+    }
+    if (seen.has(v)) {
+      return true;
+    }
+    seen.add(v);
+    if (Array.isArray(v)) {
+      return v.some(check);
+    }
+    return Object.values(v).some(check);
+  }
+  return check(value);
+}
+
+const JsonSchemaValueSchemaInternal: ZodTypeAny = z
+  .unknown()
+  .refine(
+    (v) => !hasCycle(v),
+    { message: 'Cyclic references are not allowed in JSON schema values' }
+  )
+  .pipe(
+    z.lazy(() =>
+      z.union([
+        z.string(),
+        z.number().finite(),
+        z.boolean(),
+        z.null(),
+        z.array(JsonSchemaValueSchemaInternal),
+        z.record(JsonSchemaValueSchemaInternal),
+      ])
+    )
+  );
 
 export const JsonSchemaValueSchema: ZodTypeAny = JsonSchemaValueSchemaInternal;
 export type JsonSchemaValue = z.infer<typeof JsonSchemaValueSchema>;
