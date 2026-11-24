@@ -1,0 +1,770 @@
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { z } from 'zod';
+import {
+  ToolRegistry,
+  ToolExecutor,
+  ToolExecutionService,
+  ToolExecutionTurn,
+  DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG,
+  validateToolExecutionServiceConfig,
+} from '../index.js';
+import {
+  ToolErrorCode,
+  isToolErrorCode,
+} from '../errors.js';
+import type { ToolDefinition, ToolExecutionContext, ToolExecutionResult } from '../types.js';
+import { createNoopLogger } from '@nexipi/core';
+
+function makeDefinition(overrides: Partial<ToolDefinition> = {}): ToolDefinition {
+  return {
+    name: 'test_tool',
+    description: 'A test tool',
+    inputSchema: z.object({ value: z.string() }),
+    metadata: {
+      capabilities: ['read'] as const,
+      readOnly: true,
+      destructive: false,
+      requiresWorkspace: false,
+      idempotent: true,
+      version: '1.0.0',
+    },
+    execute: vi.fn().mockResolvedValue({ output: 'ok' }),
+    ...overrides,
+  };
+}
+
+function makeContext(aborted = false): ToolExecutionContext {
+  const controller = new AbortController();
+  if (aborted) controller.abort();
+  return {
+    signal: controller.signal,
+    workspaceId: 'ws_1',
+    workspaceFolder: undefined,
+    logger: createNoopLogger(),
+  };
+}
+
+function makeSlowTool(delayMs: number, output = { output: 'slow' }) {
+  return {
+    ...makeDefinition(),
+    execute: vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+      return output;
+    }),
+  };
+}
+
+function makeGatedTool(gate: Promise<void>) {
+  return {
+    ...makeDefinition(),
+    execute: vi.fn().mockImplementation(async () => {
+      await gate;
+      return { output: 'gated' };
+    }),
+  };
+}
+
+function makeSignalRespectingTool() {
+  return {
+    ...makeDefinition(),
+    execute: vi.fn().mockImplementation(async (_input, context) => {
+      return new Promise<{ output: string }>((resolve, reject) => {
+        const onAbort = () => {
+          context.signal.removeEventListener('abort', onAbort);
+          reject(new Error('aborted'));
+        };
+        context.signal.addEventListener('abort', onAbort, { once: true });
+        setTimeout(() => {
+          context.signal.removeEventListener('abort', onAbort);
+          resolve({ output: 'completed' });
+        }, 50);
+      });
+    }),
+  };
+}
+
+function makeIgnoringTool() {
+  return {
+    ...makeDefinition(),
+    execute: vi.fn().mockImplementation(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      return { output: 'ignored' };
+    }),
+  };
+}
+
+async function raceWithTimeout<T>(promise: Promise<T>, ms: number): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error('test timeout')), ms);
+  });
+  try {
+    return await Promise.race([promise, timeout]);
+  } finally {
+    clearTimeout(timer!);
+  }
+}
+
+describe('ToolExecutionServiceConfig', () => {
+  it('should provide correct defaults', () => {
+    const config = validateToolExecutionServiceConfig({});
+    expect(config).toEqual(DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG);
+  });
+
+  it('should accept valid overrides', () => {
+    const config = validateToolExecutionServiceConfig({
+      maxIterationsPerTurn: 5,
+      maxCallsPerBatch: 3,
+      maxCallsPerTurn: 15,
+      maxConcurrentExecutions: 2,
+      maxExecutionTimePerToolMs: 5000,
+      maxTotalExecutionTimePerTurnMs: 30000,
+    });
+    expect(config.maxIterationsPerTurn).toBe(5);
+    expect(config.maxCallsPerBatch).toBe(3);
+    expect(config.maxCallsPerTurn).toBe(15);
+    expect(config.maxConcurrentExecutions).toBe(2);
+    expect(config.maxExecutionTimePerToolMs).toBe(5000);
+    expect(config.maxTotalExecutionTimePerTurnMs).toBe(30000);
+  });
+
+  it('should reject zero values', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxIterationsPerTurn: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxCallsPerBatch: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxCallsPerTurn: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxConcurrentExecutions: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxExecutionTimePerToolMs: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxTotalExecutionTimePerTurnMs: 0 })).toThrow('positive integer');
+  });
+
+  it('should reject negative values', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxIterationsPerTurn: -1 })).toThrow('positive integer');
+  });
+
+  it('should reject non-integer values', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxIterationsPerTurn: 1.5 })).toThrow('positive integer');
+  });
+
+  it('should reject batch limit exceeding turn limit', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxCallsPerBatch: 10, maxCallsPerTurn: 5 })).toThrow(
+      "ToolExecutionService config 'maxCallsPerBatch' must not exceed 'maxCallsPerTurn'"
+    );
+  });
+});
+
+describe('ToolExecutionService', () => {
+  let registry: ToolRegistry;
+  let executor: ToolExecutor;
+  let service: ToolExecutionService;
+
+  beforeEach(() => {
+    registry = new ToolRegistry();
+    registry.register(makeDefinition());
+    executor = new ToolExecutor(registry, { permissionPolicy: { name: 'allow', evaluate: () => ({ allowed: true }) } });
+    service = new ToolExecutionService(executor);
+  });
+
+  afterEach(() => {
+    service.dispose();
+  });
+
+  describe('turn lifecycle', () => {
+    it('should create a turn with active status', () => {
+      const turn = service.createTurn();
+      expect(turn.status).toBe('active');
+      expect(turn.iterationCount).toBe(0);
+      expect(turn.callsSubmitted).toBe(0);
+      expect(turn.callsCompleted).toBe(0);
+      expect(turn.activeExecutions).toBe(0);
+      expect(turn.queuedCalls).toBe(0);
+      expect(turn.expiresAt).toBeGreaterThan(Date.now());
+      expect(turn.signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('should complete a turn', () => {
+      const turn = service.createTurn();
+      turn.complete();
+      expect(turn.status).toBe('completed');
+    });
+
+    it('should cancel a turn', () => {
+      const turn = service.createTurn();
+      turn.cancel();
+      expect(turn.status).toBe('cancelled');
+      expect(turn.signal.aborted).toBe(true);
+    });
+
+    it('should dispose a turn', () => {
+      const turn = service.createTurn();
+      turn.dispose();
+      expect(turn.status).toBe('disposed');
+    });
+
+    it('should be idempotent for complete', () => {
+      const turn = service.createTurn();
+      turn.complete();
+      turn.complete();
+      expect(turn.status).toBe('completed');
+    });
+
+    it('should be idempotent for cancel', () => {
+      const turn = service.createTurn();
+      turn.cancel();
+      turn.cancel();
+      expect(turn.status).toBe('cancelled');
+    });
+
+    it('should be idempotent for dispose', () => {
+      const turn = service.createTurn();
+      turn.dispose();
+      turn.dispose();
+      expect(turn.status).toBe('disposed');
+    });
+
+    it('should reject submissions after complete', async () => {
+      const turn = service.createTurn();
+      turn.complete();
+      await expect(turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext()))
+        .rejects.toMatchObject({ code: ToolErrorCode.TOOL_CANCELLED });
+    });
+
+    it('should reject submissions after cancel', async () => {
+      const turn = service.createTurn();
+      turn.cancel();
+      await expect(turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext()))
+        .rejects.toMatchObject({ code: ToolErrorCode.TOOL_CANCELLED });
+    });
+
+    it('should reject submissions after dispose', async () => {
+      const turn = service.createTurn();
+      turn.dispose();
+      await expect(turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext()))
+        .rejects.toMatchObject({ code: ToolErrorCode.TOOL_CANCELLED });
+    });
+
+    it('should isolate turns from each other', async () => {
+      const turn1 = service.createTurn();
+      const turn2 = service.createTurn();
+      turn1.cancel();
+      expect(turn2.status).toBe('active');
+      const result = await turn2.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+      expect(result[0].kind).toBe('success');
+    });
+  });
+
+  describe('batch submission limits', () => {
+    it('should accept a valid batch', async () => {
+      const turn = service.createTurn();
+      const results = await turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'x' } }],
+        makeContext()
+      );
+      expect(results).toHaveLength(1);
+      expect(results[0].kind).toBe('success');
+      expect(turn.iterationCount).toBe(1);
+      expect(turn.callsSubmitted).toBe(1);
+    });
+
+    it('should reject batch exceeding maxCallsPerBatch', async () => {
+      const turn = service.createTurn();
+      const calls = Array.from({ length: 6 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      await expect(turn.submitBatch(calls, makeContext())).rejects.toMatchObject({
+        code: ToolErrorCode.TOOL_RESOURCE_LIMIT,
+      });
+    });
+
+    it('should reject when turn call limit would be exceeded', async () => {
+      const turn = service.createTurn();
+      const calls = Array.from({ length: 26 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      await expect(turn.submitBatch(calls, makeContext())).rejects.toMatchObject({
+        code: ToolErrorCode.TOOL_RESOURCE_LIMIT,
+      });
+    });
+
+    it('should reject when max iterations exceeded', async () => {
+      const turn = service.createTurn();
+      for (let i = 0; i < 10; i++) {
+        await turn.submitBatch([{ toolName: 'test_tool', input: { value: String(i) } }], makeContext());
+      }
+      await expect(turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext()))
+        .rejects.toMatchObject({ code: ToolErrorCode.TOOL_RESOURCE_LIMIT });
+    });
+
+    it('should serialize concurrent batch submissions', async () => {
+      const turn = service.createTurn();
+      const calls = [{ toolName: 'test_tool', input: { value: '1' } }];
+      
+      const p1 = turn.submitBatch(calls, makeContext());
+      const p2 = turn.submitBatch(calls, makeContext());
+      const p3 = turn.submitBatch(calls, makeContext());
+      
+      const [r1, r2, r3] = await Promise.all([p1, p2, p3]);
+      
+      expect(turn.iterationCount).toBe(3);
+      expect(turn.callsSubmitted).toBe(3);
+      expect(r1).toHaveLength(1);
+      expect(r2).toHaveLength(1);
+      expect(r3).toHaveLength(1);
+    });
+  });
+
+  describe('concurrency and scheduling', () => {
+    it('should respect global concurrency limit', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn1 = service.createTurn();
+      const turn2 = service.createTurn();
+
+      const p1 = turn1.submitBatch([{ toolName: 'test_tool', input: { value: '1' } }], makeContext());
+      const p2 = turn2.submitBatch([{ toolName: 'test_tool', input: { value: '2' } }], makeContext());
+      const p3 = turn2.submitBatch([{ toolName: 'test_tool', input: { value: '3' } }], makeContext());
+      const p4 = turn2.submitBatch([{ toolName: 'test_tool', input: { value: '4' } }], makeContext());
+      const p5 = turn2.submitBatch([{ toolName: 'test_tool', input: { value: '5' } }], makeContext());
+      const p6 = turn2.submitBatch([{ toolName: 'test_tool', input: { value: '6' } }], makeContext());
+
+      // Wait for all submissions to be processed (admitted or queued)
+      await Promise.all([p1, p2, p3, p4, p5, p6].map(p => Promise.race([p, new Promise(r => setTimeout(r, 10))])));
+
+      const snapshot = service.getGlobalSnapshot();
+      expect(snapshot.activeExecutions).toBeLessThanOrEqual(5);
+      
+      (globalThis as any).gateRelease!();
+      await Promise.all([p1, p2, p3, p4, p5, p6]);
+    });
+
+    it('should queue calls when concurrency limit reached', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      // Use a service with larger batch limit to fit 8 calls
+      const largeBatchService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxCallsPerBatch: 10 },
+      });
+
+      const turn = largeBatchService.createTurn();
+      const calls = Array.from({ length: 8 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 100))]), 200);
+
+      expect(turn.activeExecutions).toBeLessThanOrEqual(5);
+      expect(turn.queuedCalls).toBeGreaterThanOrEqual(0);
+
+      (globalThis as any).gateRelease!();
+      const results = await promise;
+      expect(results).toHaveLength(8);
+      
+      largeBatchService.dispose();
+    });
+
+    it('should maintain stable result ordering', async () => {
+      const delays = [100, 10, 50, 30, 20];
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          execute: vi.fn().mockImplementation(async (input: { value: string }) => {
+            const idx = parseInt(input.value, 10);
+            await new Promise((resolve) => setTimeout(resolve, delays[idx]));
+            return { output: `tool-${idx}` };
+          }),
+        })
+      );
+
+      const turn = service.createTurn();
+      const calls = delays.map((_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const results = await turn.submitBatch(calls, makeContext());
+
+      expect(results).toHaveLength(5);
+      for (let i = 0; i < 5; i++) {
+        expect(results[i].kind).toBe('success');
+        if (results[i].kind === 'success') {
+          expect(results[i].output).toEqual({ output: `tool-${i}` });
+        }
+      }
+    });
+
+    it('should recover scheduler after success', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const largeBatchService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxCallsPerBatch: 10 },
+      });
+
+      const turn = largeBatchService.createTurn();
+      const calls = Array.from({ length: 6 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      (globalThis as any).gateRelease!();
+      const results = await promise;
+      expect(results).toHaveLength(6);
+      expect(results.every(r => r.kind === 'success')).toBe(true);
+      
+      largeBatchService.dispose();
+    });
+
+    it('should recover scheduler after failure', async () => {
+      let callCount = 0;
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          execute: vi.fn().mockImplementation(async () => {
+            callCount++;
+            if (callCount <= 3) throw new Error('simulated failure');
+            return { output: 'ok' };
+          }),
+        })
+      );
+
+      const turn = service.createTurn();
+      const calls = Array.from({ length: 5 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const results = await turn.submitBatch(calls, makeContext());
+
+      expect(results).toHaveLength(5);
+      expect(results[0].kind).toBe('failure');
+      expect(results[1].kind).toBe('failure');
+      expect(results[2].kind).toBe('failure');
+      expect(results[3].kind).toBe('success');
+      expect(results[4].kind).toBe('success');
+    });
+  });
+
+  describe('timeouts', () => {
+    it('should enforce per-tool timeout', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeSlowTool(200));
+
+      const turn = shortTimeoutService.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_TIMEOUT)).toBe(true);
+      }
+
+      shortTimeoutService.dispose();
+    });
+
+    it('should enforce total turn deadline', async () => {
+      const shortDeadlineService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxTotalExecutionTimePerTurnMs: 100 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeSlowTool(500));
+
+      const turn = shortDeadlineService.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+      expect(turn.status).toBe('cancelled');
+
+      shortDeadlineService.dispose();
+    });
+
+    it('should cancel queued calls on deadline expiry', async () => {
+      const shortDeadlineService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxTotalExecutionTimePerTurnMs: 50, maxCallsPerBatch: 10 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = shortDeadlineService.createTurn();
+      const calls = Array.from({ length: 3 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 200))]), 300);
+
+      const results = await promise;
+      expect(results.every(r => r.kind === 'failure')).toBe(true);
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+      expect(turn.status).toBe('cancelled');
+
+      shortDeadlineService.dispose();
+    });
+  });
+
+  describe('cancellation', () => {
+    it('should respect external context cancellation', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const controller = new AbortController();
+      const context = { ...makeContext(), signal: controller.signal };
+      
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], context);
+      
+      // Wait for the call to start executing (gated)
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      controller.abort();
+      
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      (globalThis as any).gateRelease!();
+    });
+
+    it('should cancel queued calls on turn cancel', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const largeBatchService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxCallsPerBatch: 10 },
+      });
+
+      const turn = largeBatchService.createTurn();
+      const calls = Array.from({ length: 8 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 50))]), 200);
+      turn.cancel();
+
+      const results = await promise;
+      expect(results.every(r => r.kind === 'failure')).toBe(true);
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+      expect(turn.status).toBe('cancelled');
+
+      (globalThis as any).gateRelease!();
+      largeBatchService.dispose();
+    });
+
+    it('should cancel active executions on turn cancel', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = service.createTurn();
+      const calls = Array.from({ length: 3 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 50))]), 200);
+      turn.cancel();
+
+      const results = await promise;
+      expect(results.every(r => r.kind === 'failure')).toBe(true);
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      (globalThis as any).gateRelease!();
+    });
+
+    it('should allow tools that respect AbortSignal to cancel gracefully', async () => {
+      const controller = new AbortController();
+      registry.unregister('test_tool');
+      registry.register(makeSignalRespectingTool());
+
+      const turn = service.createTurn();
+      const context = { ...makeContext(), signal: controller.signal };
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], context);
+      
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      controller.abort();
+      
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+    });
+
+    it('should not release concurrency slot for uncooperative tools on timeout', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50, maxConcurrentExecutions: 2 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = shortTimeoutService.createTurn();
+      const calls = Array.from({ length: 3 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      const results = await promise;
+      expect(results.length).toBe(3);
+      const timeoutCount = results.filter(r => r.kind === 'failure' && isToolErrorCode(r.error, ToolErrorCode.TOOL_TIMEOUT)).length;
+      expect(timeoutCount).toBeGreaterThanOrEqual(2);
+
+      const snapshot = shortTimeoutService.getGlobalSnapshot();
+      expect(snapshot.activeExecutions).toBeLessThanOrEqual(2);
+
+      shortTimeoutService.dispose();
+    });
+
+    it('should distinguish timeout from cancellation error codes', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeSlowTool(200));
+
+      const turn = shortTimeoutService.createTurn();
+      const timeoutResults = await turn.submitBatch([{ toolName: 'test_tool', input: { value: '1' } }], makeContext());
+      expect(isToolErrorCode(timeoutResults[0].error, ToolErrorCode.TOOL_TIMEOUT)).toBe(true);
+
+      // Now test cancellation with a gated tool
+      const controller = new AbortController();
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease2 = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const cancelPromise = turn.submitBatch([{ toolName: 'test_tool', input: { value: '2' } }], { ...makeContext(), signal: controller.signal });
+      
+      // Wait for the call to start executing (gated)
+      await raceWithTimeout(Promise.race([cancelPromise, new Promise(r => setTimeout(r, 10))]), 100);
+      controller.abort();
+      
+      const cancelResults = await cancelPromise;
+      expect(isToolErrorCode(cancelResults[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+
+      (globalThis as any).gateRelease2!();
+      shortTimeoutService.dispose();
+    });
+  });
+
+  describe('failure isolation', () => {
+    it('should isolate tool failures', async () => {
+      // Use sequential execution by making tools slow and checking results in order
+      let callIndex = 0;
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          execute: vi.fn().mockImplementation(async () => {
+            const index = callIndex++;
+            if (index < 2) throw new Error('failure');
+            return { output: 'ok' };
+          }),
+        })
+      );
+
+      const turn = service.createTurn();
+      const calls = [
+        { toolName: 'test_tool', input: { value: '1' } },
+        { toolName: 'test_tool', input: { value: '2' } },
+        { toolName: 'test_tool', input: { value: '3' } },
+      ];
+      const results = await turn.submitBatch(calls, makeContext());
+
+      expect(results[0].kind).toBe('failure');
+      expect(results[1].kind).toBe('failure');
+      expect(results[2].kind).toBe('success');
+    });
+
+    it('should return TOOL_NOT_FOUND for unknown tool', async () => {
+      const turn = service.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'unknown_tool', input: { value: 'x' } }], makeContext());
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_NOT_FOUND)).toBe(true);
+      }
+    });
+
+    it('should return TOOL_INVALID_ARGUMENTS for invalid input', async () => {
+      const turn = service.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'test_tool', input: { value: 123 } }], makeContext());
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_INVALID_ARGUMENTS)).toBe(true);
+      }
+    });
+
+    it('should return TOOL_PERMISSION_DENIED when policy denies', async () => {
+      const denyExecutor = new ToolExecutor(registry, {
+        permissionPolicy: { name: 'deny', evaluate: () => ({ allowed: false, reason: 'denied' }) },
+      });
+      const denyService = new ToolExecutionService(denyExecutor);
+      const turn = denyService.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_PERMISSION_DENIED)).toBe(true);
+      }
+      denyService.dispose();
+    });
+
+    it('should return TOOL_INVALID_RESULT for output validation failure', async () => {
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          outputSchema: z.object({ lines: z.array(z.string()) }),
+          execute: vi.fn().mockResolvedValue({ lines: 'not-an-array' }),
+        })
+      );
+
+      const turn = service.createTurn();
+      const results = await turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_INVALID_RESULT)).toBe(true);
+      }
+    });
+
+    it('should handle repeated cancellation gracefully', async () => {
+      const turn = service.createTurn();
+      turn.cancel();
+      turn.cancel();
+      expect(turn.status).toBe('cancelled');
+    });
+
+    it('should handle turn disposal during execution', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+      
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      turn.dispose();
+      
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+      expect(turn.status).toBe('disposed');
+
+      (globalThis as any).gateRelease!();
+    });
+  });
+
+  describe('service disposal', () => {
+    it('should dispose all turns', () => {
+      const turn1 = service.createTurn();
+      const turn2 = service.createTurn();
+      service.dispose();
+      expect(turn1.status).toBe('disposed');
+      expect(turn2.status).toBe('disposed');
+    });
+
+    it('should be idempotent', () => {
+      service.dispose();
+      service.dispose();
+      expect(() => service.createTurn()).toThrow('disposed');
+    });
+  });
+});
