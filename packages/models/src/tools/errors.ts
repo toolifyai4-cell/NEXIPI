@@ -41,7 +41,6 @@ export class ToolError extends EngineError<ToolErrorCode> {
       code: this.code,
       toolName: this.toolName,
       retryable: this.retryable,
-      context: this.context,
     };
   }
 }

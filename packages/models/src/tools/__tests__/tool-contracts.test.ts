@@ -103,13 +103,13 @@ describe('ToolError', () => {
       expect(json.code).toBe(ToolErrorCode.TOOL_TIMEOUT);
       expect(json.toolName).toBe('search_code');
       expect(json.retryable).toBe(false);
-      expect(json.context?.requestId).toBe('req-123');
-      expect(json.context?.normalField).toBe('visible');
 
       // Unsafe fields must not be serialized
       expect(json.message).toBeUndefined();
       expect(json.cause).toBeUndefined();
       expect(json.stack).toBeUndefined();
+      expect(json.context).toBeUndefined();
+      expect(json).not.toHaveProperty('context');
     });
 
     it('should not serialize raw cause object', () => {
@@ -142,15 +142,15 @@ describe('ToolError', () => {
       expect(json.code).toBe(ToolErrorCode.TOOL_EXECUTION_FAILED);
     });
 
-    it('should redact sensitive context keys in serialization', () => {
-      const context = createSanitizedContext({
+    it('should not serialize context, even when it contains sensitive keys', () => {
+      const context = {
         requestId: 'req-1',
         apiKey: 'sk-12345',
         password: 'hunter2',
         authorization: 'Bearer token',
         accessToken: 'at-abc',
         normalField: 'visible',
-      });
+      };
       const error = new ToolError(
         ToolErrorCode.TOOL_PROVIDER_ERROR,
         'Provider error',
@@ -158,12 +158,72 @@ describe('ToolError', () => {
       );
 
       const json = error.toJSON();
-      expect(json.context?.apiKey).toBe('[REDACTED]');
-      expect(json.context?.password).toBe('[REDACTED]');
-      expect(json.context?.authorization).toBe('[REDACTED]');
-      expect(json.context?.accessToken).toBe('[REDACTED]');
-      expect(json.context?.normalField).toBe('visible');
-      expect(json.context?.requestId).toBe('req-1');
+      expect(json.context).toBeUndefined();
+      expect(json).not.toHaveProperty('context');
+    });
+
+    it('should not leak secret values stored under non-sensitive context keys', () => {
+      const context = {
+        detail: 'API key: sk-secret-value',
+        operation: 'failed',
+        description: 'Bearer secret-token',
+        diagnostic: 'authorization: secret-value',
+      };
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Execution failed',
+        { toolName: 'read_file', context }
+      );
+
+      const json = error.toJSON();
+      expect(json.context).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('sk-secret-value');
+      expect(serialized).not.toContain('secret-token');
+      expect(serialized).not.toContain('secret-value');
+      expect(serialized).not.toContain('API key');
+      expect(serialized).not.toContain('Bearer');
+      expect(serialized).not.toContain('authorization');
+    });
+
+    it('should not leak nested secret values in context', () => {
+      const context = {
+        nested: { diagnostic: 'authorization: secret-value', extra: 'sk-hidden' },
+        safe: { visible: 'ok' },
+      };
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Execution failed',
+        { toolName: 'read_file', context }
+      );
+
+      const json = error.toJSON();
+      expect(json.context).toBeUndefined();
+      const serialized = JSON.stringify(json);
+      expect(serialized).not.toContain('secret-value');
+      expect(serialized).not.toContain('sk-hidden');
+      expect(serialized).not.toContain('authorization');
+    });
+
+    it('should preserve context internally on the error instance', () => {
+      const context = {
+        detail: 'API key: sk-secret-value',
+        requestId: 'req-123',
+      };
+      const error = new ToolError(
+        ToolErrorCode.TOOL_EXECUTION_FAILED,
+        'Execution failed',
+        { toolName: 'read_file', context }
+      );
+
+      // Context is preserved internally on the instance
+      expect(error.context).toEqual(context);
+      expect(error.context?.detail).toBe('API key: sk-secret-value');
+      expect(error.context?.requestId).toBe('req-123');
+
+      // But never serialized
+      const json = error.toJSON();
+      expect(json.context).toBeUndefined();
     });
 
     it('should not expose secrets embedded in the top-level error message in serialized output', () => {
