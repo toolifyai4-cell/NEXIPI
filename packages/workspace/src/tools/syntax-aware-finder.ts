@@ -908,7 +908,7 @@ export class SyntaxAwareFinder {
  * Returns the per-file result, the match count, whether the per-file limit was
  * reached, and any parse-diagnostic error messages.
  */
-function scanFileForReferences(
+export function scanFileForReferences(
   sourceFile: ts.SourceFile,
   symbol: string,
   candidate: { readonly absPath: string; readonly relPath: string },

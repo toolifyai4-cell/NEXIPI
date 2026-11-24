@@ -524,7 +524,7 @@ export class LexicalFinder {
  * Scans a single file's content for identifier-boundary matches of `symbol`.
  * Returns the per-file result and whether the per-file limit was reached.
  */
-function scanFileForReferences(
+export function scanFileForReferences(
   content: string,
   symbol: string,
   candidate: { readonly absPath: string; readonly relPath: string },
