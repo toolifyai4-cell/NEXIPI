@@ -95,3 +95,14 @@ export { CodeSearcher, createCodeSearcher } from './searcher.js';
 export { LexicalFinder, createLexicalFinder, type LexicalFinderOptions } from './lexical-finder.js';
 export { SyntaxAwareFinder, createSyntaxAwareFinder, type SyntaxAwareFinderOptions } from './syntax-aware-finder.js';
 export { ReferenceDiscoverer, createReferenceDiscoverer, type ReferenceDiscovererOptions } from './reference-discoverer.js';
+
+export {
+  createReadFileToolDefinition,
+  type ReadFileAdapterDependencies,
+  createListDirectoryToolDefinition,
+  type ListDirectoryAdapterDependencies,
+  createSearchCodeToolDefinition,
+  type SearchCodeAdapterDependencies,
+  createFindReferencesToolDefinition,
+  type FindReferencesAdapterDependencies,
+} from './adapters/index.js';

@@ -225,6 +225,9 @@ importers:
       '@nexipi/core':
         specifier: workspace:*
         version: link:../core
+      '@nexipi/models':
+        specifier: workspace:*
+        version: link:../models
       '@nexipi/shared':
         specifier: workspace:*
         version: link:../shared
