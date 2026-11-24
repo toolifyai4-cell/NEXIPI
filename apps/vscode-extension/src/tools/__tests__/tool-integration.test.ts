@@ -35,6 +35,12 @@ vi.mock('vscode', () => ({
     onDidChangeConfiguration: vi.fn(() => ({ dispose: vi.fn() })),
     workspaceFolders: [],
     onDidChangeWorkspaceFolders: vi.fn(() => ({ dispose: vi.fn() })),
+    createFileSystemWatcher: vi.fn(() => ({
+      onDidCreate: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidChange: vi.fn(() => ({ dispose: vi.fn() })),
+      onDidDelete: vi.fn(() => ({ dispose: vi.fn() })),
+      dispose: vi.fn(),
+    })),
   },
   commands: {
     executeCommand: vi.fn(),
@@ -80,7 +86,90 @@ vi.mock('vscode', () => ({
       toString: () => `vscode-webview://${uri}`,
     })),
   },
+  RelativePattern: vi.fn((base: unknown, pattern: string) => ({ base, pattern })),
 }));
+// Mock WorkspaceManager to avoid real initialization
+vi.mock('../../../workspace/workspace-manager.js', () => ({
+  WorkspaceManager: vi.fn(() => ({
+    initialize: vi.fn().mockResolvedValue(undefined),
+    dispose: vi.fn(),
+    onStatusChange: vi.fn(() => ({ dispose: vi.fn() })),
+  })),
+}));
+
+// Mock workspace package components to avoid real VS Code dependencies
+vi.mock('@nexipi/workspace', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    VSCodeWorkspaceProvider: vi.fn(() => ({
+      getWorkspaceFolders: vi.fn().mockResolvedValue([]),
+      onWorkspaceFoldersChange: vi.fn(() => ({ unsubscribe: vi.fn() })),
+      dispose: vi.fn(),
+    })),
+    VSCodeFileSystemProvider: vi.fn(() => ({
+      readFile: vi.fn(),
+      readDirectory: vi.fn(),
+      stat: vi.fn(),
+      lstat: vi.fn(),
+      exists: vi.fn(),
+    })),
+};
+});
+// Mock persistence to avoid real database
+vi.mock('@nexipi/persistence', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    PersistenceFoundation: vi.fn(() => ({
+      init: vi.fn().mockResolvedValue(undefined),
+      getRawDatabase: vi.fn(),
+    })),
+    SqlJsConversationRepository: vi.fn(),
+    SqlJsMessageRepository: vi.fn(),
+    createPersistenceService: vi.fn(() => ({
+      initialize: vi.fn().mockResolvedValue(undefined),
+      save: vi.fn(),
+    })),
+  };
+});
+
+// Mock models package components
+vi.mock('@nexipi/models', async (importOriginal) => {
+  const actual = await importOriginal();
+  return {
+    ...actual,
+    createChatService: vi.fn(() => ({
+      initialize: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn().mockResolvedValue(undefined),
+      on: vi.fn(),
+      createConversation: vi.fn(() => ({ id: 'test-conversation' })),
+      sendMessage: vi.fn(),
+      cancelMessage: vi.fn(),
+      retryMessage: vi.fn(),
+    })),
+    createProviderRegistry: vi.fn(() => ({})),
+    createPersistenceAdapter: vi.fn(() => ({
+      initialize: vi.fn().mockResolvedValue(undefined),
+      dispose: vi.fn(),
+    })),
+    createToolRegistry: vi.fn(() => ({
+      register: vi.fn(),
+      unregister: vi.fn(),
+      has: vi.fn(),
+      get: vi.fn(),
+      list: vi.fn(),
+      listDescriptions: vi.fn(),
+    })),
+    ToolExecutor: vi.fn(() => ({})),
+    ToolExecutionService: vi.fn(() => ({
+      dispose: vi.fn(),
+      getConfig: vi.fn(() => ({})),
+      createTurn: vi.fn(),
+      getGlobalSnapshot: vi.fn(() => ({ activeTurns: 0, activeExecutions: 0, queuedCalls: 0 })),
+    })),
+  };
+});
 
 describe('Tool Infrastructure Integration', () => {
   let extensionModule: {
@@ -97,7 +186,7 @@ describe('Tool Infrastructure Integration', () => {
   beforeAll(async () => {
     vi.resetModules();
     extensionModule = await import('../../extension.js');
-  });
+  }, 30000);
 
   afterAll(async () => {
     vi.resetModules();
@@ -114,7 +203,7 @@ describe('Tool Infrastructure Integration', () => {
 
   afterEach(async () => {
     await extensionModule.deactivate();
-  });
+  }, 30000);
 
   describe('ToolRegistry construction and ownership', () => {
     it('should construct a ToolRegistry during activation', async () => {

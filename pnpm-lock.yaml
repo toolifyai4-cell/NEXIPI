@@ -11,6 +11,9 @@ importers:
       sql.js:
         specifier: ^1.17.0
         version: 1.17.0
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
     devDependencies:
       '@testing-library/jest-dom':
         specifier: ^7.0.1
@@ -72,6 +75,9 @@ importers:
       '@nexipi/workspace':
         specifier: workspace:*
         version: link:../../packages/workspace
+      zod:
+        specifier: ^3.22.0
+        version: 3.25.76
     devDependencies:
       '@nexipi/shared':
         specifier: workspace:*

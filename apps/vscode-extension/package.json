@@ -118,7 +118,8 @@
     "@nexipi/core": "workspace:*",
     "@nexipi/models": "workspace:*",
     "@nexipi/persistence": "workspace:*",
-    "@nexipi/workspace": "workspace:*"
+    "@nexipi/workspace": "workspace:*",
+    "zod": "^3.22.0"
   },
   "devDependencies": {
     "@nexipi/shared": "workspace:*",
