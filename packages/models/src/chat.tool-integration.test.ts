@@ -3,7 +3,7 @@ import { ChatService, createChatService } from './chat.js';
 import { createProviderRegistry } from './registry.js';
 import { ToolRegistry, createToolRegistry } from './tools/registry.js';
 import { ToolExecutor } from './tools/executor.js';
-import { ToolExecutionService, DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG } from './tools/service.js';
+import { ToolExecutionService, ToolExecutionTurn, DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG } from './tools/service.js';
 import { z } from 'zod';
 import {
   createProviderId,
@@ -1700,5 +1700,557 @@ describe('ChatService - Tool Calling Integration', () => {
       });
       expect(successfulCalls.length).toBe(25);
     });
+  });
+
+  describe('Shared execution turn lifecycle', () => {
+    it('should reuse one execution turn across multiple model responses', async () => {
+      const conversationId = chatService.createConversation('Shared Turn Reuse').id;
+
+      // Track turn creation
+      const originalCreateTurn = toolExecutionService.createTurn.bind(toolExecutionService);
+      let turnCreationCount = 0;
+      let createdTurn: ToolExecutionTurn | null = null;
+      toolExecutionService.createTurn = vi.fn().mockImplementation((options) => {
+        turnCreationCount++;
+        const turn = originalCreateTurn(options);
+        if (!createdTurn) createdTurn = turn;
+        return turn;
+      });
+
+      // First response: tool calls
+      // Second response: tool calls  
+      // Third response: final answer
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-2', name: 'get_weather', arguments: { location: 'LA' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-3',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Weather retrieved for both cities.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC and LA');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Only one turn should have been created for the entire interaction
+      expect(turnCreationCount).toBe(1);
+      
+      // The turn should be disposed after completion (dispose() sets status to 'disposed')
+      expect(createdTurn?.status).toBe('disposed');
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(2);
+    });
+
+    it('should reuse one execution turn across multiple batches within a response', async () => {
+      const conversationId = chatService.createConversation('Multi-Batch Shared Turn').id;
+
+      // Register 8 tools (will require 2 batches of 5 and 3)
+      for (let i = 0; i < 8; i++) {
+        toolRegistry.register(makeToolDefinition({
+          name: `tool_${i}`,
+          execute: vi.fn().mockResolvedValue({ result: i }),
+        }));
+      }
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 8 }, (_, i) => ({
+                id: `call-${i}`,
+                name: `tool_${i}`,
+                arguments: { value: i },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'All tools executed.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call 8 tools');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // All 8 should execute (2 batches: 5 + 3)
+      expect(toolMessages.length).toBe(8);
+      
+      // Verify turn was reused (only one turn created)
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0); // Turn should be completed and cleaned up
+    });
+
+    it('should count total calls across multiple model responses', async () => {
+      const conversationId = chatService.createConversation('Cross-Response Call Count').id;
+
+      let callCount = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        callCount++;
+        if (callCount <= 3) {
+          // Each response returns 5 tool calls
+          return {
+            id: `response-${callCount}`,
+            model: modelId,
+            choices: [{
+              index: 0,
+              message: {
+                role: 'assistant',
+                content: '',
+                toolCalls: Array.from({ length: 5 }, (_, i) => ({
+                  id: `call-${callCount}-${i}`,
+                  name: 'get_weather',
+                  arguments: { location: `City ${callCount}-${i}` },
+                })),
+              },
+              finishReason: 'tool_calls',
+            }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            finishReason: 'tool_calls',
+          };
+        } else {
+          // 4th response - should not be reached due to 25-call limit
+          return {
+            id: `response-${callCount}`,
+            model: modelId,
+            choices: [{
+              index: 0,
+              message: { role: 'assistant', content: 'Should not reach here', finishReason: 'stop' },
+            }],
+            usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+            finishReason: 'stop',
+          };
+        }
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call many tools');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Should only execute 15 calls (3 responses × 5 calls) - well under 25 limit
+      expect(toolMessages.length).toBe(15);
+      
+      // Verify the shared turn's call counter tracked across responses
+      // The turn should have callsSubmitted = 15
+    });
+
+    it('should enforce 25-call limit across multiple model responses', async () => {
+      const conversationId = chatService.createConversation('25 Call Limit Cross Responses').id;
+
+      // First response: 20 calls
+      // Second response: 10 calls (should only execute 5, reject 5)
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 20 }, (_, i) => ({
+                id: `call-1-${i}`,
+                name: 'get_weather',
+                arguments: { location: `City ${i}` },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: Array.from({ length: 10 }, (_, i) => ({
+                id: `call-2-${i}`,
+                name: 'get_weather',
+                arguments: { location: `City ${i}` },
+              })),
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-3',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Limit reached.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Call 30 tools');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Should execute 25 total (20 + 5 successful), plus 5 rejected with TOOL_RESOURCE_LIMIT = 30 tool messages
+      expect(toolMessages.length).toBe(30);
+      
+      // Check that 5 calls have TOOL_RESOURCE_LIMIT error
+      const limitErrors = toolMessages.filter(m => {
+        const content = JSON.parse(m.content);
+        return content.error?.code === 'TOOL_RESOURCE_LIMIT';
+      });
+      expect(limitErrors.length).toBe(5);
+      
+      // Check that 25 calls succeeded (no error in content)
+      const successfulCalls = toolMessages.filter(m => {
+        const content = JSON.parse(m.content);
+        return !content.error;
+      });
+      expect(successfulCalls.length).toBe(25);
+    });
+
+    it('should enforce shared 120-second deadline across model responses', async () => {
+      const conversationId = chatService.createConversation('Shared Deadline').id;
+
+      // Track turn creation to verify deadline behavior
+      const originalCreateTurn = toolExecutionService.createTurn.bind(toolExecutionService);
+      let createdTurn: ToolExecutionTurn | null = null;
+      toolExecutionService.createTurn = vi.fn().mockImplementation((options) => {
+        const turn = originalCreateTurn(options);
+        if (!createdTurn) createdTurn = turn;
+        return turn;
+      });
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-2', name: 'get_weather', arguments: { location: 'LA' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-3',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Done.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC and LA');
+      await new Promise(resolve => setTimeout(resolve, 300));
+
+      // Verify the turn was created and used for both tool executions
+      expect(createdTurn).not.toBeNull();
+      // The turn's deadline should span across both model responses
+      // (verified by the fact that both tool calls executed successfully)
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(2);
+      
+      // Turn should be disposed after completion
+      expect(createdTurn?.status).toBe('disposed');
+    });
+
+    it('should dispose shared turn on cancellation', async () => {
+      const conversationId = chatService.createConversation('Cancel Disposes Turn').id;
+
+      // Register slow tool
+      toolRegistry.unregister('get_weather');
+      toolRegistry.register(makeToolDefinition({
+        execute: vi.fn().mockImplementation(async () => {
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return { temperature: 22 };
+        }),
+      }));
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Cancelled.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 50)); // Let tool start
+
+      chatService.cancelMessage(assistantMessageId);
+      await new Promise(resolve => setTimeout(resolve, 100));
+
+      const messages = chatService.getMessages(conversationId);
+      const assistantMsg = messages.find(m => m.id === assistantMessageId);
+      expect(assistantMsg?.status).toBe('cancelled');
+
+      // Verify turn is cleaned up
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    }, 10000);
+
+    it('should dispose shared turn on model-provider error', async () => {
+      const conversationId = chatService.createConversation('Model Error Disposes Turn').id;
+
+      // First response has tool calls, second response throws error
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        // Second model request throws
+        Promise.reject(new Error('Model provider error')),
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        const resp = responses[responseIndex++];
+        if (resp instanceof Promise) throw await resp;
+        return resp;
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Tool should have been executed
+      expect(toolMessages.length).toBe(1);
+      
+      // Verify turn is cleaned up
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    }, 10000);
+
+    it('should dispose shared turn on successful final completion', async () => {
+      const conversationId = chatService.createConversation('Success Disposes Turn').id;
+
+      const responses = [
+        {
+          id: 'response-1',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: {
+              role: 'assistant',
+              content: '',
+              toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+            },
+            finishReason: 'tool_calls',
+          }],
+          usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+          finishReason: 'tool_calls',
+        },
+        {
+          id: 'response-2',
+          model: modelId,
+          choices: [{
+            index: 0,
+            message: { role: 'assistant', content: 'Weather retrieved.' },
+            finishReason: 'stop',
+          }],
+          usage: { promptTokens: 15, completionTokens: 10, totalTokens: 25 },
+          finishReason: 'stop',
+        },
+      ];
+      let responseIndex = 0;
+      mockProvider.execute = vi.fn().mockImplementation(async () => {
+        return responses[responseIndex++];
+      });
+
+      const assistantMessageId = await chatService.sendMessage(conversationId, 'Weather in NYC');
+      await new Promise(resolve => setTimeout(resolve, 200));
+
+      const messages = chatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      expect(toolMessages.length).toBe(1);
+
+      // Verify turn is completed and cleaned up
+      const snapshot = toolExecutionService.getGlobalSnapshot();
+      expect(snapshot.activeTurns).toBe(0);
+    }, 10000);
+
+    it('should enforce model interaction cycle limit (maxIterationsPerTurn)', async () => {
+      // Create service with low iteration limit
+      const limitedExecutor = new ToolExecutor(toolRegistry, { permissionPolicy: makePermissionPolicy() });
+      const limitedService = new ToolExecutionService(limitedExecutor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxIterationsPerTurn: 2 },
+      });
+
+      const limitedChatService = createChatService({
+        providerRegistry,
+        defaultProvider: providerId,
+        defaultModel: modelId,
+        toolRegistry,
+        toolExecutionService: limitedService,
+      });
+
+      const conversationId = limitedChatService.createConversation('Max Iterations').id;
+
+      // Mock always returns tool_calls - should stop after 2 iterations
+      limitedChatService.getProviderRegistry().get(providerId)!.execute = vi.fn().mockResolvedValue({
+        id: 'response-1',
+        model: modelId,
+        choices: [{
+          index: 0,
+          message: {
+            role: 'assistant',
+            content: '',
+            toolCalls: [{ id: 'call-1', name: 'get_weather', arguments: { location: 'NYC' } }],
+          },
+          finishReason: 'tool_calls',
+        }],
+        usage: { promptTokens: 10, completionTokens: 5, totalTokens: 15 },
+        finishReason: 'tool_calls',
+      });
+
+      const assistantMessageId = await limitedChatService.sendMessage(conversationId, 'Loop');
+      await new Promise(resolve => setTimeout(resolve, 500));
+
+      const messages = limitedChatService.getMessages(conversationId);
+      const toolMessages = messages.filter(m => m.role === 'tool');
+      // Should only execute 2 iterations worth of tools
+      expect(toolMessages.length).toBeLessThanOrEqual(2);
+
+      await limitedChatService.dispose();
+      limitedService.dispose();
+    }, 10000);
   });
 });

@@ -39,7 +39,7 @@ import {
 import type { PersistenceAdapter } from './persistence-adapter.js';
 import { PersistenceError } from '@nexipi/persistence';
 import type { ToolRegistry } from './tools/registry.js';
-import type { ToolExecutionService, ToolCall } from './tools/service.js';
+import type { ToolExecutionService, ToolCall, ToolExecutionTurn } from './tools/service.js';
 import { createToolError, ToolErrorCode } from './tools/errors.js';
 import type { ToolExecutionContext, ToolExecutionResult } from './tools/types.js';
 
@@ -1128,56 +1128,115 @@ export class ChatService {
     let totalToolCalls = 0;
     let accumulatedContent = '';
     let currentRequest = this.buildModelRequest(conversationId, modelMetadata.modelId, options.systemPrompt, toolDefinitions, options.parameters);
+    
+    // Shared execution turn for the complete ChatService interaction.
+    // Created lazily when the first tool calls need execution.
+    // Disposed in the finally block to ensure the 120-second deadline spans all model/tool cycles.
+    let sharedTurn: ToolExecutionTurn | undefined;
 
-    while (iteration < maxIterations) {
-      iteration++;
+    try {
+      while (iteration < maxIterations) {
+        iteration++;
 
-      // Check for cancellation before each iteration
-      if (signal.aborted || this._isDisposed || !this.activeRequests.has(requestId)) {
-        this.logger.info('Tool calling loop cancelled', { conversationId, messageId, requestId, iteration });
-        this.updateMessage(conversationId, messageId, { status: 'cancelled' });
-        return;
-      }
+        // Check for cancellation before each iteration
+        if (signal.aborted || this._isDisposed || !this.activeRequests.has(requestId)) {
+          this.logger.info('Tool calling loop cancelled', { conversationId, messageId, requestId, iteration });
+          this.updateMessage(conversationId, messageId, { status: 'cancelled' });
+          return;
+        }
 
-      this.logger.debug('Model request iteration', { conversationId, messageId, requestId, iteration, hasTools });
+        this.logger.debug('Model request iteration', { conversationId, messageId, requestId, iteration, hasTools });
 
-      // Execute model request
-      let response: ModelResponse;
-      try {
-        response = await this.executeModelRequest(provider, currentRequest, conversationId, messageId, signal, requestId, accumulatedContent);
-      } catch (error) {
-        if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+        // Execute model request
+        let response: ModelResponse;
+        try {
+          response = await this.executeModelRequest(provider, currentRequest, conversationId, messageId, signal, requestId, accumulatedContent);
+        } catch (error) {
+          if (signal.aborted || (error instanceof DOMException && error.name === 'AbortError')) {
+            throw error;
+          }
           throw error;
         }
-        throw error;
-      }
 
-      // Process the response
-      if (!response.choices || response.choices.length === 0) {
-        this.logger.warn('Model response has no choices', { conversationId, messageId, requestId });
-        break;
-      }
-      const choice = response.choices[0]!;
-      const finishReason = response.finishReason;
+        // Process the response
+        if (!response.choices || response.choices.length === 0) {
+          this.logger.warn('Model response has no choices', { conversationId, messageId, requestId });
+          break;
+        }
+        const choice = response.choices[0]!;
+        const finishReason = response.finishReason;
 
-      // Check if response contains tool calls
-      const toolCalls = (choice.message.toolCalls ?? []) as readonly ModelToolCall[];
-      if (toolCalls.length > 0 && hasTools) {
-        // Check total call limit before executing
-        if (totalToolCalls + toolCalls.length > maxCallsPerTurn) {
-          this.logger.warn('Total tool call limit would be exceeded', {
-            conversationId,
-            messageId,
-            requestId,
-            totalToolCalls,
-            requestedCalls: toolCalls.length,
-            maxCallsPerTurn,
-          });
-          // Execute only the calls that fit within the limit
-          const allowedCalls = toolCalls.slice(0, maxCallsPerTurn - totalToolCalls);
-          const truncatedCalls = toolCalls.slice(maxCallsPerTurn - totalToolCalls);
-          
-          // Store the assistant message with all tool calls (for history)
+        // Check if response contains tool calls
+        const toolCalls = (choice.message.toolCalls ?? []) as readonly ModelToolCall[];
+        if (toolCalls.length > 0 && hasTools) {
+          // Lazily create the shared execution turn on first tool execution
+          if (!sharedTurn && this.toolExecutionService) {
+            sharedTurn = this.toolExecutionService.createTurn({ id: `${requestId}-shared-turn` });
+          }
+
+          // Check total call limit before executing
+          if (totalToolCalls + toolCalls.length > maxCallsPerTurn) {
+            this.logger.warn('Total tool call limit would be exceeded', {
+              conversationId,
+              messageId,
+              requestId,
+              totalToolCalls,
+              requestedCalls: toolCalls.length,
+              maxCallsPerTurn,
+            });
+            // Execute only the calls that fit within the limit
+            const allowedCalls = toolCalls.slice(0, maxCallsPerTurn - totalToolCalls);
+            const truncatedCalls = toolCalls.slice(maxCallsPerTurn - totalToolCalls);
+            
+            // Store the assistant message with all tool calls (for history)
+            this.updateMessage(conversationId, messageId, {
+              content: accumulatedContent + String(choice.message.content ?? ''),
+              status: 'streaming',
+              metadata: {
+                usage: response.usage,
+                finishReason,
+                toolCalls,
+              },
+            });
+
+            // Execute allowed calls
+            if (allowedCalls.length > 0) {
+              const toolResults = await this.executeToolCalls(
+                conversationId,
+                messageId,
+                allowedCalls,
+                signal,
+                requestId,
+                sharedTurn
+              );
+              this.appendToolResults(conversationId, toolResults);
+              totalToolCalls += allowedCalls.length;
+            }
+
+            // Add failure results for truncated calls
+            for (const truncatedCall of truncatedCalls) {
+              const failureResult = {
+                kind: 'failure' as const,
+                error: createToolError(ToolErrorCode.TOOL_RESOURCE_LIMIT, `Total tool call limit (${maxCallsPerTurn}) exceeded`, {
+                  toolName: truncatedCall.name,
+                  retryable: false,
+                }),
+                truncated: false,
+                executionMs: 0,
+              };
+              this.appendToolResults(conversationId, [{ toolCall: truncatedCall, result: failureResult }]);
+            }
+
+            // Stop further iterations since we've hit the limit
+            this.handleStreamError(conversationId, messageId, {
+              code: 'TOOL_RESOURCE_LIMIT',
+              message: `Total tool call limit (${maxCallsPerTurn}) exceeded`,
+              retryable: false,
+            });
+            break;
+          }
+
+          // Store the assistant message with tool calls
           this.updateMessage(conversationId, messageId, {
             content: accumulatedContent + String(choice.message.content ?? ''),
             status: 'streaming',
@@ -1188,126 +1247,88 @@ export class ChatService {
             },
           });
 
-          // Execute allowed calls
-          if (allowedCalls.length > 0) {
-            const toolResults = await this.executeToolCalls(
+          // Execute tool calls - pass shared turn for reuse across model responses
+          const toolResults = await this.executeToolCalls(
+            conversationId,
+            messageId,
+            toolCalls,
+            signal,
+            requestId,
+            sharedTurn
+          );
+
+          // Append tool results to conversation
+          this.appendToolResults(conversationId, toolResults);
+          totalToolCalls += toolCalls.length;
+
+          // Check if we've hit the total call limit
+          if (totalToolCalls >= maxCallsPerTurn) {
+            this.logger.warn('Total tool call limit reached', {
               conversationId,
               messageId,
-              allowedCalls,
-              signal,
-              requestId
-            );
-            this.appendToolResults(conversationId, toolResults);
-            totalToolCalls += allowedCalls.length;
+              requestId,
+              totalToolCalls,
+              maxCallsPerTurn,
+            });
+            // Stop further iterations since we've hit the limit
+            this.handleStreamError(conversationId, messageId, {
+              code: 'TOOL_RESOURCE_LIMIT',
+              message: `Total tool call limit (${maxCallsPerTurn}) reached`,
+              retryable: false,
+            });
+            break;
           }
 
-          // Add failure results for truncated calls
-          for (const truncatedCall of truncatedCalls) {
-            const failureResult = {
-              kind: 'failure' as const,
-              error: createToolError(ToolErrorCode.TOOL_RESOURCE_LIMIT, `Total tool call limit (${maxCallsPerTurn}) exceeded`, {
-                toolName: truncatedCall.name,
-                retryable: false,
-              }),
-              truncated: false,
-              executionMs: 0,
-            };
-            this.appendToolResults(conversationId, [{ toolCall: truncatedCall, result: failureResult }]);
-          }
-
-          // Stop further iterations since we've hit the limit
-          this.handleStreamError(conversationId, messageId, {
-            code: 'TOOL_RESOURCE_LIMIT',
-            message: `Total tool call limit (${maxCallsPerTurn}) exceeded`,
-            retryable: false,
-          });
-          break;
+          // Build new request with tool results for next iteration
+          currentRequest = this.buildModelRequest(conversationId, modelMetadata.modelId, options.systemPrompt, toolDefinitions, options.parameters);
+          accumulatedContent = ''; // Reset accumulated content for next response
+          continue;
         }
 
-        // Store the assistant message with tool calls
+        // No tool calls - final response
+        const finalContent = accumulatedContent + String(choice.message.content ?? '');
+        const isComplete = finishReason === 'stop' || finishReason === 'length' || !hasTools;
+
         this.updateMessage(conversationId, messageId, {
-          content: accumulatedContent + String(choice.message.content ?? ''),
-          status: 'streaming',
+          content: finalContent,
+          status: isComplete ? 'completed' : 'streaming',
           metadata: {
             usage: response.usage,
             finishReason,
-            toolCalls,
           },
         });
 
-        // Execute tool calls
-        const toolResults = await this.executeToolCalls(
+        const completeEvent = createStreamCompleteEvent(
           conversationId,
           messageId,
-          toolCalls,
-          signal,
-          requestId
+          finishReason,
+          response.usage
         );
-
-        // Append tool results to conversation
-        this.appendToolResults(conversationId, toolResults);
-        totalToolCalls += toolCalls.length;
-
-        // Check if we've hit the total call limit
-        if (totalToolCalls >= maxCallsPerTurn) {
-          this.logger.warn('Total tool call limit reached', {
-            conversationId,
-            messageId,
-            requestId,
-            totalToolCalls,
-            maxCallsPerTurn,
-          });
-          // Stop further iterations since we've hit the limit
-          this.handleStreamError(conversationId, messageId, {
-            code: 'TOOL_RESOURCE_LIMIT',
-            message: `Total tool call limit (${maxCallsPerTurn}) reached`,
-            retryable: false,
-          });
-          break;
-        }
-
-        // Build new request with tool results for next iteration
-        currentRequest = this.buildModelRequest(conversationId, modelMetadata.modelId, options.systemPrompt, toolDefinitions, options.parameters);
-        accumulatedContent = ''; // Reset accumulated content for next response
-        continue;
+        this.eventEmitter.emit('stream:event', { event: completeEvent, timestamp: Date.now() });
+        break;
       }
 
-      // No tool calls - final response
-      const finalContent = accumulatedContent + String(choice.message.content ?? '');
-      const isComplete = finishReason === 'stop' || finishReason === 'length' || !hasTools;
-
-      this.updateMessage(conversationId, messageId, {
-        content: finalContent,
-        status: isComplete ? 'completed' : 'streaming',
-        metadata: {
-          usage: response.usage,
-          finishReason,
-        },
-      });
-
-      const completeEvent = createStreamCompleteEvent(
-        conversationId,
-        messageId,
-        finishReason,
-        response.usage
-      );
-      this.eventEmitter.emit('stream:event', { event: completeEvent, timestamp: Date.now() });
-      break;
-    }
-
-    // Check if we hit the iteration limit
-    if (iteration >= maxIterations) {
-      this.logger.warn('Maximum tool calling iterations reached', {
-        conversationId,
-        messageId,
-        requestId,
-        maxIterations,
-      });
-      this.handleStreamError(conversationId, messageId, {
-        code: 'TOOL_RESOURCE_LIMIT',
-        message: `Maximum tool calling iterations (${maxIterations}) exceeded`,
-        retryable: false,
-      });
+      // Check if we hit the iteration limit
+      if (iteration >= maxIterations) {
+        this.logger.warn('Maximum tool calling iterations reached', {
+          conversationId,
+          messageId,
+          requestId,
+          maxIterations,
+        });
+        this.handleStreamError(conversationId, messageId, {
+          code: 'TOOL_RESOURCE_LIMIT',
+          message: `Maximum tool calling iterations (${maxIterations}) exceeded`,
+          retryable: false,
+        });
+      }
+    } finally {
+      // Dispose the shared execution turn to ensure deadline timers are cleared
+      // and resources are released. This covers all exit paths: success, error,
+      // cancellation, resource limits, and iteration limits.
+      if (sharedTurn) {
+        sharedTurn.dispose();
+      }
     }
   }
 
@@ -1553,7 +1574,8 @@ export class ChatService {
     messageId: MessageId,
     toolCalls: readonly ModelToolCall[],
     signal: AbortSignal,
-    requestId: string
+    requestId: string,
+    sharedTurn?: ToolExecutionTurn
   ): Promise<ReadonlyArray<{ toolCall: ModelToolCall; result: ToolExecutionResult }>> {
     if (!this.toolExecutionService) {
       this.logger.warn('Tool execution service not available, skipping tool execution');
@@ -1637,8 +1659,9 @@ export class ChatService {
 
     // Execute valid calls through ToolExecutionService
     if (validCalls.length > 0) {
-      // Create a turn for this batch of tool calls
-      const turn = this.toolExecutionService.createTurn({ id: `${requestId}-turn-${Date.now()}` });
+      // Use shared turn if provided, otherwise create a new one (fallback for edge cases)
+      const turn = sharedTurn ?? this.toolExecutionService.createTurn({ id: `${requestId}-turn-${Date.now()}` });
+      const shouldDisposeTurn = !sharedTurn; // Only dispose if we created it
       
       // Create execution context
       const context: ToolExecutionContext = {
@@ -1679,8 +1702,10 @@ export class ChatService {
           }
         }
       } finally {
-        // Ensure the turn is always disposed, even if an error occurs
-        turn.dispose();
+        // Ensure the turn is disposed if we created it locally
+        if (shouldDisposeTurn) {
+          turn.dispose();
+        }
       }
 
       // Map results back to tool calls
