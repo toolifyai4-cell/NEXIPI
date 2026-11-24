@@ -24,6 +24,7 @@ export interface ToolExecutionServiceConfig {
   readonly maxConcurrentExecutions: number;
   readonly maxExecutionTimePerToolMs: number;
   readonly maxTotalExecutionTimePerTurnMs: number;
+  readonly maxQueuedCalls: number;
 }
 
 /**
@@ -36,6 +37,7 @@ export const DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG: ToolExecutionServiceConfig =
   maxConcurrentExecutions: 5,
   maxExecutionTimePerToolMs: 30_000,
   maxTotalExecutionTimePerTurnMs: 120_000,
+  maxQueuedCalls: 100,
 };
 
 function isPositiveInteger(value: unknown): value is number {
@@ -53,6 +55,7 @@ export function validateToolExecutionServiceConfig(input: unknown): ToolExecutio
     'maxConcurrentExecutions',
     'maxExecutionTimePerToolMs',
     'maxTotalExecutionTimePerTurnMs',
+    'maxQueuedCalls',
   ];
 
   for (const field of fields) {
@@ -83,6 +86,15 @@ function timeoutResult(toolName: string): ToolExecutionResult {
   return {
     kind: 'failure',
     error: createToolError(ToolErrorCode.TOOL_TIMEOUT, `Tool '${toolName}' exceeded its per-execution time limit`, { toolName }),
+    truncated: false,
+    executionMs: 0,
+  };
+}
+
+function resourceLimitResult(toolName: string, message: string): ToolExecutionResult {
+  return {
+    kind: 'failure',
+    error: createToolError(ToolErrorCode.TOOL_RESOURCE_LIMIT, message, { toolName }),
     truncated: false,
     executionMs: 0,
   };
@@ -367,6 +379,7 @@ export class ToolExecutionService {
   readonly turns: Set<ToolExecutionTurn> = new Set();
   private readonly globalQueue: CallEntry[] = [];
   private globalActiveCount = 0;
+  private globalQueuedCount = 0;
   private disposed = false;
   private turnCounter = 0;
 
@@ -393,7 +406,7 @@ export class ToolExecutionService {
     return {
       activeTurns: this.turns.size,
       activeExecutions: this.globalActiveCount,
-      queuedCalls: this.globalQueue.length,
+      queuedCalls: this.globalQueuedCount,
     };
   }
 
@@ -405,22 +418,27 @@ export class ToolExecutionService {
     }
     this.turns.clear();
     this.globalQueue.length = 0;
+    this.globalQueuedCount = 0;
   }
 
   admitEntry(entry: CallEntry): void {
     if (this.disposed) {
-      entry.rejectWith(
-        createToolError(ToolErrorCode.TOOL_CANCELLED, 'Tool execution service has been disposed')
-      );
+      entry.resolveWith(cancelledResult(entry.toolName));
       return;
     }
     if (this.globalActiveCount < this.config.maxConcurrentExecutions) {
       this.globalActiveCount++;
       entry.startActive();
     } else {
+      // Check global queue capacity before queuing
+      if (this.globalQueuedCount >= this.config.maxQueuedCalls) {
+        entry.resolveWith(resourceLimitResult(entry.toolName, `Global queued call limit (${this.config.maxQueuedCalls}) exceeded`));
+        return;
+      }
       entry.status = 'queued';
       entry.turn.onEntryQueued(entry);
       this.globalQueue.push(entry);
+      this.globalQueuedCount++;
     }
   }
 
@@ -436,11 +454,13 @@ export class ToolExecutionService {
       const entry = this.globalQueue.shift()!;
       if (entry.isCancelled) {
         entry.turn.onEntryRemovedFromQueue();
+        this.globalQueuedCount--;
         continue;
       }
       entry.status = 'active';
       entry.turn.onEntryRemovedFromQueue();
       entry.turn.onEntryStarted(entry);
+      this.globalQueuedCount--;
       this.globalActiveCount++;
       void this.runEntry(entry);
     }
@@ -453,6 +473,7 @@ export class ToolExecutionService {
         entry.status = 'completed';
         entry.isCancelled = true;
         turn.onEntryRemovedFromQueue();
+        this.globalQueuedCount--;
         entry.resolveWith(cancelledResult(entry.toolName));
       } else {
         remaining.push(entry);
@@ -466,18 +487,26 @@ export class ToolExecutionService {
     const idx = this.globalQueue.indexOf(entry);
     if (idx !== -1) {
       this.globalQueue.splice(idx, 1);
+      this.globalQueuedCount--;
     }
   }
 
   async runEntry(entry: CallEntry): Promise<void> {
     let result: ToolExecutionResult;
     try {
-      result = await this.runCall(entry);
+      try {
+        result = await this.runCall(entry);
+      } catch (error) {
+        result = errorToResult(error, entry.toolName);
+      }
+      if (!entry.isCancelled) {
+        entry.resolveWith(result);
+      }
     } catch (error) {
-      result = errorToResult(error, entry.toolName);
-    }
-    if (!entry.isCancelled) {
-      entry.resolveWith(result);
+      // Safety net: ensure the entry's promise is always resolved
+      if (!entry.isCancelled) {
+        entry.resolveWith(errorToResult(error, entry.toolName));
+      }
     }
     if (entry.underlying) {
       await entry.underlying.catch(() => undefined);

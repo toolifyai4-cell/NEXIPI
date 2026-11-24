@@ -119,6 +119,7 @@ describe('ToolExecutionServiceConfig', () => {
       maxConcurrentExecutions: 2,
       maxExecutionTimePerToolMs: 5000,
       maxTotalExecutionTimePerTurnMs: 30000,
+      maxQueuedCalls: 50,
     });
     expect(config.maxIterationsPerTurn).toBe(5);
     expect(config.maxCallsPerBatch).toBe(3);
@@ -126,6 +127,7 @@ describe('ToolExecutionServiceConfig', () => {
     expect(config.maxConcurrentExecutions).toBe(2);
     expect(config.maxExecutionTimePerToolMs).toBe(5000);
     expect(config.maxTotalExecutionTimePerTurnMs).toBe(30000);
+    expect(config.maxQueuedCalls).toBe(50);
   });
 
   it('should reject zero values', () => {
@@ -135,6 +137,7 @@ describe('ToolExecutionServiceConfig', () => {
     expect(() => validateToolExecutionServiceConfig({ maxConcurrentExecutions: 0 })).toThrow('positive integer');
     expect(() => validateToolExecutionServiceConfig({ maxExecutionTimePerToolMs: 0 })).toThrow('positive integer');
     expect(() => validateToolExecutionServiceConfig({ maxTotalExecutionTimePerTurnMs: 0 })).toThrow('positive integer');
+    expect(() => validateToolExecutionServiceConfig({ maxQueuedCalls: 0 })).toThrow('positive integer');
   });
 
   it('should reject negative values', () => {
@@ -149,6 +152,23 @@ describe('ToolExecutionServiceConfig', () => {
     expect(() => validateToolExecutionServiceConfig({ maxCallsPerBatch: 10, maxCallsPerTurn: 5 })).toThrow(
       "ToolExecutionService config 'maxCallsPerBatch' must not exceed 'maxCallsPerTurn'"
     );
+  });
+
+  it('should accept valid maxQueuedCalls override', () => {
+    const config = validateToolExecutionServiceConfig({ maxQueuedCalls: 50 });
+    expect(config.maxQueuedCalls).toBe(50);
+  });
+
+  it('should reject zero maxQueuedCalls', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxQueuedCalls: 0 })).toThrow('positive integer');
+  });
+
+  it('should reject negative maxQueuedCalls', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxQueuedCalls: -1 })).toThrow('positive integer');
+  });
+
+  it('should reject non-integer maxQueuedCalls', () => {
+    expect(() => validateToolExecutionServiceConfig({ maxQueuedCalls: 1.5 })).toThrow('positive integer');
   });
 });
 
@@ -765,6 +785,516 @@ describe('ToolExecutionService', () => {
       service.dispose();
       service.dispose();
       expect(() => service.createTurn()).toThrow('disposed');
+    });
+  });
+
+  describe('global queue capacity', () => {
+    it('should enforce global queued call limit', async () => {
+      const limitedQueueService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxQueuedCalls: 3, maxCallsPerBatch: 10, maxConcurrentExecutions: 2 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = limitedQueueService.createTurn();
+      // First batch: 5 calls, 2 active + 3 queued = max capacity
+      const calls1 = Array.from({ length: 5 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise1 = turn.submitBatch(calls1, makeContext());
+
+      await raceWithTimeout(Promise.race([promise1, new Promise(r => setTimeout(r, 50))]), 200);
+
+      // Second batch: 3 more calls should exceed the global queue limit of 3
+      const calls2 = Array.from({ length: 3 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i + 10) } }));
+      const promise2 = turn.submitBatch(calls2, makeContext());
+
+      const results2 = await promise2;
+      expect(results2.length).toBe(3);
+      // All 3 should be rejected with TOOL_RESOURCE_LIMIT
+      for (const r of results2) {
+        expect(r.kind).toBe('failure');
+        if (r.kind === 'failure') {
+          expect(isToolErrorCode(r.error, ToolErrorCode.TOOL_RESOURCE_LIMIT)).toBe(true);
+        }
+      }
+
+      // Release the gate and wait for first batch to complete
+      (globalThis as any).gateRelease!();
+      await promise1;
+
+      // Now there should be capacity again
+      const calls3 = Array.from({ length: 2 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i + 20) } }));
+      const results3 = await turn.submitBatch(calls3, makeContext());
+      expect(results3.length).toBe(2);
+      for (const r of results3) {
+        expect(r.kind).toBe('success');
+      }
+
+      limitedQueueService.dispose();
+    });
+
+    it('should not count active executions as queued calls', async () => {
+      const limitedQueueService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxQueuedCalls: 2, maxCallsPerBatch: 10, maxConcurrentExecutions: 2 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = limitedQueueService.createTurn();
+      // Submit 4 calls: 2 will be active, 2 will be queued (queue limit = 2)
+      const calls = Array.from({ length: 4 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 50))]), 200);
+
+      // Should have 2 active, 2 queued (not counting active as queued)
+      expect(turn.activeExecutions).toBe(2);
+      expect(turn.queuedCalls).toBe(2);
+
+      (globalThis as any).gateRelease!();
+      await promise;
+
+      limitedQueueService.dispose();
+    });
+
+    it('should release queue capacity when queued call starts', async () => {
+      const limitedQueueService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxQueuedCalls: 2, maxCallsPerBatch: 10, maxConcurrentExecutions: 2 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = limitedQueueService.createTurn();
+      // Submit 4 calls: 2 active, 2 queued
+      const calls1 = Array.from({ length: 4 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise1 = turn.submitBatch(calls1, makeContext());
+
+      await raceWithTimeout(Promise.race([promise1, new Promise(r => setTimeout(r, 50))]), 200);
+      expect(turn.queuedCalls).toBe(2);
+
+      // Release the gate - both active calls complete, both queued calls start (0 queued remaining)
+      (globalThis as any).gateRelease!();
+      await raceWithTimeout(Promise.race([promise1, new Promise(r => setTimeout(r, 50))]), 200);
+      expect(turn.queuedCalls).toBe(0);
+
+      // Now we should be able to submit two more calls (queue has 2 free slots)
+      const calls2 = [
+        { toolName: 'test_tool', input: { value: '100' } },
+        { toolName: 'test_tool', input: { value: '101' } },
+      ];
+      const results2 = await turn.submitBatch(calls2, makeContext());
+      expect(results2[0].kind).toBe('success');
+      expect(results2[1].kind).toBe('success');
+
+      limitedQueueService.dispose();
+    });
+
+    it('should release queue capacity when queued calls are cancelled', async () => {
+      const limitedQueueService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxQueuedCalls: 2, maxCallsPerBatch: 10, maxConcurrentExecutions: 2 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = limitedQueueService.createTurn();
+      // Submit 4 calls: 2 active, 2 queued
+      const calls = Array.from({ length: 4 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const promise = turn.submitBatch(calls, makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 50))]), 200);
+      expect(turn.queuedCalls).toBe(2);
+
+      // Cancel the turn - queued calls should be cancelled and capacity released
+      turn.cancel();
+
+      const results = await promise;
+      expect(results.every(r => r.kind === 'failure')).toBe(true);
+
+      // Release the gate so active calls can complete
+      (globalThis as any).gateRelease!();
+
+      // Now queue should have capacity
+      const turn2 = limitedQueueService.createTurn();
+      const calls2 = Array.from({ length: 2 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const results2 = await turn2.submitBatch(calls2, makeContext());
+      expect(results2.every(r => r.kind === 'success')).toBe(true);
+
+      limitedQueueService.dispose();
+    });
+
+    it('should reject concurrent submissions that exceed queue capacity', async () => {
+      const limitedQueueService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxQueuedCalls: 3, maxCallsPerBatch: 10, maxConcurrentExecutions: 2 },
+      });
+
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const turn = limitedQueueService.createTurn();
+      // Submit 5 calls concurrently (2 active, 3 queued = max capacity)
+      const calls = Array.from({ length: 5 }, (_, i) => ({ toolName: 'test_tool', input: { value: String(i) } }));
+      const p1 = turn.submitBatch(calls.slice(0, 3), makeContext());
+      const p2 = turn.submitBatch(calls.slice(3), makeContext());
+
+      await Promise.all([p1, p2].map(p => Promise.race([p, new Promise(r => setTimeout(r, 50))])));
+
+      // Now queue is full (3 queued). Try to submit one more.
+      const extraCall = [{ toolName: 'test_tool', input: { value: 'extra' } }];
+      const extraPromise = turn.submitBatch(extraCall, makeContext());
+      const extraResults = await extraPromise;
+      expect(extraResults[0].kind).toBe('failure');
+      if (extraResults[0].kind === 'failure') {
+        expect(isToolErrorCode(extraResults[0].error, ToolErrorCode.TOOL_RESOURCE_LIMIT)).toBe(true);
+      }
+
+      (globalThis as any).gateRelease!();
+      await Promise.all([p1, p2]);
+      limitedQueueService.dispose();
+    });
+  });
+
+  describe('cancellation races with uncooperative tools', () => {
+    it('should promptly return cancellation result for uncooperative tool on turn.cancel()', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      // Wait for the tool to start executing
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      expect(turn.activeExecutions).toBe(1);
+
+      // Cancel the turn while tool is running
+      turn.cancel();
+
+      // Should promptly get TOOL_CANCELLED result
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      // The underlying execution continues (ignoring tool), but slot should still be occupied
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      // Release the gate - tool will eventually complete
+      (globalThis as any).gateRelease!();
+      // Wait for the underlying execution to settle by waiting for activeExecutions to drop
+      await raceWithTimeout(
+        new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (service.getGlobalSnapshot().activeExecutions === 0) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 10);
+        }),
+        2000
+      );
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(0);
+    });
+
+    it('should promptly return timeout result for uncooperative tool on per-tool timeout', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = shortTimeoutService.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      // Should get TOOL_TIMEOUT promptly
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_TIMEOUT)).toBe(true);
+      }
+
+      // The underlying execution continues (ignoring tool), but slot should still be occupied
+      expect(shortTimeoutService.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      // Wait for the ignoring tool to eventually complete by polling activeExecutions
+      await raceWithTimeout(
+        new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (shortTimeoutService.getGlobalSnapshot().activeExecutions === 0) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 10);
+        }),
+        2000
+      );
+      expect(shortTimeoutService.getGlobalSnapshot().activeExecutions).toBe(0);
+
+      shortTimeoutService.dispose();
+    });
+
+    it('should promptly return cancellation result for uncooperative tool on external context cancel', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const controller = new AbortController();
+      const context = { ...makeContext(), signal: controller.signal };
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], context);
+
+      // Wait for the tool to start executing
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      expect(turn.activeExecutions).toBe(1);
+
+      // Cancel via external context
+      controller.abort();
+
+      // Should promptly get TOOL_CANCELLED result
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      // Slot still occupied until underlying settles
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      (globalThis as any).gateRelease!();
+      // Wait for the underlying execution to settle
+      await raceWithTimeout(
+        new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (service.getGlobalSnapshot().activeExecutions === 0) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 10);
+        }),
+        2000
+      );
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(0);
+    });
+
+    it('should promptly return cancellation result for uncooperative tool on turn deadline expiry', async () => {
+      const shortDeadlineService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxTotalExecutionTimePerTurnMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = shortDeadlineService.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      // Should get TOOL_CANCELLED promptly when deadline expires
+      const results = await promise;
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+      expect(turn.status).toBe('cancelled');
+
+      // Slot still occupied until underlying settles
+      expect(shortDeadlineService.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      // Wait for the ignoring tool to eventually complete
+      await raceWithTimeout(
+        new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (shortDeadlineService.getGlobalSnapshot().activeExecutions === 0) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 10);
+        }),
+        2000
+      );
+      expect(shortDeadlineService.getGlobalSnapshot().activeExecutions).toBe(0);
+
+      shortDeadlineService.dispose();
+    });
+
+    it('should not allow late resolve to overwrite caller result', async () => {
+      // Tool that resolves after a long delay but we cancel early
+      let resolveLate: () => void;
+      const latePromise = new Promise<{ output: string }>((resolve) => { resolveLate = resolve; });
+      
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          execute: vi.fn().mockImplementation(async () => {
+            return latePromise;
+          }),
+        })
+      );
+
+      const controller = new AbortController();
+      const context = { ...makeContext(), signal: controller.signal };
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], context);
+
+      // Wait for execution to start
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+
+      // Cancel before the tool resolves
+      controller.abort();
+      const results = await promise;
+
+      // Should get TOOL_CANCELLED
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      // Now resolve the tool late - should not affect the result already returned
+      resolveLate!({ output: 'late' });
+      await raceWithTimeout(Promise.resolve(), 100);
+      
+      // The turn should still be active (only the call was cancelled, not the turn)
+      expect(turn.status).toBe('active');
+    });
+
+    it('should not allow late rejection to overwrite caller result', async () => {
+      // Tool that rejects after a long delay but we cancel early
+      let rejectLate: (err: Error) => void;
+      const latePromise = new Promise<{ output: string }>((_, reject) => { rejectLate = reject; });
+      
+      registry.unregister('test_tool');
+      registry.register(
+        makeDefinition({
+          execute: vi.fn().mockImplementation(async () => {
+            return latePromise;
+          }),
+        })
+      );
+
+      const controller = new AbortController();
+      const context = { ...makeContext(), signal: controller.signal };
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], context);
+
+      // Wait for execution to start
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+
+      // Cancel before the tool rejects
+      controller.abort();
+      const results = await promise;
+
+      // Should get TOOL_CANCELLED
+      expect(results[0].kind).toBe('failure');
+      if (results[0].kind === 'failure') {
+        expect(isToolErrorCode(results[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+      }
+
+      // Now reject the tool late - should not affect the result already returned
+      rejectLate!(new Error('late rejection'));
+      await raceWithTimeout(Promise.resolve(), 100);
+      
+      // The turn should still be active (only the call was cancelled, not the turn)
+      expect(turn.status).toBe('active');
+    });
+
+    it('should release concurrency slot exactly once after uncooperative tool settles', async () => {
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = service.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      await raceWithTimeout(Promise.race([promise, new Promise(r => setTimeout(r, 10))]), 100);
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      turn.cancel();
+      await promise;
+
+      // Slot should still be occupied
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(1);
+
+      // Release the gate - tool completes
+      (globalThis as any).gateRelease!();
+      // Wait for activeExecutions to drop
+      await raceWithTimeout(
+        new Promise<void>(resolve => {
+          const check = setInterval(() => {
+            if (service.getGlobalSnapshot().activeExecutions === 0) {
+              clearInterval(check);
+              resolve();
+            }
+          }, 10);
+        }),
+        2000
+      );
+
+      // Slot should now be released
+      expect(service.getGlobalSnapshot().activeExecutions).toBe(0);
+
+      // Submit another call on a NEW turn (the original turn is cancelled)
+      const turn2 = service.createTurn();
+      const results = await turn2.submitBatch([{ toolName: 'test_tool', input: { value: 'y' } }], makeContext());
+      expect(results[0].kind).toBe('success');
+    });
+
+    it('should distinguish external cancellation from timeout error codes', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = shortTimeoutService.createTurn();
+      
+      // First call: timeout
+      const timeoutResults = await turn.submitBatch([{ toolName: 'test_tool', input: { value: '1' } }], makeContext());
+      expect(isToolErrorCode(timeoutResults[0].error, ToolErrorCode.TOOL_TIMEOUT)).toBe(true);
+
+      // Second call: external cancellation
+      const controller = new AbortController();
+      const gate = new Promise<void>((resolve) => { (globalThis as any).gateRelease2 = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+
+      const cancelPromise = turn.submitBatch([{ toolName: 'test_tool', input: { value: '2' } }], { ...makeContext(), signal: controller.signal });
+      
+      await raceWithTimeout(Promise.race([cancelPromise, new Promise(r => setTimeout(r, 10))]), 100);
+      controller.abort();
+      
+      const cancelResults = await cancelPromise;
+      expect(isToolErrorCode(cancelResults[0].error, ToolErrorCode.TOOL_CANCELLED)).toBe(true);
+
+      (globalThis as any).gateRelease2!();
+      shortTimeoutService.dispose();
+    });
+
+    it('should not have unhandled promise rejections', async () => {
+      const shortTimeoutService = new ToolExecutionService(executor, {
+        config: { ...DEFAULT_TOOL_EXECUTION_SERVICE_CONFIG, maxExecutionTimePerToolMs: 50 },
+      });
+
+      registry.unregister('test_tool');
+      registry.register(makeIgnoringTool());
+
+      const turn = shortTimeoutService.createTurn();
+      const promise = turn.submitBatch([{ toolName: 'test_tool', input: { value: 'x' } }], makeContext());
+
+      // This should not throw an unhandled rejection
+      await promise;
+
+      shortTimeoutService.dispose();
     });
   });
 });
