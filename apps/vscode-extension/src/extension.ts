@@ -58,7 +58,9 @@ interface WorkspaceAdapterSet {
   readonly computedWorkspaceId: string;
 }
 
-const workspaceAdapters = new Map<string, WorkspaceAdapterSet>();
+// Registry version token for atomicity - incremented on any registry change
+let workspaceAdaptersVersion = 0;
+export const workspaceAdapters = new Map<string, WorkspaceAdapterSet>();
 
 function computeWorkspaceId(folderUri: string): string {
   const normalized = folderUri.replace(/^file:\/\//, '').replace(/\\/g, '/').replace(/\/+$/, '');
@@ -118,7 +120,7 @@ function createWorkspaceAdapters(
   };
 }
 
-function registerWorkspaceAdapters(
+export function registerWorkspaceAdapters(
   folder: WorkspaceFolder,
   fileSystem: VSCodeFileSystemProvider,
   logger: Logger
@@ -130,11 +132,12 @@ function registerWorkspaceAdapters(
     logger.warn('Workspace adapter already registered, replacing', { workspaceId, folderUri: folder.uri });
   }
   workspaceAdapters.set(workspaceId, adapterSet);
-  logger.info('Registered workspace adapters', { workspaceId, folderUri: folder.uri, folderId: folder.id });
+  workspaceAdaptersVersion++;
+  logger.info('Registered workspace adapters', { workspaceId, folderUri: folder.uri, folderId: folder.id, version: workspaceAdaptersVersion });
   return workspaceId;
 }
 
-function unregisterWorkspaceAdapters(
+export function unregisterWorkspaceAdapters(
   folderUri: string,
   logger: Logger
 ): void {
@@ -142,22 +145,27 @@ function unregisterWorkspaceAdapters(
   for (const [workspaceId, adapterSet] of workspaceAdapters.entries()) {
     if (adapterSet.folder.uri === folderUri) {
       workspaceAdapters.delete(workspaceId);
-      logger.info('Unregistered workspace adapters', { workspaceId, folderUri });
+      workspaceAdaptersVersion++;
+      logger.info('Unregistered workspace adapters', { workspaceId, folderUri, version: workspaceAdaptersVersion });
       return;
     }
   }
   logger.warn('No workspace adapters found for folder', { folderUri });
 }
 
-function getRegisteredWorkspaceIds(): readonly string[] {
+export function getRegisteredWorkspaceIds(): readonly string[] {
   return Array.from(workspaceAdapters.keys());
 }
 
-function hasWorkspaceAdapter(workspaceId: string): boolean {
+export function getWorkspaceAdaptersVersion(): number {
+  return workspaceAdaptersVersion;
+}
+
+export function hasWorkspaceAdapter(workspaceId: string): boolean {
   return workspaceAdapters.has(workspaceId);
 }
 
-function getWorkspaceAdapter(workspaceId: string): WorkspaceAdapterSet | undefined {
+export function getWorkspaceAdapter(workspaceId: string): WorkspaceAdapterSet | undefined {
   return workspaceAdapters.get(workspaceId);
 }
 
@@ -187,7 +195,7 @@ const FindReferencesInputSchema = z.object({
   filePattern: z.string().optional(),
 });
 
-function createRoutedReadFileTool(): ToolDefinition {
+export function createRoutedReadFileTool(): ToolDefinition {
   return {
     name: 'read_file',
     description: 'Read the contents of a file from a workspace folder. Requires workspaceId to select the target folder.',
@@ -209,21 +217,29 @@ function createRoutedReadFileTool(): ToolDefinition {
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
+      const versionAtLookup = getWorkspaceAdaptersVersion();
       
-      // Validate workspace identity matches
-      if (context.workspaceId && context.workspaceId !== adapter.computedWorkspaceId) {
-        throw new Error(`Workspace identity mismatch: context=${context.workspaceId}, adapter=${adapter.computedWorkspaceId}`);
+      // Create folder-scoped execution context with the adapter's folder-specific identity
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: adapter.computedWorkspaceId,
+        workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
+      };
+      
+      // Verify registry hasn't changed during async boundary (defense-in-depth)
+      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
+        throw new Error(`Workspace registry changed during tool lookup, retry required`);
       }
       
       return adapter.readFile(
         { uri, lineStart, lineEnd, workspaceFolder: adapter.folder, signal: context.signal },
-        context
+        folderContext
       );
     },
   };
 }
 
-function createRoutedListDirectoryTool(): ToolDefinition {
+export function createRoutedListDirectoryTool(): ToolDefinition {
   return {
     name: 'list_directory',
     description: 'List the contents of a directory in a workspace folder. Requires workspaceId to select the target folder.',
@@ -245,20 +261,29 @@ function createRoutedListDirectoryTool(): ToolDefinition {
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
+      const versionAtLookup = getWorkspaceAdaptersVersion();
       
-      if (context.workspaceId && context.workspaceId !== adapter.computedWorkspaceId) {
-        throw new Error(`Workspace identity mismatch: context=${context.workspaceId}, adapter=${adapter.computedWorkspaceId}`);
+      // Create folder-scoped execution context with the adapter's folder-specific identity
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: adapter.computedWorkspaceId,
+        workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
+      };
+      
+      // Verify registry hasn't changed during async boundary (defense-in-depth)
+      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
+        throw new Error(`Workspace registry changed during tool lookup, retry required`);
       }
       
       return adapter.listDirectory(
         { uri, workspaceFolder: adapter.folder, signal: context.signal },
-        context
+        folderContext
       );
     },
   };
 }
 
-function createRoutedSearchCodeTool(): ToolDefinition {
+export function createRoutedSearchCodeTool(): ToolDefinition {
   return {
     name: 'search_code',
     description: 'Search for code patterns in a workspace folder. Requires workspaceId to select the target folder.',
@@ -280,20 +305,29 @@ function createRoutedSearchCodeTool(): ToolDefinition {
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
+      const versionAtLookup = getWorkspaceAdaptersVersion();
       
-      if (context.workspaceId && context.workspaceId !== adapter.computedWorkspaceId) {
-        throw new Error(`Workspace identity mismatch: context=${context.workspaceId}, adapter=${adapter.computedWorkspaceId}`);
+      // Create folder-scoped execution context with the adapter's folder-specific identity
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: adapter.computedWorkspaceId,
+        workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
+      };
+      
+      // Verify registry hasn't changed during async boundary (defense-in-depth)
+      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
+        throw new Error(`Workspace registry changed during tool lookup, retry required`);
       }
       
       return adapter.searchCode(
         { pattern, workspaceFolder: adapter.folder, filePattern, caseSensitive, signal: context.signal },
-        context
+        folderContext
       );
     },
   };
 }
 
-function createRoutedFindReferencesTool(): ToolDefinition {
+export function createRoutedFindReferencesTool(): ToolDefinition {
   return {
     name: 'find_references',
     description: 'Find references to a symbol in a workspace folder. Requires workspaceId to select the target folder.',
@@ -315,14 +349,23 @@ function createRoutedFindReferencesTool(): ToolDefinition {
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
+      const versionAtLookup = getWorkspaceAdaptersVersion();
       
-      if (context.workspaceId && context.workspaceId !== adapter.computedWorkspaceId) {
-        throw new Error(`Workspace identity mismatch: context=${context.workspaceId}, adapter=${adapter.computedWorkspaceId}`);
+      // Create folder-scoped execution context with the adapter's folder-specific identity
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: adapter.computedWorkspaceId,
+        workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
+      };
+      
+      // Verify registry hasn't changed during async boundary (defense-in-depth)
+      if (getWorkspaceAdaptersVersion() !== versionAtLookup) {
+        throw new Error(`Workspace registry changed during tool lookup, retry required`);
       }
       
       return adapter.findReferences(
         { symbol, workspaceFolder: adapter.folder, filePattern, signal: context.signal },
-        context
+        folderContext
       );
     },
   };
@@ -815,11 +858,33 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     `[${new Date().toISOString()}] [INFO] NexiPi extension activating v${defaultConfig.version}`
   );
 
+  // Track resources for cleanup on activation failure
+  const createdResources: Array<{ name: string; dispose: () => Promise<void> | void }> = [];
+  function trackResource(name: string, dispose: () => Promise<void> | void) {
+    createdResources.push({ name, dispose });
+  }
+  async function cleanupOnFailure(error: Error) {
+    logger.error('Activation failed, cleaning up resources', { error: error.message, resources: createdResources.map(r => r.name).join(', ') });
+    // Clean up in reverse order
+    for (let i = createdResources.length - 1; i >= 0; i--) {
+      const resource = createdResources[i];
+      try {
+        await resource.dispose();
+        logger.debug('Cleaned up resource', { name: resource.name });
+      } catch (cleanupError) {
+        const err = cleanupError instanceof Error ? cleanupError : new Error(String(cleanupError));
+        logger.warn('Failed to cleanup resource', { name: resource.name, error: err.message });
+      }
+    }
+    createdResources.length = 0;
+  }
+
   // --- Workspace intelligence (Phase 08 Stage F) ---
   const workspaceProvider = new VSCodeWorkspaceProvider();
   const fileSystem = new VSCodeFileSystemProvider();
   const workspaceManager = new WorkspaceManager(workspaceProvider, fileSystem, { logger });
   gWorkspaceManager = workspaceManager;
+  trackResource('workspaceManager', () => workspaceManager.dispose());
 
   workspaceManager.onStatusChange((status) => {
     if (status.disposed) {
@@ -842,6 +907,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     const err = error instanceof Error ? error : new Error(String(error));
     logger.error('Failed to initialize workspace manager', { error: err.message });
     updateStatusBar(statusBarItem, 'error', 'Workspace init failed');
+    await cleanupOnFailure(err);
     throw err;
   }
 
@@ -849,6 +915,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Create tool registry, executor with read-only permission policy, and execution service.
   const toolRegistry = createToolRegistry();
   gToolRegistry = toolRegistry;
+  trackResource('toolRegistry', () => { /* ToolRegistry has no dispose */ });
 
   const permissionPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
   const toolExecutor = new ToolExecutor(toolRegistry, { permissionPolicy, logger });
@@ -867,6 +934,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger,
   });
   gToolExecutionService = toolExecutionService;
+  trackResource('toolExecutionService', () => toolExecutionService.dispose());
 
   // Register the four routed tools (single registration per capability)
   registerRoutedTools(toolRegistry, logger);
@@ -898,6 +966,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
   // Track subscription for disposal
   const folderChangeDisposable = { dispose: () => folderChangeSubscription.unsubscribe() };
+  trackResource('folderChangeSubscription', () => folderChangeDisposable.dispose());
 
   // Compute stable multi-root workspace ID for persistence
   const workspaceId = computeMultiRootWorkspaceId(folders);
@@ -912,8 +981,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     logger.error('Failed to initialize persistence', { error: err.message });
     updateStatusBar(statusBarItem, 'error', 'Persistence init failed');
     void vscode.window.showErrorMessage(`Failed to initialize NexiPi persistence: ${err.message}`);
+    await cleanupOnFailure(err);
     throw err;
   }
+  trackResource('persistenceService', () => persistenceService.save());
 
   // Create persistence adapter
   const persistenceAdapter = createPersistenceAdapter({
@@ -922,6 +993,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   });
 
   await persistenceAdapter.initialize();
+  trackResource('persistenceAdapter', () => persistenceAdapter.dispose());
 
   const providerRegistry = createProviderRegistry();
   const chatService = createChatService({
@@ -935,6 +1007,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Initialize chat service (loads conversations from persistence)
   await chatService.initialize();
+  trackResource('chatService', () => chatService.dispose());
 
   // Store for deactivate()
   gChatService = chatService;
@@ -986,6 +1059,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // NOTE: Persistence adapter disposal is handled ONLY in async deactivate()
   // to avoid double-disposal and ensure correct shutdown ordering.
 
+  // Clear the tracking array since activation succeeded
+  createdResources.length = 0;
+
   gLogger.info('Extension activated successfully');
   updateStatusBar(statusBarItem, 'active');
 }
@@ -1023,17 +1099,38 @@ export async function deactivate(): Promise<void> {
     logger.error('Failed to dispose ChatService', { error: err.message });
   }
 
-  // 2. Dispose ToolExecutionService - await active executions with timeout.
-  //    This ensures tools receive AbortSignal and have time to settle.
+  // 2. Drain ToolExecutionService - await active executions with timeout.
+  //    This ensures tools receive AbortSignal and have time to settle cooperatively.
   try {
-    await disposeToolExecutionServiceWithTimeout(toolExecutionService, logger, 5000);
+    const drainResult = await toolExecutionService?.drain({ timeoutMs: 5000, pollIntervalMs: 50 });
+    if (drainResult?.settled) {
+      logger.info('ToolExecutionService drained successfully', { elapsedMs: drainResult.elapsedMs });
+    } else {
+      logger.warn('ToolExecutionService drain timeout, active executions may still be running', {
+        activeExecutions: drainResult?.activeExecutions,
+        queuedCalls: drainResult?.queuedCalls,
+        elapsedMs: drainResult?.elapsedMs,
+      });
+    }
+    // Dispose the service after drain (releases turns, clears queue)
+    toolExecutionService?.dispose();
     logger.info('ToolExecutionService disposed');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    logger.error('Failed to dispose ToolExecutionService', { error: err.message });
+    logger.error('Failed to drain/dispose ToolExecutionService', { error: err.message });
   }
 
-  // 3. Dispose workspace management and stop workspace activity.
+  // 3. Wait for any remaining underlying execution promises to settle.
+  //    This provides a safety net for uncooperative tools that ignore cancellation.
+  try {
+    await toolExecutionService?.waitForUnderlyings(2000);
+    logger.info('ToolExecutionService underlying promises settled');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.warn('ToolExecutionService underlying wait completed with timeout', { error: err.message });
+  }
+
+  // 4. Dispose workspace management and stop workspace activity.
   //    Now safe because ChatService and ToolExecutionService have stopped using filesystem.
   try {
     gWorkspaceManager?.dispose();
@@ -1043,7 +1140,7 @@ export async function deactivate(): Promise<void> {
     gLogger?.error('Failed to dispose workspace manager', { error: err.message });
   }
 
-  // 4. Clear tool registry references and workspace adapters.
+  // 5. Clear tool registry references and workspace adapters.
   workspaceAdapters.clear();
   if (toolRegistry) {
     logger.debug('ToolRegistry references cleared');
@@ -1051,7 +1148,7 @@ export async function deactivate(): Promise<void> {
   gToolRegistry = undefined;
   gToolExecutionService = undefined;
 
-  // 5. Save the database to disk, then dispose persistence adapter.
+  // 6. Save the database to disk, then dispose persistence adapter.
   try {
     persistenceService.save();
     logger.info('Database saved successfully on deactivation');
@@ -1061,7 +1158,7 @@ export async function deactivate(): Promise<void> {
     throw err;
   }
 
-  // 6. Dispose persistence adapter (closes foundation service)
+  // 7. Dispose persistence adapter (closes foundation service)
   try {
     gPersistenceAdapter?.dispose();
     logger.info('Persistence adapter disposed');
@@ -1071,39 +1168,4 @@ export async function deactivate(): Promise<void> {
   }
 
   logger.info('Async deactivation sequence completed');
-}
-
-/**
- * Dispose ToolExecutionService with a bounded wait for active executions to settle.
- * This ensures tools receive cancellation signals and have time to complete cooperatively.
- */
-async function disposeToolExecutionServiceWithTimeout(
-  service: ToolExecutionService | undefined,
-  logger: Logger,
-  timeoutMs: number
-): Promise<void> {
-  if (!service) return;
-
-  // Signal cancellation to all active turns
-  service.dispose();
-
-  // Wait for active executions to complete or timeout
-  const startTime = Date.now();
-  for (;;) {
-    const snapshot = service.getGlobalSnapshot();
-    if (snapshot.activeExecutions === 0 && snapshot.queuedCalls === 0) {
-      logger.debug('ToolExecutionService: all executions settled', { elapsedMs: Date.now() - startTime });
-      break;
-    }
-    if (Date.now() - startTime > timeoutMs) {
-      logger.warn('ToolExecutionService disposal timeout, active executions may still be running', {
-        activeExecutions: snapshot.activeExecutions,
-        queuedCalls: snapshot.queuedCalls,
-        elapsedMs: Date.now() - startTime,
-      });
-      break;
-    }
-    // Yield to allow async completions
-    await new Promise(resolve => setTimeout(resolve, 50));
-  }
 }

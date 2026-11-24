@@ -372,6 +372,18 @@ class CallEntry {
   }
 }
 
+export interface ToolExecutionServiceDrainOptions {
+  readonly timeoutMs: number;
+  readonly pollIntervalMs?: number;
+}
+
+export interface ToolExecutionServiceDrainResult {
+  readonly settled: boolean;
+  readonly activeExecutions: number;
+  readonly queuedCalls: number;
+  readonly elapsedMs: number;
+}
+
 export class ToolExecutionService {
   readonly executor: ToolExecutor;
   readonly config: ToolExecutionServiceConfig;
@@ -381,7 +393,9 @@ export class ToolExecutionService {
   private globalActiveCount = 0;
   private globalQueuedCount = 0;
   private disposed = false;
+  private closing = false;
   private turnCounter = 0;
+  private readonly activeUnderlyings: Set<Promise<unknown>> = new Set();
 
   constructor(executor: ToolExecutor, options: ToolExecutionServiceOptions = {}) {
     this.executor = executor;
@@ -394,8 +408,8 @@ export class ToolExecutionService {
   }
 
   createTurn(options: CreateTurnOptions = {}): ToolExecutionTurn {
-    if (this.disposed) {
-      throw new Error('ToolExecutionService has been disposed');
+    if (this.disposed || this.closing) {
+      throw new Error('ToolExecutionService has been disposed or is closing');
     }
     const turn = new ToolExecutionTurn(this, options.id ?? `turn_${++this.turnCounter}`);
     this.turns.add(turn);
@@ -410,9 +424,70 @@ export class ToolExecutionService {
     };
   }
 
+  /**
+   * Initiates graceful shutdown: stops accepting new work, cancels queued work,
+   * and waits for active executions to complete up to the timeout.
+   * Returns a result indicating whether all work settled.
+   */
+  async drain(options: ToolExecutionServiceDrainOptions): Promise<ToolExecutionServiceDrainResult> {
+    const { timeoutMs, pollIntervalMs = 50 } = options;
+    const startTime = Date.now();
+
+    if (this.disposed) {
+      return {
+        settled: true,
+        activeExecutions: 0,
+        queuedCalls: 0,
+        elapsedMs: 0,
+      };
+    }
+
+    // Enter closing state: prevent new turns and new submissions
+    this.closing = true;
+
+    // Cancel all queued entries
+    for (const entry of this.globalQueue) {
+      if (entry.status === 'queued' || entry.status === 'admitted') {
+        entry.isCancelled = true;
+        entry.resolveWith(cancelledResult(entry.toolName));
+      }
+    }
+    this.globalQueue.length = 0;
+    this.globalQueuedCount = 0;
+
+    // Signal cancellation to all active turns
+    for (const turn of this.turns) {
+      turn.cancel();
+    }
+
+    // Wait for active executions to complete or timeout
+    for (;;) {
+      const snapshot = this.getGlobalSnapshot();
+      if (snapshot.activeExecutions === 0 && snapshot.queuedCalls === 0) {
+        return {
+          settled: true,
+          activeExecutions: 0,
+          queuedCalls: 0,
+          elapsedMs: Date.now() - startTime,
+        };
+      }
+      if (Date.now() - startTime > timeoutMs) {
+        return {
+          settled: false,
+          activeExecutions: snapshot.activeExecutions,
+          queuedCalls: snapshot.queuedCalls,
+          elapsedMs: Date.now() - startTime,
+        };
+      }
+      // Yield to allow async completions
+      await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+    }
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
+    this.closing = true;
     for (const turn of this.turns) {
       turn.dispose();
     }
@@ -421,8 +496,32 @@ export class ToolExecutionService {
     this.globalQueuedCount = 0;
   }
 
+  /** Internal: track an underlying execution promise for drain purposes. */
+  trackUnderlying(promise: Promise<unknown>): void {
+    this.activeUnderlyings.add(promise);
+    promise.finally(() => this.activeUnderlyings.delete(promise));
+  }
+
+  /** Internal: wait for all tracked underlying promises to settle. */
+  async waitForUnderlyings(timeoutMs: number): Promise<void> {
+    const startTime = Date.now();
+    for (;;) {
+      if (this.activeUnderlyings.size === 0) return;
+      if (Date.now() - startTime > timeoutMs) {
+        this.logger?.warn?.('ToolExecutionService: timeout waiting for underlying promises', {
+          remaining: this.activeUnderlyings.size,
+        });
+        return;
+      }
+      await Promise.race([
+        Promise.all(this.activeUnderlyings),
+        new Promise(resolve => setTimeout(resolve, 50)),
+      ]);
+    }
+  }
+
   admitEntry(entry: CallEntry): void {
-    if (this.disposed) {
+    if (this.disposed || this.closing) {
       entry.resolveWith(cancelledResult(entry.toolName));
       return;
     }
@@ -569,6 +668,7 @@ export class ToolExecutionService {
     const callContext: ToolExecutionContext = { ...context, signal };
     const underlying = this.executor.execute(toolName, entry.input, callContext);
     entry.underlying = underlying;
+    this.trackUnderlying(underlying);
 
     try {
       return await Promise.race([underlying, racePromise]);
