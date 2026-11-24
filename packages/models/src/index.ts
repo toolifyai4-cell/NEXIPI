@@ -4,6 +4,7 @@ export * from './credentials.js';
 export * from './errors.js';
 export * from './chat.js';
 export * from './persistence-adapter.js';
+export * from './tools/index.js';
 
 export {
   ModelProviderErrorCode,
