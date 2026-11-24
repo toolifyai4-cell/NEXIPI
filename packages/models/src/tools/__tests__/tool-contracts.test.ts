@@ -359,8 +359,8 @@ describe('ModelToolDefinition serializability and separation', () => {
 });
 
 describe('JsonSchemaValue', () => {
-  it('should exclude functions at the type level', () => {
-    expectTypeOf<JsonSchemaValue>().toNotMatch<Function>();
+  it('should exclude functions at runtime', () => {
+    expect(JsonSchemaValueSchema.safeParse(() => {}).success).toBe(false);
   });
 
   it('should accept primitive JSON values', () => {
@@ -451,8 +451,12 @@ describe('ToolExecutionResult', () => {
 
 describe('ToolPermissionPolicy', () => {
   it('should define the minimal policy interface', () => {
-    expectTypeOf<ToolPermissionPolicy>().toHaveProperty('name');
-    expectTypeOf<ToolPermissionPolicy>().toHaveProperty('evaluate');
+    const policy: ToolPermissionPolicy = {
+      name: 'read-only-allowlist',
+      evaluate: () => ({ allowed: true }),
+    };
+    expect(policy.name).toBe('read-only-allowlist');
+    expect(typeof policy.evaluate).toBe('function');
   });
 
   it('should define a decision with optional denial reason', () => {
