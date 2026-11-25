@@ -14,7 +14,13 @@ import { createPersistenceAdapter } from '@nexipi/models';
 import { WorkspaceManager } from './workspace/workspace-manager.js';
 import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
 import { VSCodeFileSystemProvider } from './workspace/vscode-file-system-provider.js';
-import { createToolRegistry, type ToolRegistry } from '@nexipi/models/tools';
+import {
+  createToolRegistry,
+  type ToolRegistry,
+  ToolErrorCode,
+  createToolError,
+  isToolError,
+} from '@nexipi/models/tools';
 import { ToolExecutor } from '@nexipi/models/tools';
 import { ToolExecutionService, type ToolExecutionServiceConfig } from '@nexipi/models/tools';
 import {
@@ -361,11 +367,19 @@ export function createRoutedReadFileTool(): ToolDefinition {
       const { uri, lineStart, lineEnd, workspaceId } = input as z.infer<typeof ReadFileInputSchema>;
       
       if (!hasWorkspaceAdapter(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
+        throw createToolError(
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `Workspace '${workspaceId}' is not registered`,
+          { toolName: 'read_file' }
+        );
       }
       
       if (isWorkspaceClosing(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${workspaceId}' is being removed, cannot accept new operations`,
+          { toolName: 'read_file' }
+        );
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
@@ -409,11 +423,19 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
       const { uri, workspaceId } = input as z.infer<typeof ListDirectoryInputSchema>;
       
       if (!hasWorkspaceAdapter(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
+        throw createToolError(
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `Workspace '${workspaceId}' is not registered`,
+          { toolName: 'list_directory' }
+        );
       }
       
       if (isWorkspaceClosing(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${workspaceId}' is being removed, cannot accept new operations`,
+          { toolName: 'list_directory' }
+        );
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
@@ -457,11 +479,19 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
       const { pattern, workspaceId, filePattern, caseSensitive } = input as z.infer<typeof SearchCodeInputSchema>;
       
       if (!hasWorkspaceAdapter(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
+        throw createToolError(
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `Workspace '${workspaceId}' is not registered`,
+          { toolName: 'search_code' }
+        );
       }
       
       if (isWorkspaceClosing(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${workspaceId}' is being removed, cannot accept new operations`,
+          { toolName: 'search_code' }
+        );
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
@@ -477,7 +507,14 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
       const lease = acquireLease(workspaceId, context.signal);
       try {
         return await adapter.searchCode(
-          { pattern, workspaceFolder: adapter.folder, filePattern, caseSensitive, signal: context.signal },
+          { 
+            query: pattern, 
+            mode: 'literal', 
+            workspaceFolder: adapter.folder, 
+            includePatterns: filePattern ? [filePattern] : undefined,
+            caseSensitive, 
+            signal: context.signal 
+          },
           folderContext
         );
       } finally {
@@ -505,11 +542,19 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
       const { symbol, workspaceId, filePattern } = input as z.infer<typeof FindReferencesInputSchema>;
       
       if (!hasWorkspaceAdapter(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is not registered. Available: ${getRegisteredWorkspaceIds().join(', ')}`);
+        throw createToolError(
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `Workspace '${workspaceId}' is not registered`,
+          { toolName: 'find_references' }
+        );
       }
       
       if (isWorkspaceClosing(workspaceId)) {
-        throw new Error(`Workspace '${workspaceId}' is being removed, cannot accept new operations`);
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${workspaceId}' is being removed, cannot accept new operations`,
+          { toolName: 'find_references' }
+        );
       }
       
       const adapter = getWorkspaceAdapter(workspaceId)!;
@@ -525,7 +570,12 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
       const lease = acquireLease(workspaceId, context.signal);
       try {
         return await adapter.findReferences(
-          { symbol, workspaceFolder: adapter.folder, filePattern, signal: context.signal },
+          { 
+            symbol, 
+            workspaceFolder: adapter.folder, 
+            includePatterns: filePattern ? [filePattern] : undefined,
+            signal: context.signal 
+          },
           folderContext
         );
       } finally {

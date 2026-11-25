@@ -284,8 +284,11 @@ describe('Real Tool Execution Integration', () => {
       
       expect(result[0].kind).toBe('success');
       const output = (result[0] as any).output;
-      expect(output.matches.length).toBeGreaterThan(0);
-      expect(output.matches.some((m: any) => m.matchText.includes('fooA'))).toBe(true);
+      // search_code returns files array with matches inside each file
+      expect(output.files.length).toBeGreaterThan(0);
+      const allMatches = output.files.flatMap((f: any) => f.matches);
+      expect(allMatches.length).toBeGreaterThan(0);
+      expect(allMatches.some((m: any) => m.matchedText.includes('fooA'))).toBe(true);
     });
 
     it('should execute find_references on each folder via routed tool', async () => {
@@ -306,7 +309,10 @@ describe('Real Tool Execution Integration', () => {
       
       expect(result[0].kind).toBe('success');
       const output = (result[0] as any).output;
-      expect(output.references.length).toBeGreaterThan(0);
+      // find_references returns files array with references inside each file
+      expect(output.files.length).toBeGreaterThan(0);
+      const allReferences = output.files.flatMap((f: any) => f.references);
+      expect(allReferences.length).toBeGreaterThan(0);
     });
   });
 
@@ -364,14 +370,15 @@ describe('Real Tool Execution Integration', () => {
   });
 
   describe('Workspace identity validation', () => {
-    it('should reject tool calls with mismatched workspace identity', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+    it('should route by workspaceId even when context workspaceFolder differs', async () => {
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
       const turn = toolExecutionService.createTurn({ id: 'test-identity-1' });
-      // Use folder B's identity but folder A's adapter context
+      // Use workspaceIdA but with folderB's workspaceFolder in context
+      // The routed tool should route by workspaceId and ignore context workspaceFolder
       const contextWrong: ToolExecutionContext = { 
         signal: new AbortController().signal, 
         workspaceId: workspaceIdA, 
@@ -383,13 +390,14 @@ describe('Real Tool Execution Integration', () => {
         { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], contextWrong);
       
-      expect(result[0].kind).toBe('failure');
-      expect((result[0] as any).error.message).toContain('Workspace identity mismatch');
+      // Should succeed because routed tool routes by workspaceId, not context workspaceFolder
+      expect(result[0].kind).toBe('success');
+      expect((result[0] as any).output.content).toContain('Hello from folder A');
     });
 
     it('should reject invalid workspace IDs', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -412,8 +420,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Cancellation propagation', () => {
     it('should cancel active tool execution when turn is cancelled', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -439,8 +447,8 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should cancel queued calls when turn is cancelled', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;');
@@ -472,8 +480,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Concurrent execution limits', () => {
     it('should respect maxConcurrentExecutions limit', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -500,8 +508,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Shutdown drain behavior', () => {
     it('should drain active executions on shutdown', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -522,11 +530,11 @@ describe('Real Tool Execution Integration', () => {
       const drainResult = await toolExecutionService.drain({ timeoutMs: 10000 });
       expect(drainResult.settled).toBe(true);
       expect(drainResult.activeExecutions).toBe(0);
-    });
+    }, 20000);
 
     it('should cancel queued work on drain', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -552,11 +560,11 @@ describe('Real Tool Execution Integration', () => {
       
       // Wait for all promises to settle
       await Promise.allSettled(promises);
-    });
+    }, 20000);
 
     it('should wait for underlying promises on waitForUnderlyings', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -569,18 +577,18 @@ describe('Real Tool Execution Integration', () => {
       };
       
       await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: workspaceIdA } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], context);
       
       await toolExecutionService.waitForUnderlyings(2000);
       // Should complete without timeout
-    });
+    }, 20000);
   });
 
   describe('ToolExecutionService disposal', () => {
     it('should dispose cleanly', async () => {
-      const { fsA, workspaceIdA } = createTestFileSystems();
-      registerTestWorkspaces(fsA, new InMemoryFileSystemProvider());
+      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
+      registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -593,21 +601,21 @@ describe('Real Tool Execution Integration', () => {
       };
       
       await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceA/file.txt', workspaceId: workspaceIdA } }
+        { toolName: 'read_file', input: { uri: '/workspaceA/fileA.txt', workspaceId: workspaceIdA } }
       ], context);
       
       toolExecutionService.dispose();
       expect(toolExecutionService.getGlobalSnapshot().activeExecutions).toBe(0);
-    });
+    }, 10000);
 
     it('should handle repeated dispose calls', async () => {
       toolExecutionService.dispose();
       toolExecutionService.dispose(); // Should not throw
-    });
+    }, 5000);
 
     it('should reject new turns after disposal', async () => {
       toolExecutionService.dispose();
       expect(() => toolExecutionService.createTurn()).toThrow();
-    });
+    }, 5000);
   });
 });

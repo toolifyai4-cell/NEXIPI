@@ -462,6 +462,17 @@ export class ToolExecutionService {
       this.drainReject = reject;
     });
 
+    // If no active executions, resolve immediately
+    if (this.globalActiveCount === 0) {
+      this.drainResolve();
+      return {
+        settled: true,
+        activeExecutions: 0,
+        queuedCalls: 0,
+        elapsedMs: Date.now() - startTime,
+      };
+    }
+
     // Cancel all queued entries
     for (const entry of this.globalQueue) {
       if (entry.status === 'queued' || entry.status === 'admitted') {
@@ -484,6 +495,9 @@ export class ToolExecutionService {
       });
       
       await Promise.race([this.drainPromise, timeoutPromise]);
+      
+      // Wait for underlying promises to settle
+      await this.waitForUnderlyings(Math.max(100, timeoutMs - (Date.now() - startTime)));
       
       return {
         settled: true,
