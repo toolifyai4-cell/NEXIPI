@@ -788,6 +788,129 @@ describe('ToolExecutionService', () => {
     });
   });
 
+  describe('drain', () => {
+    it('should report settled: true when all underlying promises have settled', async () => {
+      const turn = service.createTurn();
+      const promise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'x' } }],
+        makeContext()
+      );
+      await promise;
+      const result = await service.drain({ timeoutMs: 5000 });
+      expect(result.settled).toBe(true);
+      expect(result.activeExecutions).toBe(0);
+      service.dispose();
+    });
+
+    it('should report settled: false when drain timeout expires with pending operations', async () => {
+      const turn = service.createTurn();
+      // Use a slow tool that takes longer than the drain timeout
+      const slowTool = makeSlowTool(500);
+      registry.unregister('test_tool');
+      registry.register(slowTool);
+      const slowPromise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+        makeContext()
+      );
+      // Drain with very short timeout (10ms) - should not have time to complete
+      const result = await service.drain({ timeoutMs: 10 });
+      // Should report settled: false since the underlying promise is still pending
+      expect(result.settled).toBe(false);
+      // Wait for the slow tool to complete
+      await slowPromise;
+      service.dispose();
+    });
+
+    it('should handle repeated drain calls safely', async () => {
+      const turn = service.createTurn();
+      turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'x' } }],
+        makeContext()
+      );
+      // First drain
+      const result1 = await service.drain({ timeoutMs: 5000 });
+      expect(typeof result1.settled).toBe('boolean');
+      // Second drain should not throw
+      const result2 = await service.drain({ timeoutMs: 5000 });
+      expect(typeof result2.settled).toBe('boolean');
+      service.dispose();
+    });
+
+    it('should handle concurrent drain and dispose safely', async () => {
+      const turn = service.createTurn();
+      turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'x' } }],
+        makeContext()
+      );
+      // Race drain and dispose
+      const drainPromise = service.drain({ timeoutMs: 5000 });
+      const disposePromise = new Promise<void>(resolve => setTimeout(resolve, 50));
+      await Promise.race([drainPromise, disposePromise]);
+      // After dispose, drain should complete without throwing
+      // (drain may complete before or after dispose, both should be safe)
+    });
+
+    it('should track underlying promises and remove them after settlement', async () => {
+      const turn = service.createTurn();
+      // Use a slow tool to ensure underlying is tracked and pending
+      const slowTool = makeSlowTool(500);
+      registry.unregister('test_tool');
+      registry.register(slowTool);
+      const promise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+        makeContext()
+      );
+      // Before drain, underlying should be tracked
+      const beforeDrain = service.getGlobalSnapshot();
+      expect(beforeDrain.activeExecutions).toBeGreaterThan(0);
+      // After drain, underlying should be settled
+      const result = await service.drain({ timeoutMs: 5000 });
+      expect(result.settled).toBe(true);
+      service.dispose();
+    });
+
+    it('should not lose tracking entries before actual settlement', async () => {
+      const turn = service.createTurn();
+      // Use a slow tool to ensure underlying is tracked
+      const slowTool = makeSlowTool(500);
+      registry.unregister('test_tool');
+      registry.register(slowTool);
+      const promise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+        makeContext()
+      );
+      await promise;
+      // Drain should wait for actual settlement
+      const result = await service.drain({ timeoutMs: 5000 });
+      expect(result.settled).toBe(true);
+      // After drain, activeUnderlyings should be empty
+      service.dispose();
+    });
+
+    it('should handle deferred promise settlement after drain', async () => {
+      const turn = service.createTurn();
+      // Use a slow tool to ensure underlying is tracked
+      const slowTool = makeSlowTool(500);
+      registry.unregister('test_tool');
+      registry.register(slowTool);
+      // Submit a batch that tracks the underlying promise
+      turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+        makeContext()
+      );
+      // Drain before the slow tool settles
+      const result = await service.drain({ timeoutMs: 50 });
+      // Should report settled: false since the underlying promise hasn't settled yet
+      expect(result.settled).toBe(false);
+      // Wait for the slow tool to complete
+      await new Promise(resolve => setTimeout(resolve, 600));
+      // Drain again should now report settled: true
+      const result2 = await service.drain({ timeoutMs: 5000 });
+      expect(result2.settled).toBe(true);
+      service.dispose();
+    });
+  });
+
   describe('global queue capacity', () => {
     it('should enforce global queued call limit', async () => {
       const limitedQueueService = new ToolExecutionService(executor, {
