@@ -109,6 +109,8 @@ export function createReadFileToolDefinition(
         const result: ReadFileResult = await reader.readFile(options);
         return result;
       } catch (error) {
+        // TEMP DEBUG
+        console.error('TEMP DEBUG read_file error', { error: String(error), code: (error as any)?.code, contextWorkspaceId: context.workspaceId, computedWorkspaceId });
         if (isToolError(error)) {
           throw error;
         }

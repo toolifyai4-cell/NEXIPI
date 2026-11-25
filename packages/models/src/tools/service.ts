@@ -499,10 +499,13 @@ export class ToolExecutionService {
       // Wait for underlying promises to settle
       await this.waitForUnderlyings(Math.max(100, timeoutMs - (Date.now() - startTime)));
       
+      // Check if all underlying promises have actually settled
+      const underlyingSettled = this.activeUnderlyings.size === 0;
+      
       return {
-        settled: true,
-        activeExecutions: 0,
-        queuedCalls: 0,
+        settled: underlyingSettled,
+        activeExecutions: underlyingSettled ? 0 : this.globalActiveCount,
+        queuedCalls: this.globalQueuedCount,
         elapsedMs: Date.now() - startTime,
       };
     } catch {

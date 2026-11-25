@@ -2009,24 +2009,22 @@ export class ChatService {
     // Wait for all streams to settle, but with a timeout. 
     // If timeout expires, we still wait for all streams to settle in the background
     // but don't block disposal indefinitely.
-    return Promise.all(abortPromises)
-      .then(() => {
-        for (const info of streamInfos) {
-          this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
-        }
-        this.activeStreams.clear();
-        this.activeRequests.clear();
-        this.primaryRequestId.clear();
-      })
-      .catch(() => {
-        // If any stream fails, still update status and clear
-        for (const info of streamInfos) {
-          this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
-        }
-        this.activeStreams.clear();
-        this.activeRequests.clear();
-        this.primaryRequestId.clear();
-      });
+    // Wait for all streams to settle (their promises resolve/reject after cancellation)
+await Promise.all(abortPromises);
+
+// Update message status for all streams that were part of the disposal
+for (const info of streamInfos) {
+  this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
+}
+
+// Safely clear tracking for intentionally cancelled streams.
+// Their .catch() handlers have already run and updated message status to 'cancelled'.
+// We now safely remove them from active tracking using the recorded stream info.
+for (const info of streamInfos) {
+  this.activeStreams.delete(info.messageId);
+  this.activeRequests.delete(info.requestId);
+  this.primaryRequestId.delete(info.conversationId);
+}
   }
 }
 
