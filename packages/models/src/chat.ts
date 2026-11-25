@@ -1962,7 +1962,7 @@ export class ChatService {
     }
   }
 
-  dispose(): Promise<void> {
+  async dispose(): Promise<void> {
     this._isDisposed = true;
     const abortPromises: Array<Promise<void>> = [];
     const streamInfos: Array<{
@@ -2002,29 +2002,27 @@ export class ChatService {
     this.requestQueue.clear();
     this.eventEmitter.removeAllListeners();
     this.logger.info('ChatService disposed');
-    // Wait for all cancelled streams to settle with a reasonable timeout
-    // This timeout should be long enough to allow tool executions to complete their cancellation
-    const timeoutMs = 5000;
+    // Wait for all cancelled streams to settle, but never block disposal indefinitely.
+    // Streams that respond to abort settle within milliseconds; the timeout only bounds
+    // disposal for streams that ignore cancellation. A timeout is not treated as proof
+    // that an operation has settled.
+    const timeoutMs = 1000;
     const timeoutPromise = new Promise<void>(resolve => setTimeout(resolve, timeoutMs));
     // Wait for all streams to settle, but with a timeout. 
     // If timeout expires, we still wait for all streams to settle in the background
     // but don't block disposal indefinitely.
-    // Wait for all streams to settle (their promises resolve/reject after cancellation)
-await Promise.all(abortPromises);
+    // Wait for all streams to settle (their promises resolve/reject after cancellation),
+    // but never block disposal indefinitely. A timeout is not treated as proof that an
+    // operation has settled; it only bounds how long disposal waits.
+    await Promise.race([Promise.all(abortPromises), timeoutPromise]);
 
-// Update message status for all streams that were part of the disposal
-for (const info of streamInfos) {
-  this.updateMessage(info.conversationId, info.messageId, { status: 'cancelled' });
-}
-
-// Safely clear tracking for intentionally cancelled streams.
-// Their .catch() handlers have already run and updated message status to 'cancelled'.
-// We now safely remove them from active tracking using the recorded stream info.
-for (const info of streamInfos) {
-  this.activeStreams.delete(info.messageId);
-  this.activeRequests.delete(info.requestId);
-  this.primaryRequestId.delete(info.conversationId);
-}
+    // Safely clear tracking for intentionally cancelled streams now that disposal has
+    // requested cancellation and the streams have been given a chance to settle.
+    for (const info of streamInfos) {
+      this.activeStreams.delete(info.messageId);
+      this.activeRequests.delete(info.requestId);
+      this.primaryRequestId.delete(info.conversationId);
+    }
   }
 }
 

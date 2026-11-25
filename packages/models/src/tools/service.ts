@@ -509,6 +509,12 @@ export class ToolExecutionService {
         elapsedMs: Date.now() - startTime,
       };
     } catch {
+      // Resolve the in-flight drain promise so that repeated or concurrent
+      // drain() calls (and dispose()) are not left waiting forever after a
+      // drain cycle has already completed (even when it timed out).
+      if (this.drainResolve) {
+        this.drainResolve();
+      }
       const snapshot = this.getGlobalSnapshot();
       return {
         settled: false,
