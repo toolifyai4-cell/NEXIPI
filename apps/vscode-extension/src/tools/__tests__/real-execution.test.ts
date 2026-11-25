@@ -335,7 +335,7 @@ describe('Real Tool Execution Integration', () => {
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: workspaceIdB } }
+        { toolName: 'read_file', input: { uri: '/workspaceB/does-not-exist.txt', workspaceId: workspaceIdB } }
       ], contextA);
       
       // The routed tool should find the adapter for workspaceIdB and execute it
@@ -346,8 +346,8 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should reject cross-folder access when file does not exist in target folder', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'content A');
       // Don't write fileB.txt to folder B
@@ -361,7 +361,7 @@ describe('Real Tool Execution Integration', () => {
       };
       
       const result = await turn.submitBatch([
-        { toolName: 'read_file', input: { uri: '/workspaceB/fileB.txt', workspaceId: workspaceIdB } }
+        { toolName: 'read_file', input: { uri: '/workspaceB/does-not-exist.txt', workspaceId: workspaceIdB } }
       ], contextA);
       
       // The routed tool routes to folder B's adapter, but the file doesn't exist in folder B
@@ -371,8 +371,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Workspace identity validation', () => {
     it('should route by workspaceId even when context workspaceFolder differs', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -396,8 +396,8 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should reject invalid workspace IDs', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -420,8 +420,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Cancellation propagation', () => {
     it('should cancel active tool execution when turn is cancelled', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -447,8 +447,8 @@ describe('Real Tool Execution Integration', () => {
     });
 
     it('should cancel queued calls when turn is cancelled', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       fsA.writeFile('/workspaceA/subdir/fileA2.ts', 'export const a = 1;');
@@ -480,8 +480,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Concurrent execution limits', () => {
     it('should respect maxConcurrentExecutions limit', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -508,8 +508,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('Shutdown drain behavior', () => {
     it('should drain active executions on shutdown', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -533,8 +533,8 @@ describe('Real Tool Execution Integration', () => {
     }, 20000);
 
     it('should cancel queued work on drain', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -563,8 +563,8 @@ describe('Real Tool Execution Integration', () => {
     }, 20000);
 
     it('should wait for underlying promises on waitForUnderlyings', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -587,8 +587,8 @@ describe('Real Tool Execution Integration', () => {
 
   describe('ToolExecutionService disposal', () => {
     it('should dispose cleanly', async () => {
-      const { fsA, fsB, workspaceIdA, workspaceIdB } = createTestFileSystems();
-      registerTestWorkspaces(fsA, fsB);
+      const { fsA, fsB } = createTestFileSystems();
+      const { workspaceIdA, workspaceIdB } = registerTestWorkspaces(fsA, fsB);
       
       fsA.writeFile('/workspaceA/fileA.txt', 'Hello from folder A');
       
@@ -619,3 +619,7 @@ describe('Real Tool Execution Integration', () => {
     }, 5000);
   });
 });
+
+
+
+

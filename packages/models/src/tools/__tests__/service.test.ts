@@ -802,22 +802,23 @@ describe('ToolExecutionService', () => {
       service.dispose();
     });
 
-    it('should report settled: false when drain timeout expires with pending operations', async () => {
+    it('should report settled: false when drain called with pending uncooperative tool executions', async () => {
       const turn = service.createTurn();
-      // Use a slow tool that takes longer than the drain timeout
-      const slowTool = makeSlowTool(500);
+      // Use an uncooperative tool that doesn't respect cancellation and keeps executing
+      const uncooperativeTool = makeIgnoringTool();
       registry.unregister('test_tool');
-      registry.register(slowTool);
-      const slowPromise = turn.submitBatch(
-        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+      registry.register(uncooperativeTool);
+      turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'ignored' } }],
         makeContext()
       );
-      // Drain with very short timeout (10ms) - should not have time to complete
-      const result = await service.drain({ timeoutMs: 10 });
-      // Should report settled: false since the underlying promise is still pending
+      // Wait for the tool to start executing (globalActiveCount should be 1)
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Drain with short timeout - underlying promise should still be pending
+      const result = await service.drain({ timeoutMs: 50 });
+      // Should report settled: false since the underlying promise from the uncooperative tool
+      // is still active and hasn't settled yet
       expect(result.settled).toBe(false);
-      // Wait for the slow tool to complete
-      await slowPromise;
       service.dispose();
     });
 
@@ -850,60 +851,76 @@ describe('ToolExecutionService', () => {
       // (drain may complete before or after dispose, both should be safe)
     });
 
-    it('should track underlying promises and remove them after settlement', async () => {
+    it('should track and settle promises via gated tool', async () => {
       const turn = service.createTurn();
-      // Use a slow tool to ensure underlying is tracked and pending
-      const slowTool = makeSlowTool(500);
+      // Use a gated tool that resolves after a deferred promise settles
+      const gate = new Promise<void>(resolve => { (globalThis as any).gateRelease = resolve; });
       registry.unregister('test_tool');
-      registry.register(slowTool);
+      registry.register(makeGatedTool(gate));
       const promise = turn.submitBatch(
-        [{ toolName: 'test_tool', input: { value: 'slow' } }],
+        [{ toolName: 'test_tool', input: { value: 'gated' } }],
         makeContext()
       );
+      // Wait for the tool to start executing (globalActiveCount should be 1)
+      await new Promise(resolve => setTimeout(resolve, 50));
       // Before drain, underlying should be tracked
       const beforeDrain = service.getGlobalSnapshot();
       expect(beforeDrain.activeExecutions).toBeGreaterThan(0);
-      // After drain, underlying should be settled
-      const result = await service.drain({ timeoutMs: 5000 });
-      expect(result.settled).toBe(true);
-      service.dispose();
-    });
-
-    it('should not lose tracking entries before actual settlement', async () => {
-      const turn = service.createTurn();
-      // Use a slow tool to ensure underlying is tracked
-      const slowTool = makeSlowTool(500);
-      registry.unregister('test_tool');
-      registry.register(slowTool);
-      const promise = turn.submitBatch(
-        [{ toolName: 'test_tool', input: { value: 'slow' } }],
-        makeContext()
-      );
-      await promise;
-      // Drain should wait for actual settlement
-      const result = await service.drain({ timeoutMs: 5000 });
-      expect(result.settled).toBe(true);
-      // After drain, activeUnderlyings should be empty
-      service.dispose();
-    });
-
-    it('should handle deferred promise settlement after drain', async () => {
-      const turn = service.createTurn();
-      // Use a slow tool to ensure underlying is tracked
-      const slowTool = makeSlowTool(500);
-      registry.unregister('test_tool');
-      registry.register(slowTool);
-      // Submit a batch that tracks the underlying promise
-      turn.submitBatch(
-        [{ toolName: 'test_tool', input: { value: 'slow' } }],
-        makeContext()
-      );
-      // Drain before the slow tool settles
+      // Drain before the gate is released - should report not settled
       const result = await service.drain({ timeoutMs: 50 });
-      // Should report settled: false since the underlying promise hasn't settled yet
       expect(result.settled).toBe(false);
-      // Wait for the slow tool to complete
-      await new Promise(resolve => setTimeout(resolve, 600));
+      // Release the gate and wait for tool to complete
+      (globalThis as any).gateRelease!();
+      // Drain again should now report settled: true
+      const result2 = await service.drain({ timeoutMs: 5000 });
+      expect(result2.settled).toBe(true);
+      expect(result2.activeExecutions).toBe(0);
+      service.dispose();
+    });
+
+    it('should not lose tracking entries before actual settlement with uncooperative tool', async () => {
+      const turn = service.createTurn();
+      // Use an uncooperative tool that keeps executing
+      const uncooperativeTool = makeIgnoringTool();
+      registry.unregister('test_tool');
+      registry.register(uncooperativeTool);
+      const promise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'ignored' } }],
+        makeContext()
+      );
+      // Wait for the tool to start executing (globalActiveCount should be 1)
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Drain should report settled: false while underlying is still active
+      const result = await service.drain({ timeoutMs: 50 });
+      expect(result.settled).toBe(false);
+      // Wait for the tool to complete
+      await promise;
+      // Drain again should now report settled: true
+      const result2 = await service.drain({ timeoutMs: 5000 });
+      expect(result2.settled).toBe(true);
+      service.dispose();
+    });
+
+    it('should handle deferred promise settlement after drain via gated tool', async () => {
+      const turn = service.createTurn();
+      // Use a gated tool that resolves after a deferred promise settles
+      const gate = new Promise<void>(resolve => { (globalThis as any).gateDeferRelease = resolve; });
+      registry.unregister('test_tool');
+      registry.register(makeGatedTool(gate));
+      // Submit a batch that tracks the underlying promise
+      const promise = turn.submitBatch(
+        [{ toolName: 'test_tool', input: { value: 'gated' } }],
+        makeContext()
+      );
+      // Wait for the tool to start executing
+      await new Promise(resolve => setTimeout(resolve, 50));
+      // Drain before the gate is released - should report not settled
+      const result = await service.drain({ timeoutMs: 50 });
+      expect(result.settled).toBe(false);
+      // Release the gate and wait for tool to complete
+      (globalThis as any).gateDeferRelease!();
+      // Wait for the tool to settle
+      await promise;
       // Drain again should now report settled: true
       const result2 = await service.drain({ timeoutMs: 5000 });
       expect(result2.settled).toBe(true);

@@ -93,7 +93,7 @@ function timeoutResult(toolName?: string): ToolExecutionResult {
   };
 }
 
-function resourceLimitResult(toolName?: string, message: string): ToolExecutionResult {
+function resourceLimitResult(toolName: string | undefined, message: string): ToolExecutionResult {
   const name = toolName ?? 'unknown';
   return {
     kind: 'failure',
@@ -464,7 +464,7 @@ export class ToolExecutionService {
 
     // If no active executions, resolve immediately
     if (this.globalActiveCount === 0) {
-      this.drainResolve();
+      this.drainResolve!();
       return {
         settled: true,
         activeExecutions: 0,
@@ -737,3 +737,4 @@ export class ToolExecutionService {
     }
   }
 }
+
