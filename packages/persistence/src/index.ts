@@ -32,6 +32,36 @@ export {
 } from './repositories.js';
 
 export {
+  ProposalRepository,
+  SqlJsProposalRepository,
+  ProposalRecord,
+  CreateProposalInput,
+  ProposalResult,
+  ProposalListResult,
+  ProposalListFilter,
+  ProposalStatusSchema,
+  type ProposalStatus,
+  executeInTransaction,
+} from './proposal-repository.js';
+
+export {
+  ApprovalRepository,
+  SqlJsApprovalRepository,
+  ApprovalRecord,
+  CreateApprovalInput,
+  ApprovalResult,
+  ApprovalListResult,
+  ApprovalListFilter,
+  ApprovalLifecycleStateSchema,
+  ApprovalDecisionSchema,
+  ContentHashSchema,
+  ApprovalProvenanceSchema,
+  type ApprovalLifecycleState,
+  type ApprovalDecision,
+  type ApprovalProvenance,
+} from './approval-repository.js';
+
+export {
   IPersistencePort,
   PersistencePort,
   CreateConversationInput,

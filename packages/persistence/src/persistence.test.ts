@@ -106,7 +106,7 @@ describe('PersistenceService - Migration System', () => {
     const db = service.getRawDatabase();
     const result = db.exec('SELECT version FROM migrations ORDER BY version');
     const versions = result[0].values.map(row => row[0]);
-    expect(versions).toEqual([1, 2, 3]);
+    expect(versions).toEqual([1, 2, 3, 4]);
   });
 
   it('should not re-apply migrations on reinit', async () => {
@@ -116,7 +116,7 @@ describe('PersistenceService - Migration System', () => {
     const db = service2.getRawDatabase();
     const result = db.exec('SELECT version FROM migrations ORDER BY version');
     const versions = result[0].values.map(row => row[0]);
-    expect(versions).toEqual([1, 2, 3]);
+    expect(versions).toEqual([1, 2, 3, 4]);
     service2.close();
   });
 

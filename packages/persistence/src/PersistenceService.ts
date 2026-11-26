@@ -127,6 +127,75 @@ const MIGRATIONS: Migration[] = [
       `);
     },
   },
+  {
+    version: 4,
+    name: 'create_proposal_and_approval_tables',
+    up: (db: SQLDatabase) => {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS proposal_versions (
+          id TEXT NOT NULL,
+          proposal_version INTEGER NOT NULL,
+          workspace_id TEXT NOT NULL,
+          workspace_folder_uri TEXT NOT NULL,
+          file_uri TEXT NOT NULL,
+          relative_path TEXT NOT NULL,
+          original_content_hash TEXT NOT NULL,
+          original_size INTEGER NOT NULL,
+          original_mtime INTEGER NOT NULL,
+          operations TEXT NOT NULL,
+          proposed_content TEXT NOT NULL,
+          proposed_content_hash TEXT NOT NULL,
+          proposed_size INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          expires_at INTEGER NOT NULL,
+          PRIMARY KEY (id, proposal_version)
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_proposal_versions_id ON proposal_versions(id)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_proposal_versions_status ON proposal_versions(status)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_proposal_versions_file_uri ON proposal_versions(file_uri)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_proposal_versions_workspace_id ON proposal_versions(workspace_id)`
+      );
+
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS approval_decisions (
+          id TEXT PRIMARY KEY,
+          proposal_id TEXT NOT NULL,
+          proposal_version INTEGER NOT NULL,
+          decision TEXT,
+          approved_content_hash TEXT NOT NULL,
+          decided_at INTEGER,
+          provenance TEXT NOT NULL,
+          lifecycle_state TEXT NOT NULL,
+          expires_at INTEGER,
+          workspace_id TEXT NOT NULL,
+          file_uri TEXT NOT NULL,
+          created_at INTEGER NOT NULL,
+          FOREIGN KEY (proposal_id, proposal_version) REFERENCES proposal_versions(id, proposal_version) ON DELETE CASCADE
+        )
+      `);
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_approval_decisions_proposal ON approval_decisions(proposal_id, proposal_version)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_approval_decisions_lifecycle_state ON approval_decisions(lifecycle_state)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_approval_decisions_expires_at ON approval_decisions(expires_at)`
+      );
+      db.exec(
+        `CREATE INDEX IF NOT EXISTS idx_approval_decisions_decision ON approval_decisions(decision)`
+      );
+    },
+  },
 ];
 
 export class PersistenceError extends Error {
