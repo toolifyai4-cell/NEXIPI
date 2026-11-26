@@ -2,6 +2,7 @@ import { describe, it, beforeEach, afterEach, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import initSqlJs from 'sql.js';
 import { PersistenceService as FoundationPersistenceService } from './PersistenceService.js';
 import { SqlJsConversationRepository, SqlJsMessageRepository } from './repositories.js';
 import {
@@ -866,7 +867,7 @@ describe('Approval Store - Migration and persistence across reopen', () => {
       .getRawDatabase()
       .exec('SELECT version FROM migrations ORDER BY version');
     const versions = migrations[0].values.map(row => row[0]);
-    expect(versions).toEqual([1, 2, 3, 4]);
+    expect(versions).toEqual([1, 2, 3, 4, 5]);
 
     const tables = service
       .getRawDatabase()
@@ -907,7 +908,7 @@ describe('Approval Store - Migration and persistence across reopen', () => {
     const migrationsBefore = service1
       .getRawDatabase()
       .exec('SELECT version FROM migrations ORDER BY version');
-    expect(migrationsBefore[0].values.map(row => row[0])).toEqual([1, 2, 3, 4]);
+    expect(migrationsBefore[0].values.map(row => row[0])).toEqual([1, 2, 3, 4, 5]);
 
     service1.save();
     service1.close();
@@ -919,7 +920,7 @@ describe('Approval Store - Migration and persistence across reopen', () => {
     const migrationsAfter = service2
       .getRawDatabase()
       .exec('SELECT version FROM migrations ORDER BY version');
-    expect(migrationsAfter[0].values.map(row => row[0])).toEqual([1, 2, 3, 4]);
+    expect(migrationsAfter[0].values.map(row => row[0])).toEqual([1, 2, 3, 4, 5]);
     const convRepo2 = new SqlJsConversationRepository(service2.getRawDatabase());
     const msgRepo2 = new SqlJsMessageRepository(service2.getRawDatabase());
 
@@ -985,7 +986,7 @@ describe('Approval Store - Migration and persistence across reopen', () => {
       .getRawDatabase()
       .exec('SELECT version FROM migrations ORDER BY version')[0]
       .values.map(row => row[0]);
-    expect(versions2).toEqual([1, 2, 3, 4]);
+    expect(versions2).toEqual([1, 2, 3, 4, 5]);
     service2.save();
     service2.close();
 
@@ -995,7 +996,329 @@ describe('Approval Store - Migration and persistence across reopen', () => {
       .getRawDatabase()
       .exec('SELECT version FROM migrations ORDER BY version')[0]
       .values.map(row => row[0]);
-    expect(versions3).toEqual([1, 2, 3, 4]);
+    expect(versions3).toEqual([1, 2, 3, 4, 5]);
     service3.close();
+  });
+});
+
+describe('Approval Store - Forward migration v5 (RESTRICT foreign key)', () => {
+  const PROPOSAL_ID = '11111111-1111-1111-1111-111111111111';
+  const APPROVAL_ID = '22222222-2222-2222-2222-222222222222';
+
+  let tempDir: string;
+  let dbPath: string;
+
+  beforeEach(() => {
+    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'nexipi-v5-test-'));
+    dbPath = path.join(tempDir, 'test.db');
+  });
+
+  afterEach(() => {
+    if (fs.existsSync(tempDir)) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+  });
+
+  // Original migration v4 DDL (ON DELETE CASCADE), used to build a genuine
+  // legacy-v4 fixture that the modified v4 migration (ON DELETE RESTRICT)
+  // would never produce on its own.
+  const legacyV4Ddl = `
+    CREATE TABLE IF NOT EXISTS conversations (
+      id TEXT PRIMARY KEY,
+      workspace_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      metadata TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      conversation_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL,
+      timestamp INTEGER NOT NULL,
+      seq INTEGER NOT NULL DEFAULT 0,
+      metadata TEXT NOT NULL DEFAULT '{}',
+      FOREIGN KEY (conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+    );
+    CREATE TABLE IF NOT EXISTS migrations (
+      version INTEGER PRIMARY KEY,
+      name TEXT NOT NULL,
+      applied_at INTEGER NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS proposal_versions (
+      id TEXT NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      workspace_id TEXT NOT NULL,
+      workspace_folder_uri TEXT NOT NULL,
+      file_uri TEXT NOT NULL,
+      relative_path TEXT NOT NULL,
+      original_content_hash TEXT NOT NULL,
+      original_size INTEGER NOT NULL,
+      original_mtime INTEGER NOT NULL,
+      operations TEXT NOT NULL,
+      proposed_content TEXT NOT NULL,
+      proposed_content_hash TEXT NOT NULL,
+      proposed_size INTEGER NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      expires_at INTEGER NOT NULL,
+      PRIMARY KEY (id, proposal_version)
+    );
+    CREATE TABLE IF NOT EXISTS approval_decisions (
+      id TEXT PRIMARY KEY,
+      proposal_id TEXT NOT NULL,
+      proposal_version INTEGER NOT NULL,
+      decision TEXT,
+      approved_content_hash TEXT NOT NULL,
+      decided_at INTEGER,
+      provenance TEXT NOT NULL,
+      lifecycle_state TEXT NOT NULL,
+      expires_at INTEGER,
+      workspace_id TEXT NOT NULL,
+      file_uri TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      FOREIGN KEY (proposal_id, proposal_version) REFERENCES proposal_versions(id, proposal_version) ON DELETE CASCADE
+    );
+  `;
+
+  async function buildLegacyV4Database(dbPath: string): Promise<void> {
+    const SQL = await initSqlJs();
+    const legacy = new SQL.Database(new Uint8Array(0));
+    legacy.exec('PRAGMA foreign_keys = ON');
+    legacy.exec(legacyV4Ddl);
+
+    // Record migrations 1-4 as already applied (simulating an old database).
+    legacy.exec(
+      `INSERT INTO migrations (version, name, applied_at) VALUES
+        (1, 'create_conversations_table', 1000),
+        (2, 'create_messages_table', 1000),
+        (3, 'create_migrations_table', 1000),
+        (4, 'create_proposal_and_approval_tables', 1000)`
+    );
+
+    // Seed existing conversation/message data.
+    legacy.exec(
+      `INSERT INTO conversations (id, workspace_id, title, created_at, updated_at, metadata)
+        VALUES ('conv-001', 'ws-001', 'Old Conversation', 1000, 1000, '{}')`
+    );
+    legacy.exec(
+      `INSERT INTO messages (id, conversation_id, role, content, status, timestamp, seq, metadata)
+        VALUES ('msg-001', 'conv-001', 'user', 'Hello', 'completed', 1000, 0, '{}')`
+    );
+
+    // Seed a proposal version and an approval that references it.
+    legacy.exec(
+      `INSERT INTO proposal_versions (
+        id, proposal_version, workspace_id, workspace_folder_uri, file_uri, relative_path,
+        original_content_hash, original_size, original_mtime, operations, proposed_content,
+        proposed_content_hash, proposed_size, status, created_at, expires_at
+      ) VALUES (
+        '${PROPOSAL_ID}', 1, 'ws-001', 'file:///workspace', 'file:///workspace/file.txt', 'file.txt',
+        '1111111111111111111111111111111111111111111111111111111111111111', 100, 1000,
+        '[{"kind":"replace-lines","startLine":1,"endLine":1,"newContent":"hello"}]', 'hello world',
+        '2222222222222222222222222222222222222222222222222222222222222222', 11,
+        'awaiting-approval', 1000, 2000
+      )`
+    );
+    legacy.exec(
+      `INSERT INTO approval_decisions (
+        id, proposal_id, proposal_version, decision, approved_content_hash, decided_at,
+        provenance, lifecycle_state, expires_at, workspace_id, file_uri, created_at
+      ) VALUES (
+        '${APPROVAL_ID}', '${PROPOSAL_ID}', 1, 'approve',
+        '2222222222222222222222222222222222222222222222222222222222222222', 1500,
+        '{"kind":"trusted-boundary","boundary":"user-boundary-1"}', 'approved', 3000,
+        'ws-001', 'file:///workspace/file.txt', 1000
+      )`
+    );
+
+    fs.writeFileSync(dbPath, legacy.export());
+    legacy.close();
+  }
+
+  function readMigrations(service: FoundationPersistenceService) {
+    return service
+      .getRawDatabase()
+      .exec('SELECT version FROM migrations ORDER BY version')[0]
+      .values.map(row => row[0]);
+  }
+
+  function readForeignKeyAction(service: FoundationPersistenceService): string {
+    const rows = service
+      .getRawDatabase()
+      .exec('PRAGMA foreign_key_list(approval_decisions)')[0].values;
+    const fk = rows.find((row: unknown[]) => String(row[2]) === 'proposal_versions');
+    return fk ? String(fk[6]) : '';
+  }
+
+  it('upgrades a legacy v4 ON DELETE CASCADE database to v5', async () => {
+    await buildLegacyV4Database(dbPath);
+
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+
+    expect(readMigrations(service)).toEqual([1, 2, 3, 4, 5]);
+    expect(readForeignKeyAction(service)).toBe('RESTRICT');
+    expect(service.getRawDatabase().exec('PRAGMA foreign_keys')[0].values[0][0]).toBe(1);
+
+    service.close();
+  });
+
+  it('preserves existing proposal and approval records across the v5 upgrade', async () => {
+    await buildLegacyV4Database(dbPath);
+
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+
+    const proposalRepo = new SqlJsProposalRepository(service.getRawDatabase());
+    const approvalRepo = new SqlJsApprovalRepository(service.getRawDatabase());
+
+    const proposal = await proposalRepo.getProposal(PROPOSAL_ID, 1);
+    expect(proposal.error).toBeNull();
+    expect(proposal.proposal!.proposedContent).toBe('hello world');
+    expect(proposal.proposal!.proposedContentHash).toBe(PROPOSED_HASH);
+
+    const approval = await approvalRepo.getApproval(APPROVAL_ID);
+    expect(approval.error).toBeNull();
+    expect(approval.approval).not.toBeNull();
+    expect(approval.approval!.id).toBe(APPROVAL_ID);
+    expect(approval.approval!.proposalId).toBe(PROPOSAL_ID);
+    expect(approval.approval!.proposalVersion).toBe(1);
+    expect(approval.approval!.decision).toBe('approve');
+    expect(approval.approval!.lifecycleState).toBe('approved');
+    expect(approval.approval!.approvedContentHash).toBe(PROPOSED_HASH);
+    expect(approval.approval!.decidedAt).toBe(1500);
+    expect(approval.approval!.expiresAt).toBe(3000);
+
+    service.close();
+  });
+
+  it('preserves existing conversation and message data across the v5 upgrade', async () => {
+    await buildLegacyV4Database(dbPath);
+
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+
+    const convRepo = new SqlJsConversationRepository(service.getRawDatabase());
+    const msgRepo = new SqlJsMessageRepository(service.getRawDatabase());
+
+    const conv = await convRepo.getById('conv-001');
+    expect(conv.error).toBeNull();
+    expect(conv.conversation!.title).toBe('Old Conversation');
+
+    const msg = await msgRepo.getById('msg-001');
+    expect(msg.error).toBeNull();
+    expect(msg.message!.content).toBe('Hello');
+
+    service.close();
+  });
+
+  it('rejects deletion of a proposal version with approval history after upgrading to v5', async () => {
+    await buildLegacyV4Database(dbPath);
+
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+    const db = service.getRawDatabase();
+
+    let threw = false;
+    try {
+      db.exec(`DELETE FROM proposal_versions WHERE id='${PROPOSAL_ID}' AND proposal_version=1`);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+
+    const approvalRepo = new SqlJsApprovalRepository(db);
+    const stored = await approvalRepo.getApproval(APPROVAL_ID);
+    expect(stored.error).toBeNull();
+    expect(stored.approval).not.toBeNull();
+    expect(stored.approval!.id).toBe(APPROVAL_ID);
+
+    service.close();
+  });
+
+  it('reaches v5 on fresh initialization', async () => {
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+
+    expect(readMigrations(service)).toEqual([1, 2, 3, 4, 5]);
+    expect(readForeignKeyAction(service)).toBe('RESTRICT');
+    expect(service.getRawDatabase().exec('PRAGMA foreign_keys')[0].values[0][0]).toBe(1);
+
+    service.close();
+  });
+
+  it('rejects deletion of a proposal version with approval history on a fresh v5 database', async () => {
+    const service = new FoundationPersistenceService({ dbPath });
+    await service.init();
+    const proposalRepo = new SqlJsProposalRepository(service.getRawDatabase());
+    const approvalRepo = new SqlJsApprovalRepository(service.getRawDatabase());
+
+    await proposalRepo.createProposal(makeProposalInput({ proposalVersion: 1 }));
+    await approvalRepo.createApproval(
+      makeApprovalInput({
+        id: APPROVAL_ID,
+        decision: 'approve',
+        decidedAt: 1500,
+        lifecycleState: 'approved',
+        approvedContentHash: PROPOSED_HASH,
+      })
+    );
+
+    const db = service.getRawDatabase();
+    let threw = false;
+    try {
+      db.exec(`DELETE FROM proposal_versions WHERE id='${PROPOSAL_ID}' AND proposal_version=1`);
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+
+    const stored = await approvalRepo.getApproval(APPROVAL_ID);
+    expect(stored.error).toBeNull();
+    expect(stored.approval).not.toBeNull();
+
+    service.close();
+  });
+
+  it('is idempotent across reopen cycles', async () => {
+    const service1 = new FoundationPersistenceService({ dbPath });
+    await service1.init();
+    expect(readMigrations(service1)).toEqual([1, 2, 3, 4, 5]);
+    service1.save();
+    service1.close();
+
+    const service2 = new FoundationPersistenceService({ dbPath });
+    await service2.init();
+    expect(readMigrations(service2)).toEqual([1, 2, 3, 4, 5]);
+    service2.save();
+    service2.close();
+
+    const service3 = new FoundationPersistenceService({ dbPath });
+    await service3.init();
+    expect(readMigrations(service3)).toEqual([1, 2, 3, 4, 5]);
+    service3.close();
+  });
+
+  it('preserves corrected schema and records across export, close, and reload', async () => {
+    const service1 = new FoundationPersistenceService({ dbPath });
+    await service1.init();
+    await buildLegacyV4Database(dbPath);
+    service1.close();
+
+    const service2 = new FoundationPersistenceService({ dbPath });
+    await service2.init();
+    expect(readMigrations(service2)).toEqual([1, 2, 3, 4, 5]);
+    expect(readForeignKeyAction(service2)).toBe('RESTRICT');
+
+    const approvalRepo = new SqlJsApprovalRepository(service2.getRawDatabase());
+    const stored = await approvalRepo.getApproval(APPROVAL_ID);
+    expect(stored.error).toBeNull();
+    expect(stored.approval).not.toBeNull();
+    expect(stored.approval!.lifecycleState).toBe('approved');
+
+    service2.close();
   });
 });

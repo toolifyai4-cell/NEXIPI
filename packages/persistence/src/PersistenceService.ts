@@ -194,6 +194,87 @@ const MIGRATIONS: Migration[] = [
       );
     },
   },
+  {
+    version: 5,
+    name: 'restrict_approval_decision_foreign_key',
+    up: (db: SQLDatabase) => {
+      // Rebuild approval_decisions so its composite foreign key references
+      // proposal_versions(id, proposal_version) with ON DELETE RESTRICT, which
+      // prevents a proposal version from being deleted while approval history
+      // still references it. Foreign keys remain enforced throughout; the
+      // rebuild runs inside a transaction so a failure leaves the original
+      // table intact and v5 is not recorded as applied.
+      const tableInfo = db.exec(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='approval_decisions'"
+      );
+      const alreadyRestrict =
+        tableInfo.length > 0 &&
+        String(tableInfo[0].values[0][0]).toUpperCase().includes('ON DELETE RESTRICT');
+
+      if (alreadyRestrict) {
+        return;
+      }
+
+      db.exec('BEGIN');
+      try {
+        db.exec(`
+          CREATE TABLE approval_decisions_new (
+            id TEXT PRIMARY KEY,
+            proposal_id TEXT NOT NULL,
+            proposal_version INTEGER NOT NULL,
+            decision TEXT,
+            approved_content_hash TEXT NOT NULL,
+            decided_at INTEGER,
+            provenance TEXT NOT NULL,
+            lifecycle_state TEXT NOT NULL,
+            expires_at INTEGER,
+            workspace_id TEXT NOT NULL,
+            file_uri TEXT NOT NULL,
+            created_at INTEGER NOT NULL,
+            FOREIGN KEY (proposal_id, proposal_version) REFERENCES proposal_versions(id, proposal_version) ON DELETE RESTRICT
+          )
+        `);
+        db.exec(
+          `INSERT INTO approval_decisions_new (
+            id, proposal_id, proposal_version, decision, approved_content_hash,
+            decided_at, provenance, lifecycle_state, expires_at, workspace_id,
+            file_uri, created_at
+          )
+          SELECT id, proposal_id, proposal_version, decision, approved_content_hash,
+                 decided_at, provenance, lifecycle_state, expires_at, workspace_id,
+                 file_uri, created_at
+          FROM approval_decisions`
+        );
+        db.exec('DROP TABLE approval_decisions');
+        db.exec('ALTER TABLE approval_decisions_new RENAME TO approval_decisions');
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_approval_decisions_proposal ON approval_decisions(proposal_id, proposal_version)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_approval_decisions_lifecycle_state ON approval_decisions(lifecycle_state)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_approval_decisions_expires_at ON approval_decisions(expires_at)`
+        );
+        db.exec(
+          `CREATE INDEX IF NOT EXISTS idx_approval_decisions_decision ON approval_decisions(decision)`
+        );
+        db.exec('COMMIT');
+      } catch (error) {
+        try {
+          db.exec('ROLLBACK');
+        } catch {
+          // Rollback failure masks nothing useful; the original error wins.
+        }
+        throw error;
+      }
+
+      const fkCheck = db.exec('PRAGMA foreign_key_check(approval_decisions)');
+      if (fkCheck.length > 0 && fkCheck[0].values.length > 0) {
+        throw new Error('Migration v5 failed: foreign key check violations after rebuild');
+      }
+    },
+  },
 ];
 
 export class PersistenceError extends Error {
