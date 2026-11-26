@@ -5,6 +5,15 @@
 export { EditDomainError } from './errors.js';
 
 export {
+  WritableFileSystemError,
+  type WritableFileSystemErrorCode,
+  type WritableFileSystemProvider,
+  validateWorkspaceBoundary,
+  generateTempFileName,
+  classifyFilesystemError,
+} from './writable-file-system.js';
+
+export {
   ProposalStatus,
   EditOperation,
   EditOperationKind,

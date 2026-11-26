@@ -2,13 +2,13 @@ import type { FileStat, FileSystemProvider } from '../discovery/workspace-provid
 import { relativePath } from './classification.js';
 import { ToolErrorCode, createToolError } from './errors.js';
 
-function checkCancelled(signal: AbortSignal | undefined, path: string): void {
+export function checkCancelled(signal: AbortSignal | undefined, path: string): void {
   if (signal?.aborted) {
     throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Operation cancelled', { path });
   }
 }
 
-function isAbortError(error: unknown): boolean {
+export function isAbortError(error: unknown): boolean {
   if (error instanceof Error) {
     return error.name === 'AbortError' || (error as Error & { code?: string }).code === 'ABORT_ERR';
   }

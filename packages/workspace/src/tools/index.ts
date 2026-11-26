@@ -4,8 +4,9 @@ export {
   createToolError,
   isToolError,
   isToolErrorCode,
-  type ToolErrorOptions,
 } from './errors.js';
+
+export { validateSymlinkFreePath, isAbortError, checkCancelled } from './path-security.js';
 
 export {
   FileReadConfig,
@@ -61,6 +62,9 @@ export {
   splitNameExtension,
   computeWorkspaceId,
   matchesIncludePatterns,
+  normalizePath,
+  isChildOf,
+  relativePath,
 } from './classification.js';
 
 export {
