@@ -237,10 +237,7 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
         `SELECT proposed_content_hash FROM proposal_versions WHERE id = ? AND proposal_version = ?`,
         [record.proposalId, record.proposalVersion] as SqlValue[]
       );
-      if (
-        proposalHashResult.length === 0 ||
-        proposalHashResult[0].values.length === 0
-      ) {
+      if (proposalHashResult.length === 0 || proposalHashResult[0].values.length === 0) {
         throw new Error(
           `Referenced proposal version not found: ${record.proposalId}/${record.proposalVersion}`
         );
