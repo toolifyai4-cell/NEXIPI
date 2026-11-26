@@ -26,6 +26,29 @@ type ErrorContext = 'write' | 'rename' | 'delete' | 'temp';
  * (symlink-free boundary checks). Enforces workspace isolation and
  * symlink protections consistent with the read-only tooling.
  *
+ * ## Cancellation semantics
+ *
+ * The VS Code `FileSystem` API (`vscode.workspace.fs.writeFile`, `rename`,
+ * `delete`) does **not** accept an `AbortSignal` and cannot interrupt an
+ * in-flight filesystem operation. Cancellation is therefore a **pre-operation
+ * guard only**: if `signal.aborted` is true before an operation starts, the
+ * operation is rejected with the appropriate `*_CANCELLED` error code.
+ * If cancellation is requested while an operation is already in flight, the
+ * underlying VS Code call runs to completion and the result is honored
+ * (a successful operation is not reported as cancelled).
+ *
+ * A post-step cancellation check is performed after the temporary file is
+ * written, before the replace-step begins, so an in-flight cancellation can
+ * prevent the replace-step from starting and trigger temp-file cleanup.
+ *
+ * ## Temporary-file collision safety
+ *
+ * The temporary file path is generated with a UUID-v4 suffix
+ * (`.nexipi-tmp-<uuid>-<basename>`). Before writing, the adapter checks
+ * whether that path already exists via the read-only `FileSystemProvider`.
+ * If it does, the write fails with `TEMP_FILE_CREATE_FAILED` rather than
+ * silently overwriting an unrelated file.
+ *
  * NOTE: The write path uses a best-effort temp-file-plus-rename strategy.
  * It is NOT universally atomic: a process crash or a provider-specific rename
  * behavior may leave the temporary file behind, and remote/virtual providers
@@ -49,11 +72,27 @@ export class VSCodeWritableFileSystem implements WritableFileSystemProvider {
 
     const tempUri = generateTempFileName(destUri);
 
+    // Fail-safe collision check: VS Code's FileSystem.writeFile overwrites
+    // existing files by default, so verify the temp path is free before
+    // writing. If an unrelated file already exists at the UUID-based temp
+    // path, fail rather than silently clobbering it.
+    await this.assertTempPathAvailable(tempUri, signal);
+
     // Write bytes to temp file in the destination directory.
     try {
       await this.writeBytes(tempUri, content, signal);
     } catch (error) {
       throw this.toWritableError(error, 'write');
+    }
+
+    // Post-write cancellation check: if the signal was aborted during the
+    // temp-file write (which cannot be interrupted), fail safe by cleaning
+    // up the temp file and reporting cancellation before the replace-step.
+    // The temp write itself completed successfully; only the overall
+    // writeFile operation is cancelled.
+    if (signal?.aborted) {
+      await this.cleanupTempFile(tempUri);
+      throw new WritableFileSystemError('WRITE_CANCELLED', 'Operation cancelled');
     }
 
     // Replace destination with temp file (overwrite enabled).
@@ -273,6 +312,43 @@ export class VSCodeWritableFileSystem implements WritableFileSystemProvider {
   private async writeBytes(uri: string, content: Uint8Array, signal?: AbortSignal): Promise<void> {
     this.checkCancelled(signal);
     await vscode.workspace.fs.writeFile(this.toVsCodeUri(uri), content);
+  }
+
+  /**
+   * Verifies that a temporary-file path does not already exist.
+   *
+   * VS Code's `FileSystem.writeFile` overwrites existing files by default
+   * and has no exclusive-create option, so we must check before writing.
+   * If the path already exists (e.g. a stale temp from a prior crash), the
+   * operation fails with `TEMP_FILE_CREATE_FAILED` rather than silently
+   * clobbering an unrelated file.
+   *
+   * ENOENT / "not found" is the expected result (path is free). Any other
+   * error is classified and rethrown.
+   */
+  private async assertTempPathAvailable(tempUri: string, signal?: AbortSignal): Promise<void> {
+    this.checkCancelled(signal);
+    try {
+      await this.fileSystem.lstat(tempUri);
+      // Path exists: fail safe instead of overwriting.
+      throw new WritableFileSystemError(
+        'TEMP_FILE_CREATE_FAILED',
+        `Temporary file path already exists: ${tempUri}`
+      );
+    } catch (error) {
+      if (error instanceof WritableFileSystemError) {
+        throw error;
+      }
+      const e = error as Error & { code?: string };
+      const message = e.message ? e.message.toLowerCase() : '';
+      const isNotFound =
+        e.code === 'ENOENT' || message.includes('enoent') || message.includes('not found');
+      if (isNotFound) {
+        // Path is free → proceed with temp-file creation.
+        return;
+      }
+      throw this.toWritableError(error, 'temp');
+    }
   }
 
   private async renameFile(
