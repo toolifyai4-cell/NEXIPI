@@ -796,6 +796,51 @@ describe('Approval Store - Integrity and security', () => {
     const txn = await proposalRepo.getProposal('33333333-3333-3333-3333-333333333333', 2);
     expect(txn.proposal).toBeNull();
   });
+
+  it('rejects an approval whose content hash does not match the proposal version', async () => {
+    await proposalRepo.createProposal(makeProposalInput({ proposalVersion: 1 })); // proposedContentHash = PROPOSED_HASH
+
+    const result = await approvalRepo.createApproval(
+      makeApprovalInput({
+        id: '22222222-2222-2222-2222-222222222222',
+        decision: 'approve',
+        decidedAt: 1500,
+        lifecycleState: 'approved',
+        approvedContentHash: OTHER_HASH,
+      })
+    );
+    expect(result.error).not.toBeNull();
+    expect(result.approval).toBeNull();
+  });
+
+  it('prevents deletion of a proposal version that has approval history', async () => {
+    await proposalRepo.createProposal(makeProposalInput({ proposalVersion: 1 }));
+    await approvalRepo.createApproval(
+      makeApprovalInput({
+        id: '22222222-2222-2222-2222-222222222222',
+        decision: 'approve',
+        decidedAt: 1500,
+        lifecycleState: 'approved',
+        approvedContentHash: PROPOSED_HASH,
+      })
+    );
+
+    const db = service.getRawDatabase();
+    let threw = false;
+    try {
+      db.exec(
+        "DELETE FROM proposal_versions WHERE id='11111111-1111-1111-1111-111111111111' AND proposal_version=1"
+      );
+    } catch {
+      threw = true;
+    }
+    expect(threw).toBe(true);
+
+    // Approval history remains intact.
+    const stored = await approvalRepo.getApproval('22222222-2222-2222-2222-222222222222');
+    expect(stored.error).toBeNull();
+    expect(stored.approval).not.toBeNull();
+  });
 });
 
 describe('Approval Store - Migration and persistence across reopen', () => {

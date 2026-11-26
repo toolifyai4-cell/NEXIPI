@@ -177,7 +177,7 @@ const MIGRATIONS: Migration[] = [
           workspace_id TEXT NOT NULL,
           file_uri TEXT NOT NULL,
           created_at INTEGER NOT NULL,
-          FOREIGN KEY (proposal_id, proposal_version) REFERENCES proposal_versions(id, proposal_version) ON DELETE CASCADE
+          FOREIGN KEY (proposal_id, proposal_version) REFERENCES proposal_versions(id, proposal_version) ON DELETE RESTRICT
         )
       `);
       db.exec(

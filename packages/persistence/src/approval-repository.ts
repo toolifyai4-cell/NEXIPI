@@ -230,6 +230,28 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
     try {
       const record = validateCreateApprovalInput(input);
 
+      // The foreign key guarantees the referenced proposal version exists.
+      // Additionally bind the approval to the persisted content hash so an
+      // approval cannot be created against a mismatched version or hash.
+      const proposalHashResult = this.db.exec(
+        `SELECT proposed_content_hash FROM proposal_versions WHERE id = ? AND proposal_version = ?`,
+        [record.proposalId, record.proposalVersion] as SqlValue[]
+      );
+      if (
+        proposalHashResult.length === 0 ||
+        proposalHashResult[0].values.length === 0
+      ) {
+        throw new Error(
+          `Referenced proposal version not found: ${record.proposalId}/${record.proposalVersion}`
+        );
+      }
+      const persistedHash = proposalHashResult[0].values[0][0] as string;
+      if (persistedHash !== record.approvedContentHash) {
+        throw new Error(
+          `approvedContentHash does not match the persisted content hash for proposal version ${record.proposalId}/${record.proposalVersion}`
+        );
+      }
+
       this.db.exec(
         `INSERT INTO approval_decisions (${APPROVAL_COLUMNS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
