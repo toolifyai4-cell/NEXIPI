@@ -9,7 +9,7 @@
  * Path-security and workspace-isolation are enforced by the adapter layer.
  */
 
-import { normalizePath, isChildOf, relativePath } from '../tools/classification.js';
+import { normalizePath, relativePath } from '../tools/classification.js';
 import { randomUUID } from 'node:crypto';
 
 /**
