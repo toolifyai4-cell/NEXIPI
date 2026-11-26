@@ -81,11 +81,7 @@ export {
   createPendingApproval,
 } from './approval-contracts.js';
 
-export {
-  ApprovalDomainError,
-  ApprovalErrorCode,
-  createApprovalError,
-} from './approval-errors.js';
+export { ApprovalDomainError, ApprovalErrorCode, createApprovalError } from './approval-errors.js';
 
 export {
   ApprovalIdSchema,

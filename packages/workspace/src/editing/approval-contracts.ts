@@ -21,12 +21,7 @@
 export type ApprovalId = string;
 export type ProposalVersion = number;
 
-export type ApprovalLifecycleState =
-  | 'pending'
-  | 'approved'
-  | 'rejected'
-  | 'expired'
-  | 'revoked';
+export type ApprovalLifecycleState = 'pending' | 'approved' | 'rejected' | 'expired' | 'revoked';
 
 export type ApprovalDecision = 'approve' | 'reject';
 

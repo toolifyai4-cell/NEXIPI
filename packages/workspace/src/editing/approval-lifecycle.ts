@@ -33,13 +33,8 @@ import type {
   ApprovalVerificationResult,
   AuthorizationToApply,
 } from './approval-contracts.js';
-import {
-  isApplicationAuthorizedState,
-  isPendingState,
-  isTerminalState,
-  isTrustedProvenance,
-} from './approval-contracts.js';
-import { ApprovalDomainError, ApprovalErrorCode, createApprovalError } from './approval-errors.js';
+import { isApplicationAuthorizedState, isTrustedProvenance } from './approval-contracts.js';
+import { ApprovalErrorCode, createApprovalError } from './approval-errors.js';
 
 const VALID_TRANSITIONS: Record<ApprovalLifecycleState, readonly ApprovalLifecycleState[]> = {
   pending: ['approved', 'rejected', 'expired'],
@@ -64,8 +59,8 @@ export function applyTransition(
   if (currentState === nextState) {
     return currentState;
   }
-  const allowed = VALID_TRANSITIONS[currentState]!;
-  if (!allowed.includes(nextState)) {
+  const allowed = VALID_TRANSITIONS[currentState];
+  if (!allowed || !allowed.includes(nextState)) {
     throw createApprovalError(
       ApprovalErrorCode.INVALID_TRANSITION,
       `Invalid approval lifecycle transition from '${currentState}' to '${nextState}'`
@@ -208,8 +203,7 @@ export function verifyApprovalForApplication(
     approval.proposalId === proposalId && approval.proposalVersion === proposalVersion;
   const contentHashMatches = approval.approvedContentHash === contentHash;
   const statePermitsApplication = isApplicationAuthorizedState(approval.lifecycleState);
-  const notExpired =
-    approval.expiresAt === null || now <= approval.expiresAt;
+  const notExpired = approval.expiresAt === null || now <= approval.expiresAt;
   const provenanceTrusted = isTrustedProvenance(approval.provenance);
 
   const authorized =

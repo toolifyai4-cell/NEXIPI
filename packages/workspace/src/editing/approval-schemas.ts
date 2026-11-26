@@ -37,10 +37,7 @@ export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
 export const ContentHashSchema = z
   .string()
-  .regex(
-    /^[a-f0-9]{64}$/,
-    'content hash must be a lowercase SHA-256 hex string (64 hex chars)'
-  );
+  .regex(/^[a-f0-9]{64}$/, 'content hash must be a lowercase SHA-256 hex string (64 hex chars)');
 
 export const TimestampSchema = z
   .number()
@@ -78,33 +75,24 @@ export const ApprovalSchema = z
     fileUri: z.string().min(1, 'fileUri is required'),
     createdAt: TimestampSchema,
   })
-  .refine(
-    data => {
-      if (data.lifecycleState === 'pending') {
-        return data.decision === null && data.decidedAt === null;
-      }
-      return data.decision !== null && data.decidedAt !== null;
-    },
-    'a pending approval must have no decision; a decided approval must have a decision and a timestamp'
-  )
-  .refine(
-    data => {
-      if (data.decision === 'reject') {
-        return data.lifecycleState === 'rejected';
-      }
-      return true;
-    },
-    'a rejection decision must have lifecycle state rejected'
-  )
-  .refine(
-    data => {
-      if (data.decision === 'approve') {
-        return ['approved', 'expired', 'revoked'].includes(data.lifecycleState);
-      }
-      return true;
-    },
-    'an approval decision must have lifecycle state approved, expired, or revoked'
-  );
+  .refine(data => {
+    if (data.lifecycleState === 'pending') {
+      return data.decision === null && data.decidedAt === null;
+    }
+    return data.decision !== null && data.decidedAt !== null;
+  }, 'a pending approval must have no decision; a decided approval must have a decision and a timestamp')
+  .refine(data => {
+    if (data.decision === 'reject') {
+      return data.lifecycleState === 'rejected';
+    }
+    return true;
+  }, 'a rejection decision must have lifecycle state rejected')
+  .refine(data => {
+    if (data.decision === 'approve') {
+      return ['approved', 'expired', 'revoked'].includes(data.lifecycleState);
+    }
+    return true;
+  }, 'an approval decision must have lifecycle state approved, expired, or revoked');
 export type Approval = z.infer<typeof ApprovalSchema>;
 
 export const ApprovalDecisionRequestSchema = z.object({
@@ -173,9 +161,7 @@ export function safeValidateApproval(
   return { success: false, error: result.error };
 }
 
-export function validateApprovalDecisionRequest(
-  request: unknown
-): ApprovalDecisionRequest {
+export function validateApprovalDecisionRequest(request: unknown): ApprovalDecisionRequest {
   return ApprovalDecisionRequestSchema.parse(request);
 }
 
@@ -189,9 +175,7 @@ export function safeValidateApprovalDecisionRequest(
   return { success: false, error: result.error };
 }
 
-export function validateApprovalVerificationInput(
-  input: unknown
-): ApprovalVerificationInput {
+export function validateApprovalVerificationInput(input: unknown): ApprovalVerificationInput {
   return ApprovalVerificationInputSchema.parse(input);
 }
 
@@ -205,9 +189,7 @@ export function safeValidateApprovalVerificationInput(
   return { success: false, error: result.error };
 }
 
-export function validateAuthorizationToApply(
-  authorization: unknown
-): AuthorizationToApply {
+export function validateAuthorizationToApply(authorization: unknown): AuthorizationToApply {
   return AuthorizationToApplySchema.parse(authorization);
 }
 
@@ -221,9 +203,7 @@ export function safeValidateAuthorizationToApply(
   return { success: false, error: result.error };
 }
 
-export function validateCreatePendingApprovalInput(
-  input: unknown
-): CreatePendingApprovalInput {
+export function validateCreatePendingApprovalInput(input: unknown): CreatePendingApprovalInput {
   return CreatePendingApprovalInputSchema.parse(input);
 }
 
