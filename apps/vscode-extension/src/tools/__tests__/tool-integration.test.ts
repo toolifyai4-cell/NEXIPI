@@ -98,7 +98,7 @@ vi.mock('../../../workspace/workspace-manager.js', () => ({
 }));
 
 // Mock workspace package components to avoid real VS Code dependencies
-vi.mock('@nexipi/workspace', async (importOriginal) => {
+vi.mock('@nexipi/workspace', async importOriginal => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -114,10 +114,10 @@ vi.mock('@nexipi/workspace', async (importOriginal) => {
       lstat: vi.fn(),
       exists: vi.fn(),
     })),
-};
+  };
 });
 // Mock persistence to avoid real database
-vi.mock('@nexipi/persistence', async (importOriginal) => {
+vi.mock('@nexipi/persistence', async importOriginal => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -135,7 +135,7 @@ vi.mock('@nexipi/persistence', async (importOriginal) => {
 });
 
 // Mock models package components
-vi.mock('@nexipi/models', async (importOriginal) => {
+vi.mock('@nexipi/models', async importOriginal => {
   const actual = await importOriginal();
   return {
     ...actual,
@@ -210,7 +210,11 @@ describe('Tool Infrastructure Integration', () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
 
       // The ToolRegistry is stored in module-level variable, verify through ChatService
-      const chatService = (extensionModule as unknown as { _chatService?: { getToolRegistry(): ToolRegistry | undefined } })._chatService;
+      const chatService = (
+        extensionModule as unknown as {
+          _chatService?: { getToolRegistry(): ToolRegistry | undefined };
+        }
+      )._chatService;
       // Since we can't directly access module internals, we verify by checking that
       // the ChatService was created with a toolRegistry
       expect(mockContext.subscriptions.length).toBeGreaterThan(0);
@@ -219,15 +223,15 @@ describe('Tool Infrastructure Integration', () => {
     it('should not create duplicate ToolRegistry instances on repeated activation', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       const firstActivationSubscriptions = mockContext.subscriptions.length;
-      
+
       // Second activation (simulated by re-importing) should not duplicate
       // Note: In real VS Code, activate is only called once, but we test idempotency
       await extensionModule.deactivate();
-      
+
       // Re-activate
       const newModule = await import('../../extension.js');
       await newModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Should have added subscriptions again (not duplicate registries)
       expect(mockContext.subscriptions.length).toBeGreaterThanOrEqual(firstActivationSubscriptions);
     });
@@ -243,7 +247,7 @@ describe('Tool Infrastructure Integration', () => {
 
     it('should dispose ToolExecutionService during deactivation', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Deactivate should not throw
       await expect(extensionModule.deactivate()).resolves.not.toThrow();
     });
@@ -256,7 +260,7 @@ describe('Tool Infrastructure Integration', () => {
         { id: 'ws_1' as any, uri: 'file:///workspace1', name: 'workspace1', index: 0 },
         { id: 'ws_2' as any, uri: 'file:///workspace2', name: 'workspace2', index: 1 },
       ];
-      
+
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = mockFolders;
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
@@ -268,7 +272,7 @@ describe('Tool Infrastructure Integration', () => {
 
     it('should register tools with correct model-facing names', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // The tool names are: read_file, list_directory, search_code, find_references
       // These are verified by the registration function implementation
       expect(true).toBe(true); // Placeholder - actual verification would need registry access
@@ -284,7 +288,7 @@ describe('Tool Infrastructure Integration', () => {
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       // Should complete without error
       expect(true).toBe(true);
     });
@@ -298,7 +302,7 @@ describe('Tool Infrastructure Integration', () => {
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -309,13 +313,13 @@ describe('Tool Infrastructure Integration', () => {
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = mockFolders;
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Simulate folder removal
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = [];
-      
+
       // The folder change handler should unregister tools
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -323,16 +327,16 @@ describe('Tool Infrastructure Integration', () => {
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = [];
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Simulate folder added
       const mockFolders: WorkspaceFolder[] = [
         { id: 'ws_new' as any, uri: 'file:///new', name: 'new', index: 0 },
       ];
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = mockFolders;
-      
+
       // The folder change handler should register tools for the new folder
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -341,7 +345,7 @@ describe('Tool Infrastructure Integration', () => {
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       // Should not throw
       expect(true).toBe(true);
     });
@@ -353,7 +357,7 @@ describe('Tool Infrastructure Integration', () => {
       // The actual policy evaluation is tested in the models/tools package tests
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -362,7 +366,7 @@ describe('Tool Infrastructure Integration', () => {
       // Tested in models/tools/executor.test.ts
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -370,7 +374,7 @@ describe('Tool Infrastructure Integration', () => {
       // The permission policy only allows read capability
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -378,7 +382,7 @@ describe('Tool Infrastructure Integration', () => {
       // Workspace identity mismatch is checked in each adapter
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
   });
@@ -386,27 +390,27 @@ describe('Tool Infrastructure Integration', () => {
   describe('Lifecycle', () => {
     it('should initialize services correctly on activation', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Verify all expected disposables are registered
       expect(mockContext.subscriptions.length).toBeGreaterThan(5);
     });
 
     it('should dispose services on deactivation', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       await expect(extensionModule.deactivate()).resolves.not.toThrow();
     });
 
     it('should cancel active tool executions on shutdown', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Deactivate disposes ToolExecutionService which cancels all turns
       await expect(extensionModule.deactivate()).resolves.not.toThrow();
     });
 
     it('should preserve persistence shutdown behavior', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Deactivate saves the database
       await expect(extensionModule.deactivate()).resolves.not.toThrow();
     });
@@ -414,14 +418,14 @@ describe('Tool Infrastructure Integration', () => {
     it('should not duplicate registrations on repeated initialization', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       const subCount1 = mockContext.subscriptions.length;
-      
+
       await extensionModule.deactivate();
-      
+
       // Re-activate
       const newModule = await import('../../extension.js');
       await newModule.activate(mockContext as unknown as vscode.ExtensionContext);
       const subCount2 = mockContext.subscriptions.length;
-      
+
       // Subscriptions are added each activation (expected in test environment)
       // The key is that the module-level globals are reset
       expect(subCount2).toBeGreaterThanOrEqual(subCount1);
@@ -434,12 +438,12 @@ describe('Tool Infrastructure Integration', () => {
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = mockFolders;
 
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // Remove workspace
       (vscode.workspace.workspaceFolders as unknown as WorkspaceFolder[]) = [];
-      
+
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
   });
@@ -447,7 +451,7 @@ describe('Tool Infrastructure Integration', () => {
   describe('Chat integration', () => {
     it('should provide tool definitions to models supporting tool calling', async () => {
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
-      
+
       // ChatService is created with toolRegistry and toolExecutionService
       // Tool definitions are exposed via getAvailableToolDefinitions()
       expect(mockContext.subscriptions.length).toBeGreaterThan(0);
@@ -458,7 +462,7 @@ describe('Tool Infrastructure Integration', () => {
       // which checks modelMetadata.capabilities.toolCalling
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -467,7 +471,7 @@ describe('Tool Infrastructure Integration', () => {
       // but chat continues to work
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -475,7 +479,7 @@ describe('Tool Infrastructure Integration', () => {
       // The integration is tested in models/tools/service.test.ts
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
 
@@ -483,7 +487,7 @@ describe('Tool Infrastructure Integration', () => {
       // Cancellation is handled by ToolExecutionService and ChatService
       await extensionModule.activate(mockContext as unknown as vscode.ExtensionContext);
       await extensionModule.deactivate();
-      
+
       expect(true).toBe(true);
     });
   });

@@ -46,9 +46,7 @@ const ReadFileOutputSchema = z.object({
   cancelled: z.boolean(),
 });
 
-export function createReadFileToolDefinition(
-  deps: ReadFileAdapterDependencies
-): ToolDefinition {
+export function createReadFileToolDefinition(deps: ReadFileAdapterDependencies): ToolDefinition {
   const configValidation = safeValidateFileReadConfig(deps.config ?? {});
   if (!configValidation.success) {
     throw createToolError(
@@ -77,7 +75,8 @@ export function createReadFileToolDefinition(
 
   return {
     name: 'read_file',
-    description: 'Read the contents of a file from the workspace. Supports line ranges, respects workspace boundaries, ignore rules, and sensitive file protections.',
+    description:
+      'Read the contents of a file from the workspace. Supports line ranges, respects workspace boundaries, ignore rules, and sensitive file protections.',
     inputSchema: ReadFileInputSchema,
     outputSchema: ReadFileOutputSchema,
     metadata: {
@@ -109,8 +108,6 @@ export function createReadFileToolDefinition(
         const result: ReadFileResult = await reader.readFile(options);
         return result;
       } catch (error) {
-        // TEMP DEBUG
-        console.error('TEMP DEBUG read_file error', { error: String(error), code: (error as any)?.code, contextWorkspaceId: context.workspaceId, computedWorkspaceId });
         if (isToolError(error)) {
           throw error;
         }

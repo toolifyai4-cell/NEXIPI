@@ -9,7 +9,11 @@ import { createProviderRegistry } from '@nexipi/models';
 import type { StreamEvent, Message, ConversationId, MessageId } from '@nexipi/shared';
 import { PersistenceFoundation } from '@nexipi/persistence';
 import type { PersistencePortService } from '@nexipi/persistence';
-import { createPersistenceService, SqlJsConversationRepository, SqlJsMessageRepository } from '@nexipi/persistence';
+import {
+  createPersistenceService,
+  SqlJsConversationRepository,
+  SqlJsMessageRepository,
+} from '@nexipi/persistence';
 import { createPersistenceAdapter } from '@nexipi/models';
 import { WorkspaceManager } from './workspace/workspace-manager.js';
 import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
@@ -19,7 +23,6 @@ import {
   type ToolRegistry,
   ToolErrorCode,
   createToolError,
-  isToolError,
 } from '@nexipi/models/tools';
 import { ToolExecutor } from '@nexipi/models/tools';
 import { ToolExecutionService, type ToolExecutionServiceConfig } from '@nexipi/models/tools';
@@ -29,7 +32,13 @@ import {
   createSearchCodeToolDefinition,
   createFindReferencesToolDefinition,
 } from '@nexipi/workspace/tools';
-import type { WorkspaceFolder, ReadFileResult, ListDirectoryResult, CodeSearchResult, ReferenceDiscoveryResult } from '@nexipi/workspace';
+import type {
+  WorkspaceFolder,
+  ReadFileResult,
+  ListDirectoryResult,
+  CodeSearchResult,
+  ReferenceDiscoveryResult,
+} from '@nexipi/workspace';
 import { createReadOnlyWorkspacePermissionPolicy } from './tools/permission-policy.js';
 import type { ToolDefinition, ToolExecutionContext } from '@nexipi/models/tools';
 
@@ -58,9 +67,15 @@ let gToolExecutionService: ToolExecutionService | undefined;
 interface WorkspaceAdapterSet {
   readonly folder: WorkspaceFolder;
   readonly readFile: (input: unknown, context: ToolExecutionContext) => Promise<ReadFileResult>;
-  readonly listDirectory: (input: unknown, context: ToolExecutionContext) => Promise<ListDirectoryResult>;
+  readonly listDirectory: (
+    input: unknown,
+    context: ToolExecutionContext
+  ) => Promise<ListDirectoryResult>;
   readonly searchCode: (input: unknown, context: ToolExecutionContext) => Promise<CodeSearchResult>;
-  readonly findReferences: (input: unknown, context: ToolExecutionContext) => Promise<ReferenceDiscoveryResult>;
+  readonly findReferences: (
+    input: unknown,
+    context: ToolExecutionContext
+  ) => Promise<ReferenceDiscoveryResult>;
   readonly computedWorkspaceId: string;
   /** Internal marker to indicate workspace is being removed */
   __closing?: boolean;
@@ -71,7 +86,10 @@ let workspaceAdaptersVersion = 0;
 export const workspaceAdapters = new Map<string, WorkspaceAdapterSet>();
 
 function computeWorkspaceId(folderUri: string): string {
-  const normalized = folderUri.replace(/^file:\/\//, '').replace(/\\/g, '/').replace(/\/+$/, '');
+  const normalized = folderUri
+    .replace(/^file:\/\//, '')
+    .replace(/\\/g, '/')
+    .replace(/\/+$/, '');
   let hash = 0;
   for (let i = 0; i < normalized.length; i++) {
     const char = normalized.charCodeAt(i);
@@ -120,10 +138,14 @@ function createWorkspaceAdapters(
 
   return {
     folder,
-    readFile: (input: unknown, context: ToolExecutionContext) => readFileTool.execute(input, context) as Promise<ReadFileResult>,
-    listDirectory: (input: unknown, context: ToolExecutionContext) => listDirectoryTool.execute(input, context) as Promise<ListDirectoryResult>,
-    searchCode: (input: unknown, context: ToolExecutionContext) => searchCodeTool.execute(input, context) as Promise<CodeSearchResult>,
-    findReferences: (input: unknown, context: ToolExecutionContext) => findReferencesTool.execute(input, context) as Promise<ReferenceDiscoveryResult>,
+    readFile: (input: unknown, context: ToolExecutionContext) =>
+      readFileTool.execute(input, context) as Promise<ReadFileResult>,
+    listDirectory: (input: unknown, context: ToolExecutionContext) =>
+      listDirectoryTool.execute(input, context) as Promise<ListDirectoryResult>,
+    searchCode: (input: unknown, context: ToolExecutionContext) =>
+      searchCodeTool.execute(input, context) as Promise<CodeSearchResult>,
+    findReferences: (input: unknown, context: ToolExecutionContext) =>
+      findReferencesTool.execute(input, context) as Promise<ReferenceDiscoveryResult>,
     computedWorkspaceId,
   };
 }
@@ -137,11 +159,19 @@ export function registerWorkspaceAdapters(
   const workspaceId = adapterSet.computedWorkspaceId;
 
   if (workspaceAdapters.has(workspaceId)) {
-    logger.warn('Workspace adapter already registered, replacing', { workspaceId, folderUri: folder.uri });
+    logger.warn('Workspace adapter already registered, replacing', {
+      workspaceId,
+      folderUri: folder.uri,
+    });
   }
   workspaceAdapters.set(workspaceId, adapterSet);
   workspaceAdaptersVersion++;
-  logger.info('Registered workspace adapters', { workspaceId, folderUri: folder.uri, folderId: folder.id, version: workspaceAdaptersVersion });
+  logger.info('Registered workspace adapters', {
+    workspaceId,
+    folderUri: folder.uri,
+    folderId: folder.id,
+    version: workspaceAdaptersVersion,
+  });
   return workspaceId;
 }
 
@@ -154,20 +184,27 @@ export async function unregisterWorkspaceAdapters(
     if (adapterSet.folder.uri === folderUri) {
       // Mark workspace as closing to prevent new leases
       beginWorkspaceRemoval(workspaceId);
-      
+
       // Wait for active leases to release (with timeout)
       try {
         await waitForLeasesToRelease(workspaceId, 10000);
         logger.info('All leases released for workspace', { workspaceId });
-        
+
         // All leases released - safe to remove immediately
         workspaceAdapters.delete(workspaceId);
         workspaceAdaptersVersion++;
-        logger.info('Unregistered workspace adapters', { workspaceId, folderUri, version: workspaceAdaptersVersion });
+        logger.info('Unregistered workspace adapters', {
+          workspaceId,
+          folderUri,
+          version: workspaceAdaptersVersion,
+        });
       } catch (error) {
         const err = error instanceof Error ? error : new Error(String(error));
-        logger.warn('Timeout waiting for leases, scheduling deferred cleanup', { workspaceId, error: err.message });
-        
+        logger.warn('Timeout waiting for leases, scheduling deferred cleanup', {
+          workspaceId,
+          error: err.message,
+        });
+
         // Timeout - schedule deferred cleanup instead of proceeding immediately
         scheduleDeferredWorkspaceCleanup(workspaceId, logger);
       }
@@ -257,10 +294,7 @@ async function waitForLeasesToRelease(
   }
 }
 
-async function waitForAllLeasesToRelease(
-  timeoutMs: number,
-  pollIntervalMs = 50
-): Promise<void> {
+async function waitForAllLeasesToRelease(timeoutMs: number, pollIntervalMs = 50): Promise<void> {
   const startTime = Date.now();
   for (;;) {
     if (getTotalActiveLeases() === 0) return;
@@ -273,7 +307,10 @@ async function waitForAllLeasesToRelease(
 }
 
 // Track deferred cleanup operations to ensure exactly-once execution
-const deferredWorkspaceCleanups = new Map<string, { workspaceId: string; logger: Logger; executed: boolean }>();
+const deferredWorkspaceCleanups = new Map<
+  string,
+  { workspaceId: string; logger: Logger; executed: boolean }
+>();
 
 function scheduleDeferredWorkspaceCleanup(workspaceId: string, logger: Logger): void {
   // Check if cleanup is already scheduled
@@ -282,22 +319,25 @@ function scheduleDeferredWorkspaceCleanup(workspaceId: string, logger: Logger): 
     logger.debug('Deferred cleanup already scheduled', { workspaceId });
     return;
   }
-  
+
   deferredWorkspaceCleanups.set(workspaceId, { workspaceId, logger, executed: false });
-  
+
   // Start background task that waits for leases to release
   void (async () => {
     try {
       // Wait indefinitely for leases to release - no timeout on deferred cleanup
       await waitForLeasesToRelease(workspaceId, 0); // 0 timeout means wait forever
-      
+
       // Leases released - execute cleanup exactly once
       const entry = deferredWorkspaceCleanups.get(workspaceId);
       if (entry && !entry.executed) {
         entry.executed = true;
         workspaceAdapters.delete(workspaceId);
         workspaceAdaptersVersion++;
-        entry.logger.info('Deferred workspace cleanup executed', { workspaceId, version: workspaceAdaptersVersion });
+        entry.logger.info('Deferred workspace cleanup executed', {
+          workspaceId,
+          version: workspaceAdaptersVersion,
+        });
       }
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
@@ -352,7 +392,8 @@ const FindReferencesInputSchema = z.object({
 export function createRoutedReadFileTool(): ToolDefinition {
   return {
     name: 'read_file',
-    description: 'Read the contents of a file from a workspace folder. Requires workspaceId to select the target folder.',
+    description:
+      'Read the contents of a file from a workspace folder. Requires workspaceId to select the target folder.',
     inputSchema: ReadFileInputSchema,
     outputSchema: z.any(), // Output schema validated by underlying adapter
     metadata: {
@@ -365,7 +406,7 @@ export function createRoutedReadFileTool(): ToolDefinition {
     },
     execute: async (input: unknown, context: ToolExecutionContext): Promise<ReadFileResult> => {
       const { uri, lineStart, lineEnd, workspaceId } = input as z.infer<typeof ReadFileInputSchema>;
-      
+
       if (!hasWorkspaceAdapter(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_NOT_FOUND,
@@ -373,7 +414,7 @@ export function createRoutedReadFileTool(): ToolDefinition {
           { toolName: 'read_file' }
         );
       }
-      
+
       if (isWorkspaceClosing(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_RESOURCE_LIMIT,
@@ -381,16 +422,16 @@ export function createRoutedReadFileTool(): ToolDefinition {
           { toolName: 'read_file' }
         );
       }
-      
+
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      
+
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
         ...context,
         workspaceId: adapter.computedWorkspaceId,
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
-      
+
       // Acquire lease to protect workspace resources during operation
       const lease = acquireLease(workspaceId, context.signal);
       try {
@@ -408,7 +449,8 @@ export function createRoutedReadFileTool(): ToolDefinition {
 export function createRoutedListDirectoryTool(): ToolDefinition {
   return {
     name: 'list_directory',
-    description: 'List the contents of a directory in a workspace folder. Requires workspaceId to select the target folder.',
+    description:
+      'List the contents of a directory in a workspace folder. Requires workspaceId to select the target folder.',
     inputSchema: ListDirectoryInputSchema,
     outputSchema: z.any(),
     metadata: {
@@ -419,9 +461,12 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ListDirectoryResult> => {
+    execute: async (
+      input: unknown,
+      context: ToolExecutionContext
+    ): Promise<ListDirectoryResult> => {
       const { uri, workspaceId } = input as z.infer<typeof ListDirectoryInputSchema>;
-      
+
       if (!hasWorkspaceAdapter(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_NOT_FOUND,
@@ -429,7 +474,7 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
           { toolName: 'list_directory' }
         );
       }
-      
+
       if (isWorkspaceClosing(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_RESOURCE_LIMIT,
@@ -437,16 +482,16 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
           { toolName: 'list_directory' }
         );
       }
-      
+
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      
+
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
         ...context,
         workspaceId: adapter.computedWorkspaceId,
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
-      
+
       // Acquire lease to protect workspace resources during operation
       const lease = acquireLease(workspaceId, context.signal);
       try {
@@ -464,7 +509,8 @@ export function createRoutedListDirectoryTool(): ToolDefinition {
 export function createRoutedSearchCodeTool(): ToolDefinition {
   return {
     name: 'search_code',
-    description: 'Search for code patterns in a workspace folder. Requires workspaceId to select the target folder.',
+    description:
+      'Search for code patterns in a workspace folder. Requires workspaceId to select the target folder.',
     inputSchema: SearchCodeInputSchema,
     outputSchema: z.any(),
     metadata: {
@@ -476,8 +522,10 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
       version: '1.0.0',
     },
     execute: async (input: unknown, context: ToolExecutionContext): Promise<CodeSearchResult> => {
-      const { pattern, workspaceId, filePattern, caseSensitive } = input as z.infer<typeof SearchCodeInputSchema>;
-      
+      const { pattern, workspaceId, filePattern, caseSensitive } = input as z.infer<
+        typeof SearchCodeInputSchema
+      >;
+
       if (!hasWorkspaceAdapter(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_NOT_FOUND,
@@ -485,7 +533,7 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
           { toolName: 'search_code' }
         );
       }
-      
+
       if (isWorkspaceClosing(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_RESOURCE_LIMIT,
@@ -493,27 +541,27 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
           { toolName: 'search_code' }
         );
       }
-      
+
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      
+
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
         ...context,
         workspaceId: adapter.computedWorkspaceId,
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
-      
+
       // Acquire lease to protect workspace resources during operation
       const lease = acquireLease(workspaceId, context.signal);
       try {
         return await adapter.searchCode(
-          { 
-            query: pattern, 
-            mode: 'literal', 
-            workspaceFolder: adapter.folder, 
+          {
+            query: pattern,
+            mode: 'literal',
+            workspaceFolder: adapter.folder,
             includePatterns: filePattern ? [filePattern] : undefined,
-            caseSensitive, 
-            signal: context.signal 
+            caseSensitive,
+            signal: context.signal,
           },
           folderContext
         );
@@ -527,7 +575,8 @@ export function createRoutedSearchCodeTool(): ToolDefinition {
 export function createRoutedFindReferencesTool(): ToolDefinition {
   return {
     name: 'find_references',
-    description: 'Find references to a symbol in a workspace folder. Requires workspaceId to select the target folder.',
+    description:
+      'Find references to a symbol in a workspace folder. Requires workspaceId to select the target folder.',
     inputSchema: FindReferencesInputSchema,
     outputSchema: z.any(),
     metadata: {
@@ -538,9 +587,14 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
       idempotent: true,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ReferenceDiscoveryResult> => {
-      const { symbol, workspaceId, filePattern } = input as z.infer<typeof FindReferencesInputSchema>;
-      
+    execute: async (
+      input: unknown,
+      context: ToolExecutionContext
+    ): Promise<ReferenceDiscoveryResult> => {
+      const { symbol, workspaceId, filePattern } = input as z.infer<
+        typeof FindReferencesInputSchema
+      >;
+
       if (!hasWorkspaceAdapter(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_NOT_FOUND,
@@ -548,7 +602,7 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
           { toolName: 'find_references' }
         );
       }
-      
+
       if (isWorkspaceClosing(workspaceId)) {
         throw createToolError(
           ToolErrorCode.TOOL_RESOURCE_LIMIT,
@@ -556,25 +610,25 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
           { toolName: 'find_references' }
         );
       }
-      
+
       const adapter = getWorkspaceAdapter(workspaceId)!;
-      
+
       // Create folder-scoped execution context with the adapter's folder-specific identity
       const folderContext: ToolExecutionContext = {
         ...context,
         workspaceId: adapter.computedWorkspaceId,
         workspaceFolder: { uri: adapter.folder.uri, id: adapter.folder.id },
       };
-      
+
       // Acquire lease to protect workspace resources during operation
       const lease = acquireLease(workspaceId, context.signal);
       try {
         return await adapter.findReferences(
-          { 
-            symbol, 
-            workspaceFolder: adapter.folder, 
+          {
+            symbol,
+            workspaceFolder: adapter.folder,
             includePatterns: filePattern ? [filePattern] : undefined,
-            signal: context.signal 
+            signal: context.signal,
           },
           folderContext
         );
@@ -592,7 +646,7 @@ function registerRoutedTools(toolRegistry: ToolRegistry, logger: Logger): void {
     createRoutedSearchCodeTool(),
     createRoutedFindReferencesTool(),
   ];
-  
+
   for (const tool of tools) {
     if (!toolRegistry.has(tool.name)) {
       toolRegistry.register(tool);
@@ -1078,7 +1132,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     createdResources.push({ name, dispose });
   }
   async function cleanupOnFailure(error: Error) {
-    logger.error('Activation failed, cleaning up resources', { error: error.message, resources: createdResources.map(r => r.name).join(', ') });
+    logger.error('Activation failed, cleaning up resources', {
+      error: error.message,
+      resources: createdResources.map(r => r.name).join(', '),
+    });
     // Clean up in reverse order
     for (let i = createdResources.length - 1; i >= 0; i--) {
       const resource = createdResources[i];
@@ -1100,7 +1157,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   gWorkspaceManager = workspaceManager;
   trackResource('workspaceManager', () => workspaceManager.dispose());
 
-  workspaceManager.onStatusChange((status) => {
+  workspaceManager.onStatusChange(status => {
     if (status.disposed) {
       updateStatusBar(statusBarItem, 'error', 'Workspace disposed');
       return;
@@ -1129,7 +1186,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // Create tool registry, executor with read-only permission policy, and execution service.
   const toolRegistry = createToolRegistry();
   gToolRegistry = toolRegistry;
-  trackResource('toolRegistry', () => { /* ToolRegistry has no dispose */ });
+  trackResource('toolRegistry', () => {
+    /* ToolRegistry has no dispose */
+  });
 
   const permissionPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
   const toolExecutor = new ToolExecutor(toolRegistry, { permissionPolicy, logger });
@@ -1160,7 +1219,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   }
 
   // Subscribe to workspace folder changes to register/unregister adapters dynamically.
-  const folderChangeSubscription = workspaceProvider.onWorkspaceFoldersChange((event) => {
+  const folderChangeSubscription = workspaceProvider.onWorkspaceFoldersChange(event => {
     // Unregister adapters for removed folders.
     for (const folder of event.removed) {
       void unregisterWorkspaceAdapters(folder.uri, logger);
@@ -1174,7 +1233,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     // Changed folders (rename) are handled as remove + add by VS Code, but we log for clarity.
     if (event.changed.length > 0) {
       logger.info('Workspace folders changed (rename detected)', {
-        changed: event.changed.map((f) => f.uri),
+        changed: event.changed.map(f => f.uri),
       });
     }
   });
@@ -1184,7 +1243,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
 
   // Compute stable multi-root workspace ID for persistence
   const workspaceId = computeMultiRootWorkspaceId(folders);
-  logger.info('Multi-root workspace ID for persistence', { workspaceId, folderCount: folders.length });
+  logger.info('Multi-root workspace ID for persistence', {
+    workspaceId,
+    folderCount: folders.length,
+  });
 
   // Initialize persistence
   let persistenceService: PersistencePortService;
@@ -1323,7 +1385,9 @@ export async function deactivate(): Promise<void> {
   try {
     const drainResult = await toolExecutionService?.drain({ timeoutMs: 5000 });
     if (drainResult?.settled) {
-      logger.info('ToolExecutionService drained successfully', { elapsedMs: drainResult.elapsedMs });
+      logger.info('ToolExecutionService drained successfully', {
+        elapsedMs: drainResult.elapsedMs,
+      });
     } else {
       logger.warn('ToolExecutionService drain timeout, active executions may still be running', {
         activeExecutions: drainResult?.activeExecutions,
@@ -1346,7 +1410,9 @@ export async function deactivate(): Promise<void> {
     logger.info('ToolExecutionService underlying promises settled');
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    logger.warn('ToolExecutionService underlying wait completed with timeout', { error: err.message });
+    logger.warn('ToolExecutionService underlying wait completed with timeout', {
+      error: err.message,
+    });
   }
 
   // 4. Wait for all workspace leases to release before disposing workspace manager.
@@ -1354,13 +1420,15 @@ export async function deactivate(): Promise<void> {
   try {
     await waitForAllLeasesToRelease(10000);
     logger.info('All workspace leases released');
-    
+
     // All leases released - safe to dispose workspace manager now
     disposeWorkspaceManagerAndCleanup(logger);
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error));
-    logger.warn('Timeout waiting for leases, scheduling deferred global cleanup', { error: err.message });
-    
+    logger.warn('Timeout waiting for leases, scheduling deferred global cleanup', {
+      error: err.message,
+    });
+
     // Timeout - schedule deferred global cleanup instead of proceeding
     scheduleDeferredGlobalCleanup(logger);
   }
@@ -1414,13 +1482,13 @@ function scheduleDeferredGlobalCleanup(logger: Logger): void {
   if (deferredGlobalCleanup?.executed) {
     return;
   }
-  
+
   // Start background task that waits for leases to release
   void (async () => {
     try {
       // Wait indefinitely for leases to release - no timeout on deferred cleanup
       await waitForAllLeasesToRelease(0); // 0 timeout means wait forever
-      
+
       // Leases released - execute cleanup exactly once
       if (deferredGlobalCleanup && !deferredGlobalCleanup.executed) {
         deferredGlobalCleanup.executed = true;
