@@ -97,8 +97,16 @@ export { FileReader, createFileReader } from './reader.js';
 export { DirectoryLister, createDirectoryLister } from './lister.js';
 export { CodeSearcher, createCodeSearcher } from './searcher.js';
 export { LexicalFinder, createLexicalFinder, type LexicalFinderOptions } from './lexical-finder.js';
-export { SyntaxAwareFinder, createSyntaxAwareFinder, type SyntaxAwareFinderOptions } from './syntax-aware-finder.js';
-export { ReferenceDiscoverer, createReferenceDiscoverer, type ReferenceDiscovererOptions } from './reference-discoverer.js';
+export {
+  SyntaxAwareFinder,
+  createSyntaxAwareFinder,
+  type SyntaxAwareFinderOptions,
+} from './syntax-aware-finder.js';
+export {
+  ReferenceDiscoverer,
+  createReferenceDiscoverer,
+  type ReferenceDiscovererOptions,
+} from './reference-discoverer.js';
 
 export {
   createReadFileToolDefinition,

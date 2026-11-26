@@ -42,10 +42,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function makeAdapter(
-  fileSystem: InMemoryFileSystemProvider,
-  workspaceUri = 'file:///root'
-) {
+function makeAdapter(fileSystem: InMemoryFileSystemProvider, workspaceUri = 'file:///root') {
   fileSystem.createDirectory('/root');
   fileSystem.createDirectory('/root/src');
   return new VSCodeWritableFileSystem({
@@ -145,7 +142,9 @@ describe('VSCodeWritableFileSystem', () => {
     inMemory.writeFile('/root/src/a.ts', 'hello');
     inMemory.writeFile('/root/src/b.ts', 'world');
 
-    mockFs.rename.mockRejectedValue(Object.assign(new Error('EEXIST: file exists'), { code: 'EEXIST' }));
+    mockFs.rename.mockRejectedValue(
+      Object.assign(new Error('EEXIST: file exists'), { code: 'EEXIST' })
+    );
 
     await expect(
       adapter.rename('file:///root/src/a.ts', 'file:///root/src/b.ts')
@@ -155,7 +154,9 @@ describe('VSCodeWritableFileSystem', () => {
   it('fails with WRITE_PERMISSION_DENIED on write permission failure', async () => {
     const inMemory = new InMemoryFileSystemProvider();
     const adapter = makeAdapter(inMemory);
-    mockFs.writeFile.mockRejectedValue(Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' }));
+    mockFs.writeFile.mockRejectedValue(
+      Object.assign(new Error('EACCES: permission denied'), { code: 'EACCES' })
+    );
 
     await expect(
       adapter.writeFile('file:///root/src/a.ts', new Uint8Array([1]))
@@ -213,7 +214,9 @@ describe('VSCodeWritableFileSystem', () => {
     mockFs.rename.mockRejectedValue(renameError);
     mockFs.delete.mockRejectedValue(new Error('cleanup failed'));
 
-    const error = await adapter.writeFile('file:///root/src/a.ts', new Uint8Array([1])).catch(e => e);
+    const error = await adapter
+      .writeFile('file:///root/src/a.ts', new Uint8Array([1]))
+      .catch(e => e);
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe('rename failed');
   });

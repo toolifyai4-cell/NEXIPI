@@ -9,20 +9,14 @@ import {
 
 describe('WritableFileSystemError', () => {
   it('carries a code and message', () => {
-    const error = new WritableFileSystemError(
-      'WRITE_PERMISSION_DENIED',
-      'Permission denied'
-    );
+    const error = new WritableFileSystemError('WRITE_PERMISSION_DENIED', 'Permission denied');
     expect(error.code).toBe('WRITE_PERMISSION_DENIED');
     expect(error.message).toBe('Permission denied');
     expect(error.name).toBe('WritableFileSystemError');
   });
 
   it('is an instance of Error', () => {
-    const error = new WritableFileSystemError(
-      'RENAME_NOT_FOUND',
-      'Not found'
-    );
+    const error = new WritableFileSystemError('RENAME_NOT_FOUND', 'Not found');
     expect(error).toBeInstanceOf(Error);
   });
 

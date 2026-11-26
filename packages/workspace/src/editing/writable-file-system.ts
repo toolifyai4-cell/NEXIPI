@@ -118,10 +118,7 @@ export interface WritableFileSystemProvider {
  * @returns The relative path from workspace root to target, or undefined if outside.
  * @throws {WritableFileSystemError} With code `WRITE_INVALID_DESTINATION` if outside workspace.
  */
-export function validateWorkspaceBoundary(
-  workspaceRootUri: string,
-  targetUri: string
-): string {
+export function validateWorkspaceBoundary(workspaceRootUri: string, targetUri: string): string {
   const root = normalizePath(workspaceRootUri);
   const target = normalizePath(targetUri);
   const rel = relativePath(root, target);
@@ -198,7 +195,12 @@ export function classifyFilesystemError(
     }
 
     // Permission denied / EACCES / EPERM
-    if (code === 'EACCES' || code === 'EPERM' || message.includes('permission') || message.includes('access denied')) {
+    if (
+      code === 'EACCES' ||
+      code === 'EPERM' ||
+      message.includes('permission') ||
+      message.includes('access denied')
+    ) {
       switch (context) {
         case 'write':
           return 'WRITE_PERMISSION_DENIED';
@@ -212,7 +214,12 @@ export function classifyFilesystemError(
     }
 
     // Invalid destination (outside workspace, is directory when file expected, etc.)
-    if (code === 'EISDIR' || code === 'ENOTDIR' || message.includes('invalid') || message.includes('not a file')) {
+    if (
+      code === 'EISDIR' ||
+      code === 'ENOTDIR' ||
+      message.includes('invalid') ||
+      message.includes('not a file')
+    ) {
       switch (context) {
         case 'write':
           return 'WRITE_INVALID_DESTINATION';

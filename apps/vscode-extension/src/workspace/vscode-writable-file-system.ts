@@ -1,9 +1,5 @@
 import * as vscode from 'vscode';
-import type {
-  FileStat,
-  FileSystemProvider,
-  WorkspaceFolder,
-} from '@nexipi/workspace';
+import type { FileStat, FileSystemProvider, WorkspaceFolder } from '@nexipi/workspace';
 import {
   type WritableFileSystemProvider,
   WritableFileSystemError,
@@ -190,8 +186,7 @@ export class VSCodeWritableFileSystem implements WritableFileSystemProvider {
     } catch (error) {
       if (
         error instanceof WritableFileSystemError &&
-        (error.code === this.notFoundCode(context) ||
-          error.code === 'WRITE_FILESYSTEM_ERROR')
+        (error.code === this.notFoundCode(context) || error.code === 'WRITE_FILESYSTEM_ERROR')
       ) {
         // Target missing is expected for a new file.
         return;
@@ -288,11 +283,7 @@ export class VSCodeWritableFileSystem implements WritableFileSystemProvider {
   ): Promise<void> {
     this.checkCancelled(signal, 'rename');
     try {
-      await vscode.workspace.fs.rename(
-        this.toVsCodeUri(oldUri),
-        this.toVsCodeUri(newUri),
-        options
-      );
+      await vscode.workspace.fs.rename(this.toVsCodeUri(oldUri), this.toVsCodeUri(newUri), options);
     } catch (error) {
       if (!options.overwrite && this.isFileExistsError(error)) {
         throw new WritableFileSystemError(
@@ -402,7 +393,9 @@ export class VSCodeWritableFileSystem implements WritableFileSystemProvider {
     if (error instanceof Error) {
       const message = error.message.toLowerCase();
       const code = (error as Error & { code?: string }).code;
-      return code === 'EEXIST' || message.includes('already exists') || message.includes('fileexists');
+      return (
+        code === 'EEXIST' || message.includes('already exists') || message.includes('fileexists')
+      );
     }
     return false;
   }
