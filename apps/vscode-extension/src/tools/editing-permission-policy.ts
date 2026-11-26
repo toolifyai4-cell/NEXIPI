@@ -42,9 +42,7 @@ function isEditingTool(name: string): boolean {
  *
  * @param logger - logger for diagnostics (safe metadata only).
  */
-export function createEditingPermissionPolicy(
-  _logger: Logger
-): ToolPermissionPolicy {
+export function createEditingPermissionPolicy(_logger: Logger): ToolPermissionPolicy {
   return {
     name: 'editing-permission-policy',
     evaluate(
@@ -52,9 +50,7 @@ export function createEditingPermissionPolicy(
       _context: {
         readonly signal: AbortSignal;
         readonly workspaceId: string | undefined;
-        readonly workspaceFolder:
-          | { readonly uri: string; readonly id: string }
-          | undefined;
+        readonly workspaceFolder: { readonly uri: string; readonly id: string } | undefined;
         readonly logger: Logger;
       }
     ): ToolPermissionDecision {
@@ -83,9 +79,7 @@ export function createEditingPermissionPolicy(
             reason: `Tool '${toolName}' is marked as destructive.`,
           };
         }
-        if (
-          definition.metadata.capabilities.some((c) => c !== 'read')
-        ) {
+        if (definition.metadata.capabilities.some(c => c !== 'read')) {
           return {
             allowed: false,
             reason: `Tool '${toolName}' declares non-read capabilities: ${definition.metadata.capabilities.join(

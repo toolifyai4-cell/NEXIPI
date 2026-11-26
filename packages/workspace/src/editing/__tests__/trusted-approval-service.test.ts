@@ -1,16 +1,14 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import {
   TrustedApprovalService,
-  createTrustedApprovalService,
   FailingTrustedDecisionProvider,
   type ProposalRepositoryPort,
   type ApprovalRepositoryPort,
   type TrustedDecisionProvider,
   type TrustedUserDecision,
   type ApprovalRecordView,
-  ApprovalErrorCode,
-  ApprovalDomainError,
 } from '../trusted-approval-service.js';
+import { ApprovalErrorCode, ApprovalDomainError } from '../approval-errors.js';
 import {
   Approval,
   ApprovalCreationRequest,
@@ -23,8 +21,6 @@ const WORKSPACE_ID = 'ws_123';
 const FILE_URI = 'file:///root/foo.txt';
 const PROPOSAL_ID = '11111111-1111-1111-1111-111111111111';
 const PROPOSAL_VERSION = 1;
-const CONTENT_HASH =
-  'a'.repeat(64) as `${typeof 'a'}`; // placeholder, replaced below with valid hex
 
 function validHash(hex: string): string {
   return hex;
@@ -33,18 +29,18 @@ function validHash(hex: string): string {
 const PROPOSED_CONTENT_HASH = validHash(
   '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'
 );
-const OTHER_HASH = validHash(
-  'fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210'
-);
+const OTHER_HASH = validHash('fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210');
 
-function makeProposal(overrides: {
-  proposalId?: string;
-  proposalVersion?: number;
-  workspaceId?: string;
-  fileUri?: string;
-  proposedContentHash?: string;
-  status?: string;
-} = {}): ProposalView {
+function makeProposal(
+  overrides: {
+    proposalId?: string;
+    proposalVersion?: number;
+    workspaceId?: string;
+    fileUri?: string;
+    proposedContentHash?: string;
+    status?: string;
+  } = {}
+): ProposalView {
   return {
     id: overrides.proposalId ?? PROPOSAL_ID,
     proposalVersion: overrides.proposalVersion ?? PROPOSAL_VERSION,
@@ -151,7 +147,7 @@ class InMemoryApprovalRepository implements ApprovalRepositoryPort {
     proposalVersion: number
   ): Promise<{ approval: ApprovalRecordView | null; error: Error | null }> {
     const matches = [...this.store.values()].filter(
-      (a) => a.proposalId === proposalId && a.proposalVersion === proposalVersion
+      a => a.proposalId === proposalId && a.proposalVersion === proposalVersion
     );
     matches.sort((a, b) => (b.createdAt ?? 0) - (a.createdAt ?? 0));
     return { approval: matches[0] ?? null, error: null };
@@ -162,7 +158,7 @@ class InMemoryApprovalRepository implements ApprovalRepositoryPort {
     proposalVersion?: number
   ): Promise<{ approvals: ApprovalRecordView[]; error: Error | null }> {
     const matches = [...this.store.values()].filter(
-      (a) =>
+      a =>
         a.proposalId === proposalId &&
         (proposalVersion === undefined || a.proposalVersion === proposalVersion)
     );
@@ -215,18 +211,27 @@ function makeProvider(decision: TrustedUserDecision | null): TrustedDecisionProv
   };
 }
 
-function buildService(overrides: {
-  proposals?: ProposalRepositoryPort;
-  approvals?: ApprovalRepositoryPort;
-  provider?: TrustedDecisionProvider | null;
-  now?: () => number;
-  createApprovalId?: () => string;
-} = {}): TrustedApprovalService {
+function buildService(
+  overrides: {
+    proposals?: ProposalRepositoryPort;
+    approvals?: ApprovalRepositoryPort;
+    provider?: TrustedDecisionProvider | null;
+    now?: () => number;
+    createApprovalId?: () => string;
+  } = {}
+): TrustedApprovalService {
   return new TrustedApprovalService({
     proposals: overrides.proposals ?? new InMemoryProposalRepository(),
     approvals: overrides.approvals ?? new InMemoryApprovalRepository(),
     trustedDecisionProvider:
-      overrides.provider ?? makeProvider({ decision: 'approve', boundary: 'test-boundary', decidedAt: NOW, expiresAt: null }),
+      overrides.provider === undefined
+        ? makeProvider({
+            decision: 'approve',
+            boundary: 'test-boundary',
+            decidedAt: NOW,
+            expiresAt: null,
+          })
+        : overrides.provider,
     now: overrides.now ?? (() => NOW),
     createApprovalId: overrides.createApprovalId ?? (() => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
   });
@@ -332,13 +337,16 @@ describe('TrustedApprovalService — trusted boundary', () => {
     const service = buildService({
       proposals,
       approvals: new InMemoryApprovalRepository(),
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
-      service.createApprovalDecision(
-        makeRequest({ provenance: { kind: 'model-tool-input' } })
-      ),
+      service.createApprovalDecision(makeRequest({ provenance: { kind: 'model-tool-input' } })),
       ApprovalErrorCode.INVALID_PROVENANCE
     );
   });
@@ -366,7 +374,12 @@ describe('TrustedApprovalService — trusted boundary', () => {
     const service = buildService({
       proposals,
       approvals: new InMemoryApprovalRepository(),
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
@@ -431,7 +444,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     proposals.insert(makeProposal({ proposalVersion: 1 }));
     const service = buildService({
       proposals,
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
@@ -445,7 +463,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     proposals.insert(makeProposal());
     const service = buildService({
       proposals,
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
@@ -458,7 +481,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal({ proposedContentHash: PROPOSED_CONTENT_HASH }));
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     await service.createApprovalDecision(makeRequest());
@@ -477,7 +505,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     proposals.insert(makeProposal({ proposalId: PROPOSAL_ID }));
     proposals.insert(makeProposal({ proposalId: '22222222-2222-2222-2222-222222222222' }));
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     await service.createApprovalDecision(makeRequest({ proposalId: PROPOSAL_ID }));
@@ -495,7 +528,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     proposals.insert(makeProposal({ workspaceId: 'other-workspace' }));
     const service = buildService({
       proposals,
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
@@ -509,7 +547,12 @@ describe('TrustedApprovalService — proposal and hash binding', () => {
     proposals.insert(makeProposal({ fileUri: 'file:///root/other.txt' }));
     const service = buildService({
       proposals,
-      provider: makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null }),
+      provider: makeProvider({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: NOW,
+        expiresAt: null,
+      }),
     });
 
     await expectApprovalError(
@@ -552,7 +595,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     await service.createApprovalDecision(makeRequest());
@@ -571,7 +619,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     const { approvalId } = await service.createApprovalDecision(makeRequest());
@@ -588,7 +641,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'reject', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'reject',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     await service.createApprovalDecision(makeRequest({ decision: 'reject' }));
@@ -602,12 +660,21 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: NOW - 1000 });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: NOW - 1000,
+    });
     const service = buildService({ proposals, approvals, provider, now: () => NOW + 5000 });
 
     await service.createApprovalDecision(makeRequest({ expiresAt: NOW - 1000 }));
 
-    const result = await service.verifyApplicationAuthorization(PROPOSAL_ID, PROPOSAL_VERSION, NOW + 5000);
+    const result = await service.verifyApplicationAuthorization(
+      PROPOSAL_ID,
+      PROPOSAL_VERSION,
+      NOW + 5000
+    );
     expect(result.authorized).toBe(false);
     expect(result.notExpired).toBe(false);
   });
@@ -616,7 +683,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     const { approvalId } = await service.createApprovalDecision(makeRequest());
@@ -632,7 +704,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     proposals.insert(makeProposal({ proposalVersion: 1 }));
     proposals.insert(makeProposal({ proposalVersion: 2, proposedContentHash: OTHER_HASH }));
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'approve',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     await service.createApprovalDecision(
@@ -648,7 +725,12 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
-    const provider = makeProvider({ decision: 'reject', boundary: 'b', decidedAt: NOW, expiresAt: null });
+    const provider = makeProvider({
+      decision: 'reject',
+      boundary: 'b',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
     const service = buildService({ proposals, approvals, provider });
 
     const { approvalId } = await service.createApprovalDecision(

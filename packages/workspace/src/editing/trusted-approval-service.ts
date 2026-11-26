@@ -29,19 +29,9 @@ import {
   type AuthorizationToApply,
   isTrustedProvenance,
 } from './approval-contracts.js';
-import {
-  ApprovalDomainError,
-  ApprovalErrorCode,
-  createApprovalError,
-} from './approval-errors.js';
-import {
-  safeValidateApprovalDecisionRequest,
-  validateApproval,
-} from './approval-schemas.js';
-import {
-  verifyApprovalForApplication,
-  createAuthorizationToApply,
-} from './approval-lifecycle.js';
+import { ApprovalDomainError, ApprovalErrorCode, createApprovalError } from './approval-errors.js';
+import { ApprovalDecisionRequestSchema, validateApproval } from './approval-schemas.js';
+import { verifyApprovalForApplication, createAuthorizationToApply } from './approval-lifecycle.js';
 
 /**
  * Statuses in which a proposal may receive an approval decision. Terminal or
@@ -171,9 +161,7 @@ export interface TrustedDecisionProvider {
    *          established (user cancelled, timed out, or the provider is
    *          unavailable). The service fails closed on `null`.
    */
-  establishUserDecision(
-    request: TrustedUserDecisionRequest
-  ): Promise<TrustedUserDecision | null>;
+  establishUserDecision(request: TrustedUserDecisionRequest): Promise<TrustedUserDecision | null>;
 }
 
 /**
@@ -183,6 +171,7 @@ export interface TrustedDecisionProvider {
  */
 export class FailingTrustedDecisionProvider implements TrustedDecisionProvider {
   async establishUserDecision(): Promise<null> {
+    await Promise.resolve();
     return null;
   }
 }
@@ -231,16 +220,18 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
    * established through the injected provider. Fails closed on any missing,
    * stale, mismatched, or untrusted input.
    */
-  async createApprovalDecision(
-    request: ApprovalCreationRequest
-  ): Promise<ApprovalCreationResult> {
+  async createApprovalDecision(request: ApprovalCreationRequest): Promise<ApprovalCreationResult> {
     // 1. Validate the caller's request shape (Zod, runtime enforcement).
-    const validated = safeValidateApprovalDecisionRequest(request);
+    //    ApprovalCreationRequest carries no approvalId (the service generates
+    //    one), so validate against the decision schema with approvalId omitted.
+    const validated = ApprovalDecisionRequestSchema.omit({
+      approvalId: true,
+    }).safeParse(request);
     if (!validated.success) {
       throw createApprovalError(
         ApprovalErrorCode.INVALID_ID,
         `Invalid approval decision request: ${validated.error.issues
-          .map((issue) => issue.message)
+          .map(issue => issue.message)
           .join(', ')}`
       );
     }
@@ -402,23 +393,23 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
 
     const proposalResult = await this.proposals.getProposal(proposalId, proposalVersion);
     if (proposalResult.error !== null || proposalResult.proposal === null) {
-      return this.failedVerification('Proposal not found', evaluationNow);
+      return this.failedVerification('Proposal not found');
     }
 
-    const approvalResult = await this.approvals.getApprovalForVersion(
-      proposalId,
-      proposalVersion
-    );
+    const approvalResult = await this.approvals.getApprovalForVersion(proposalId, proposalVersion);
     if (approvalResult.error !== null) {
-      return this.failedVerification('Authorization store lookup failed', evaluationNow);
+      return this.failedVerification('Authorization store lookup failed');
     }
 
-    return verifyApprovalForApplication(approvalResult.approval ?? null, {
-      proposalId,
-      proposalVersion,
-      contentHash: proposalResult.proposal.proposedContentHash,
-      now: evaluationNow,
-    });
+    return verifyApprovalForApplication(
+      approvalResult.approval === null ? null : this.toDomainApproval(approvalResult.approval),
+      {
+        proposalId,
+        proposalVersion,
+        contentHash: proposalResult.proposal.proposedContentHash,
+        now: evaluationNow,
+      }
+    );
   }
 
   /**
@@ -435,7 +426,29 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
     if (result.error !== null || result.approval === null) {
       return null;
     }
-    return createAuthorizationToApply(result.approval, evaluationNow);
+    return createAuthorizationToApply(this.toDomainApproval(result.approval), evaluationNow);
+  }
+
+  /**
+   * Maps a persisted approval record view to the domain Approval contract,
+   * supplying the `kind` and renaming `id` to `approvalId`.
+   */
+  private toDomainApproval(record: ApprovalRecordView): Approval {
+    return {
+      kind: 'edit-approval',
+      approvalId: record.id,
+      proposalId: record.proposalId,
+      proposalVersion: record.proposalVersion,
+      decision: record.decision,
+      approvedContentHash: record.approvedContentHash,
+      decidedAt: record.decidedAt,
+      provenance: record.provenance,
+      lifecycleState: record.lifecycleState,
+      expiresAt: record.expiresAt,
+      workspaceId: record.workspaceId,
+      fileUri: record.fileUri,
+      createdAt: record.createdAt,
+    };
   }
 
   /**
@@ -519,10 +532,7 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
     return result;
   }
 
-  private failedVerification(
-    reason: string,
-    now: number
-  ): ApprovalVerificationResult {
+  private failedVerification(reason: string): ApprovalVerificationResult {
     return {
       authorized: false,
       approval: null,
