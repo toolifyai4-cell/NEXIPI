@@ -83,21 +83,6 @@ export const EditProposalSchema = z.object({
 
 export type EditProposal = z.infer<typeof EditProposalSchema>;
 
-export const EditPreviewSchema = z.object({
-  kind: 'edit-preview',
-  proposalId: z.string().uuid('proposalId must be a valid UUID'),
-  fileUri: z.string().min(1, 'fileUri is required'),
-  relativePath: z.string().min(1, 'relativePath is required'),
-  originalContent: z.string(),
-  proposedContent: z.string(),
-  diffSummary: DiffSummarySchema,
-  truncated: z.boolean(),
-  originalTruncated: z.boolean(),
-  proposedTruncated: z.boolean(),
-});
-
-export type EditPreview = z.infer<typeof EditPreviewSchema>;
-
 export const DiffHunkSchema = z.object({
   originalStart: z.number().int().nonnegative(),
   originalEnd: z.number().int().nonnegative(),
@@ -113,13 +98,27 @@ export const DiffSummarySchema = z.object({
   linesAdded: z.number().int().nonnegative(),
   linesRemoved: z.number().int().nonnegative(),
   linesModified: z.number().int().nonnegative(),
-  hunks: z.array(DiffHunkSchema).max(100),
 });
 
 export type DiffSummary = z.infer<typeof DiffSummarySchema>;
 
+export const EditPreviewSchema = z.object({
+  kind: z.literal('edit-preview'),
+  proposalId: z.string().uuid('proposalId must be a valid UUID'),
+  fileUri: z.string().min(1, 'fileUri is required'),
+  relativePath: z.string().min(1, 'relativePath is required'),
+  originalContent: z.string(),
+  proposedContent: z.string(),
+  diffSummary: DiffSummarySchema,
+  truncated: z.boolean(),
+  originalTruncated: z.boolean(),
+  proposedTruncated: z.boolean(),
+});
+
+export type EditPreview = z.infer<typeof EditPreviewSchema>;
+
 export const EditApprovalSchema = z.object({
-  kind: 'edit-approval',
+  kind: z.literal('edit-approval'),
   proposalId: z.string().uuid('proposalId must be a valid UUID'),
   proposalVersion: z.number().int().positive().max(999),
   approvedContentHash: z.string().regex(
@@ -135,7 +134,7 @@ export const EditApprovalSchema = z.object({
 export type EditApproval = z.infer<typeof EditApprovalSchema>;
 
 export const ApplyResultSchema = z.object({
-  kind: 'apply-result',
+  kind: z.literal('apply-result'),
   proposalId: z.string().uuid('proposalId must be a valid UUID'),
   fileUri: z.string().min(1, 'fileUri is required'),
   relativePath: z.string().min(1, 'relativePath is required'),
@@ -168,7 +167,7 @@ export function safeValidateEditProposal(
 ): { success: true; data: EditProposal } | { success: false; error: z.ZodError } {
   const result = EditProposalSchema.safeParse(proposal);
   if (result.success) {
-    return { success: true; data: result.data };
+    return { success: true, data: result.data };
   }
   return { success: false, error: result.error };
 }
@@ -182,7 +181,7 @@ export function safeValidateEditApproval(
 ): { success: true; data: EditApproval } | { success: false; error: z.ZodError } {
   const result = EditApprovalSchema.safeParse(approval);
   if (result.success) {
-    return { success: true; data: result.data };
+    return { success: true, data: result.data };
   }
   return { success: false, error: result.error };
 }
@@ -196,7 +195,7 @@ export function safeValidateApplyResult(
 ): { success: true; data: ApplyResult } | { success: false; error: z.ZodError } {
   const result2 = ApplyResultSchema.safeParse(result);
   if (result2.success) {
-    return { success: true; data: result2.data };
+    return { success: true, data: result2.data };
   }
   return { success: false, error: result2.error };
 }

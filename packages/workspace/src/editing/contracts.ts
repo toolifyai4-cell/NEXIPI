@@ -73,6 +73,7 @@ export interface EditProposal {
 }
 
 export interface EditPreview {
+  readonly kind: 'edit-preview';
   readonly proposalId: string;
   readonly fileUri: string;
   readonly relativePath: string;
@@ -88,7 +89,6 @@ export interface DiffSummary {
   readonly linesAdded: number;
   readonly linesRemoved: number;
   readonly linesModified: number;
-  readonly hunks: readonly DiffHunk[];
 }
 
 export interface DiffHunk {
@@ -123,12 +123,6 @@ export interface ApplyResult {
   readonly error: { code: string; message: string } | null;
   readonly staleDetected: boolean;
   readonly approvalVerified: boolean;
-}
-
-export interface ApplyOperationsResult {
-  readonly content: string;
-  readonly contentHash: string;
-  readonly size: number;
 }
 
 export interface StaleFileCheckResult {
