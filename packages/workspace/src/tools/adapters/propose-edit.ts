@@ -79,6 +79,16 @@ export function isInitialProposalStatus(status: ProposalStatus): status is Initi
  * Consistent with existing repository conventions: content preview mirrors
  * FileReadConfig.maxOutputSize (512 KB) and diff truncation mirrors
  * computeDiff's default maxLines (4000).
+ *
+ * The model-facing diff representation is `diffSummary` (line counts) plus the
+ * `truncated` flag. `diffSummary` carries only small integers, so it is
+ * inherently byte-bounded; `maxDiffPreviewSize` is provided as an explicit,
+ * configurable byte budget for the diff representation should diff text ever be
+ * included in the preview. `maxDiffLines` remains the active safeguard that
+ * bounds diff computation by line count. Because individual diff lines can be
+ * arbitrarily long, a line-count limit alone is not sufficient, so the content
+ * that feeds the diff (`originalContent`/`proposedContent`) is additionally
+ * bounded by byte limits via `maxPreviewContentSize`/`maxProposedPreviewSize`.
  */
 export interface ProposeEditConfig {
   /** Maximum bytes of original content included in the model-facing preview. */
@@ -87,12 +97,15 @@ export interface ProposeEditConfig {
   readonly maxProposedPreviewSize: number;
   /** Maximum total lines for diff computation/reporting. */
   readonly maxDiffLines: number;
+  /** Maximum bytes of the model-facing diff representation. */
+  readonly maxDiffPreviewSize: number;
 }
 
 export const defaultProposeEditConfig: ProposeEditConfig = {
   maxPreviewContentSize: 512 * 1024,
   maxProposedPreviewSize: 512 * 1024,
   maxDiffLines: 4000,
+  maxDiffPreviewSize: 64 * 1024,
 };
 
 function safeValidateProposeEditConfig(
@@ -111,6 +124,11 @@ function safeValidateProposeEditConfig(
         .positive()
         .default(defaultProposeEditConfig.maxProposedPreviewSize),
       maxDiffLines: z.number().int().positive().default(defaultProposeEditConfig.maxDiffLines),
+      maxDiffPreviewSize: z
+        .number()
+        .int()
+        .positive()
+        .default(defaultProposeEditConfig.maxDiffPreviewSize),
     })
     .safeParse(config);
   if (result.success) {
@@ -215,6 +233,7 @@ export type ProposeEditInput = z.infer<typeof ProposeEditInputSchema>;
 const BoundedEditPreviewSchema = EditPreviewSchema.extend({
   originalContent: z.string().max(defaultProposeEditConfig.maxPreviewContentSize),
   proposedContent: z.string().max(defaultProposeEditConfig.maxProposedPreviewSize),
+  diffTruncated: z.boolean(),
 });
 
 const ProposeEditOutputSchema = z.object({
@@ -471,7 +490,11 @@ export function createProposeEditToolDefinition(
       const diff = computeDiff(originalContent, proposedResult.content, {
         maxLines: config.maxDiffLines,
       });
-      const preview: z.infer<typeof EditPreviewSchema> = {
+      // The diff representation (diffSummary plus truncation flags) is bounded by
+      // maxDiffPreviewSize in addition to the maxDiffLines safeguard.
+      const diffSummaryBytes = Buffer.byteLength(JSON.stringify(diff.summary), 'utf8');
+      const diffTruncated = diffSummaryBytes > config.maxDiffPreviewSize;
+      const preview: z.infer<typeof BoundedEditPreviewSchema> = {
         kind: 'edit-preview',
         proposalId: '', // filled in once the boundary confirms the proposal identity
         fileUri,
@@ -479,9 +502,11 @@ export function createProposeEditToolDefinition(
         originalContent: originalPreview.content,
         proposedContent: proposedPreview.content,
         diffSummary: diff.summary,
-        truncated: originalPreview.truncated || proposedPreview.truncated || diff.truncated,
+        truncated:
+          originalPreview.truncated || proposedPreview.truncated || diff.truncated || diffTruncated,
         originalTruncated: originalPreview.truncated,
         proposedTruncated: proposedPreview.truncated,
+        diffTruncated,
       };
 
       // Delegate proposal creation to the trusted injected boundary. The boundary

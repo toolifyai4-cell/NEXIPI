@@ -605,6 +605,126 @@ describe('propose_edit tool definition', () => {
       expect(receivedRequest!.proposedContentHash).toBe(proposed.contentHash);
       expect(receivedRequest!.proposedSize).toBe(proposed.size);
     });
+
+    it('leaves a normal diff unchanged with diffTruncated false', async () => {
+      vfs.addFile('/root/small.ts', 'line one\nline two\nline three\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}))
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/small.ts'),
+          operations: [
+            { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'line two edited\n' },
+          ],
+        },
+        createContext()
+      );
+
+      expect(result.preview.diffTruncated).toBe(false);
+      expect(result.preview.truncated).toBe(false);
+      expect(result.preview.diffSummary.linesAdded).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesRemoved).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesModified).toBeGreaterThanOrEqual(0);
+      expect(result.originalContentHash).toBe(sha256('line one\nline two\nline three\n'));
+      const proposed = applyOperations('line one\nline two\nline three\n', [
+        { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'line two edited\n' },
+      ]);
+      expect(result.proposedContentHash).toBe(proposed.contentHash);
+      expect(result.proposedSize).toBe(proposed.size);
+    });
+
+    it('truncates diff representation when it exceeds maxDiffPreviewSize', async () => {
+      vfs.addFile('/root/diff.ts', 'a\nb\nc\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: 5, // diffSummary JSON (~30 bytes) exceeds this
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/diff.ts'),
+          operations: [{ kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'B\n' }],
+        },
+        createContext()
+      );
+
+      expect(result.preview.diffTruncated).toBe(true);
+      expect(result.preview.truncated).toBe(true);
+      // diffSummary itself remains bounded (small integers)
+      expect(result.preview.diffSummary.linesAdded).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesRemoved).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesModified).toBeGreaterThanOrEqual(0);
+    });
+
+    it('does not split multi-byte UTF-8 characters in bounded content', async () => {
+      const multibyteContent = 'héllo wörld\n🎉 line\nemoji: 🚀🔥\n';
+      vfs.addFile('/root/mb.ts', multibyteContent);
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 6, // cuts mid-multibyte if not handled
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: 1000000,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/mb.ts'),
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'top\n' }],
+        },
+        createContext()
+      );
+
+      expect(result.preview.originalTruncated).toBe(true);
+      // Truncation must not produce replacement characters or split sequences.
+      expect(result.preview.originalContent).not.toContain('\uFFFD');
+      expect(Buffer.byteLength(result.preview.originalContent, 'utf8')).toBeLessThanOrEqual(6);
+    });
+
+    it('reports diffTruncated accurately when few but extremely long lines exist', async () => {
+      // Few lines (under maxDiffLines) but each extremely long.
+      const longLine = 'x'.repeat(100000) + '\n';
+      const content = `${longLine}${longLine}${longLine}`;
+      vfs.addFile('/root/longlines.ts', content);
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: 5, // force diffTruncated regardless of line count
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/longlines.ts'),
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'top\n' }],
+        },
+        createContext()
+      );
+
+      // diffSummary stays bounded (small integer counts) despite long lines.
+      expect(result.preview.diffSummary.linesAdded).toBeLessThanOrEqual(3);
+      expect(result.preview.diffSummary.linesRemoved).toBeLessThanOrEqual(3);
+      expect(result.preview.diffSummary.linesModified).toBeLessThanOrEqual(3);
+      // diffTruncated is accurate: diff representation bytes exceed maxDiffPreviewSize.
+      expect(result.preview.diffTruncated).toBe(true);
+      expect(result.preview.truncated).toBe(true);
+      // Complete proposal content, hashes, and sizes remain unaffected.
+      expect(result.originalContentHash).toBe(sha256(content));
+      const proposed = applyOperations(content, [
+        { kind: 'insert-lines', atLine: 1, newContent: 'top\n' },
+      ]);
+      expect(result.proposedContentHash).toBe(proposed.contentHash);
+      expect(result.proposedSize).toBe(proposed.size);
+    });
   });
 
   describe('output schema enforces preview bounds', () => {
@@ -673,6 +793,42 @@ describe('propose_edit tool definition', () => {
         proposedContentHash: '0'.repeat(64),
         proposedSize: oversizedContent.length,
         preview,
+        approvalRequired: true,
+        createdAt: 1700000000000,
+        expiresAt: 1700000120000,
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it('rejects preview missing diffTruncated field', async () => {
+      const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder));
+      const previewWithoutDiffTruncated = {
+        kind: 'edit-preview' as const,
+        proposalId: VALID_PROPOSAL_ID,
+        fileUri: makeUri('/root/x.ts'),
+        relativePath: 'x.ts',
+        originalContent: 'a\n',
+        proposedContent: 'b\n',
+        diffSummary: { linesAdded: 0, linesRemoved: 0, linesModified: 0 },
+        truncated: false,
+        originalTruncated: false,
+        proposedTruncated: false,
+        // diffTruncated intentionally omitted
+      };
+      const parsed = tool.outputSchema!.safeParse({
+        kind: 'propose-edit-result',
+        proposalId: VALID_PROPOSAL_ID,
+        proposalVersion: 1,
+        status: 'awaiting-approval',
+        relativePath: 'x.ts',
+        fileUri: makeUri('/root/x.ts'),
+        workspaceId: TEST_WORKSPACE_ID,
+        originalContentHash: '0'.repeat(64),
+        originalSize: 2,
+        originalMtime: 1,
+        proposedContentHash: '0'.repeat(64),
+        proposedSize: 2,
+        preview: previewWithoutDiffTruncated,
         approvalRequired: true,
         createdAt: 1700000000000,
         expiresAt: 1700000120000,
