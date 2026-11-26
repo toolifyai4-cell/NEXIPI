@@ -5,6 +5,7 @@ import {
   type ProposeEditAdapterDependencies,
   type ProposeEditConfig,
   defaultProposeEditConfig,
+  MIN_DIFF_PREVIEW_SIZE_BYTES,
 } from '../propose-edit.js';
 import { ToolDefinition, ToolExecutionContext, ToolErrorCode } from '@nexipi/models/tools';
 import type {
@@ -642,7 +643,7 @@ describe('propose_edit tool definition', () => {
           maxPreviewContentSize: 1000000,
           maxProposedPreviewSize: 1000000,
           maxDiffLines: 4000,
-          maxDiffPreviewSize: 5, // diffSummary JSON (~30 bytes) exceeds this
+          maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES,
         })
       );
 
@@ -654,12 +655,17 @@ describe('propose_edit tool definition', () => {
         createContext()
       );
 
-      expect(result.preview.diffTruncated).toBe(true);
-      expect(result.preview.truncated).toBe(true);
-      // diffSummary itself remains bounded (small integers)
+      // At the minimum valid budget, a normal diff summary (~43 bytes) fits,
+      // so no size-based truncation occurs.
+      expect(result.preview.diffTruncated).toBe(false);
+      expect(result.preview.truncated).toBe(false);
       expect(result.preview.diffSummary.linesAdded).toBeGreaterThanOrEqual(0);
       expect(result.preview.diffSummary.linesRemoved).toBeGreaterThanOrEqual(0);
       expect(result.preview.diffSummary.linesModified).toBeGreaterThanOrEqual(0);
+      // Serialized summary stays within the accepted limit.
+      expect(
+        Buffer.byteLength(JSON.stringify(result.preview.diffSummary), 'utf8')
+      ).toBeLessThanOrEqual(MIN_DIFF_PREVIEW_SIZE_BYTES);
     });
 
     it('does not split multi-byte UTF-8 characters in bounded content', async () => {
@@ -698,7 +704,7 @@ describe('propose_edit tool definition', () => {
           maxPreviewContentSize: 1000000,
           maxProposedPreviewSize: 1000000,
           maxDiffLines: 4000,
-          maxDiffPreviewSize: 5, // force diffTruncated regardless of line count
+          maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES,
         })
       );
 
@@ -714,9 +720,14 @@ describe('propose_edit tool definition', () => {
       expect(result.preview.diffSummary.linesAdded).toBeLessThanOrEqual(3);
       expect(result.preview.diffSummary.linesRemoved).toBeLessThanOrEqual(3);
       expect(result.preview.diffSummary.linesModified).toBeLessThanOrEqual(3);
-      // diffTruncated is accurate: diff representation bytes exceed maxDiffPreviewSize.
-      expect(result.preview.diffTruncated).toBe(true);
-      expect(result.preview.truncated).toBe(true);
+      // At the minimum valid budget, the small diff summary fits, so no
+      // size-based truncation occurs despite long lines.
+      expect(result.preview.diffTruncated).toBe(false);
+      expect(result.preview.truncated).toBe(false);
+      // Serialized summary stays within the accepted limit.
+      expect(
+        Buffer.byteLength(JSON.stringify(result.preview.diffSummary), 'utf8')
+      ).toBeLessThanOrEqual(MIN_DIFF_PREVIEW_SIZE_BYTES);
       // Complete proposal content, hashes, and sizes remain unaffected.
       expect(result.originalContentHash).toBe(sha256(content));
       const proposed = applyOperations(content, [
@@ -724,6 +735,118 @@ describe('propose_edit tool definition', () => {
       ]);
       expect(result.proposedContentHash).toBe(proposed.contentHash);
       expect(result.proposedSize).toBe(proposed.size);
+    });
+
+    it('preserves real diff summary counts at the minimum valid budget', async () => {
+      vfs.addFile('/root/diffreduce.ts', 'a\nb\nc\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/diffreduce.ts'),
+          operations: [{ kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'B\n' }],
+        },
+        createContext()
+      );
+
+      // At the minimum valid budget, a normal diff summary fits and is preserved,
+      // not zeroed out.
+      expect(result.preview.diffSummary.linesAdded).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesRemoved).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffSummary.linesModified).toBeGreaterThanOrEqual(0);
+      expect(result.preview.diffTruncated).toBe(false);
+      expect(result.preview.truncated).toBe(false);
+      // Serialized summary stays within the accepted limit.
+      expect(
+        Buffer.byteLength(JSON.stringify(result.preview.diffSummary), 'utf8')
+      ).toBeLessThanOrEqual(MIN_DIFF_PREVIEW_SIZE_BYTES);
+    });
+
+    it('keeps serialized model-facing diff output within the configured byte limit', async () => {
+      vfs.addFile('/root/diffbound.ts', 'line one\nline two\nline three\n');
+      const maxDiffPreviewSize = 100;
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/diffbound.ts'),
+          operations: [
+            { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'line two edited\n' },
+          ],
+        },
+        createContext()
+      );
+
+      const serializedDiff = JSON.stringify(result.preview.diffSummary);
+      expect(Buffer.byteLength(serializedDiff, 'utf8')).toBeLessThanOrEqual(maxDiffPreviewSize);
+      expect(result.originalContentHash).toBe(sha256('line one\nline two\nline three\n'));
+    });
+
+    it('accepts the minimum valid diff preview size budget', () => {
+      const result = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES,
+        })
+      );
+      expect(result).toBeDefined();
+    });
+
+    it('rejects a diff preview size budget below the minimum', () => {
+      expect(() =>
+        createProposeEditToolDefinition(
+          buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+            maxPreviewContentSize: 1000000,
+            maxProposedPreviewSize: 1000000,
+            maxDiffLines: 4000,
+            maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES - 1,
+          })
+        )
+      ).toThrow();
+    });
+
+    it('keeps an empty DiffSummary at the accepted minimum within the byte limit', async () => {
+      vfs.addFile('/root/minbudget.ts', 'a\nb\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+          maxDiffPreviewSize: MIN_DIFF_PREVIEW_SIZE_BYTES,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/minbudget.ts'),
+          operations: [{ kind: 'replace-full', newContent: 'c\nd\n' }],
+        },
+        createContext()
+      );
+
+      const serializedDiff = JSON.stringify(result.preview.diffSummary);
+      expect(Buffer.byteLength(serializedDiff, 'utf8')).toBeLessThanOrEqual(
+        MIN_DIFF_PREVIEW_SIZE_BYTES
+      );
+      expect(result.originalContentHash).toBe(sha256('a\nb\n'));
+      expect(result.proposedContentHash).toBe(sha256('c\nd\n'));
+      expect(result.proposedSize).toBe(Buffer.byteLength('c\nd\n', 'utf8'));
     });
   });
 
@@ -834,6 +957,42 @@ describe('propose_edit tool definition', () => {
         expiresAt: 1700000120000,
       });
       expect(parsed.success).toBe(false);
+    });
+
+    it('accepts valid bounded diff representation in output schema', async () => {
+      const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder));
+      const preview = {
+        kind: 'edit-preview' as const,
+        proposalId: VALID_PROPOSAL_ID,
+        fileUri: makeUri('/root/x.ts'),
+        relativePath: 'x.ts',
+        originalContent: 'a\n',
+        proposedContent: 'b\n',
+        diffSummary: { linesAdded: 1, linesRemoved: 1, linesModified: 0 },
+        truncated: false,
+        originalTruncated: false,
+        proposedTruncated: false,
+        diffTruncated: false,
+      };
+      const parsed = tool.outputSchema!.safeParse({
+        kind: 'propose-edit-result',
+        proposalId: VALID_PROPOSAL_ID,
+        proposalVersion: 1,
+        status: 'awaiting-approval',
+        relativePath: 'x.ts',
+        fileUri: makeUri('/root/x.ts'),
+        workspaceId: TEST_WORKSPACE_ID,
+        originalContentHash: '0'.repeat(64),
+        originalSize: 2,
+        originalMtime: 1,
+        proposedContentHash: '0'.repeat(64),
+        proposedSize: 2,
+        preview,
+        approvalRequired: true,
+        createdAt: 1700000000000,
+        expiresAt: 1700000120000,
+      });
+      expect(parsed.success).toBe(true);
     });
   });
 

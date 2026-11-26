@@ -97,9 +97,21 @@ export interface ProposeEditConfig {
   readonly maxProposedPreviewSize: number;
   /** Maximum total lines for diff computation/reporting. */
   readonly maxDiffLines: number;
-  /** Maximum bytes of the model-facing diff representation. */
+  /**
+   * Maximum bytes of the model-facing diff representation. Must be at least
+   * MIN_DIFF_PREVIEW_SIZE_BYTES so a valid empty DiffSummary can be serialized.
+   */
   readonly maxDiffPreviewSize: number;
 }
+
+/**
+ * Minimum UTF-8 byte budget required to serialize a valid DiffSummary:
+ * `{"linesAdded":0,"linesRemoved":0,"linesModified":0}`.
+ */
+export const MIN_DIFF_PREVIEW_SIZE_BYTES = Buffer.byteLength(
+  JSON.stringify({ linesAdded: 0, linesRemoved: 0, linesModified: 0 }),
+  'utf8'
+);
 
 export const defaultProposeEditConfig: ProposeEditConfig = {
   maxPreviewContentSize: 512 * 1024,
@@ -128,7 +140,10 @@ function safeValidateProposeEditConfig(
         .number()
         .int()
         .positive()
-        .default(defaultProposeEditConfig.maxDiffPreviewSize),
+        .default(defaultProposeEditConfig.maxDiffPreviewSize)
+        .refine(value => value >= MIN_DIFF_PREVIEW_SIZE_BYTES, {
+          message: `maxDiffPreviewSize must be at least ${MIN_DIFF_PREVIEW_SIZE_BYTES} bytes to hold a valid DiffSummary`,
+        }),
     })
     .safeParse(config);
   if (result.success) {
@@ -229,6 +244,12 @@ export type ProposeEditInput = z.infer<typeof ProposeEditInputSchema>;
 /**
  * Bounded preview schema used for model-facing output. Enforces preview content
  * size limits so oversized content cannot be returned to the model.
+ *
+ * The diff representation (diffSummary plus truncation flags) is bounded at
+ * runtime: diffSummary carries small integers bounded by maxDiffLines, and if
+ * the serialized diff representation ever exceeds maxDiffPreviewSize, the
+ * counts are zeroed out and diffTruncated is set. This schema enforces the
+ * structural constraints; byte-level diff bounding is enforced at runtime.
  */
 const BoundedEditPreviewSchema = EditPreviewSchema.extend({
   originalContent: z.string().max(defaultProposeEditConfig.maxPreviewContentSize),
@@ -490,10 +511,32 @@ export function createProposeEditToolDefinition(
       const diff = computeDiff(originalContent, proposedResult.content, {
         maxLines: config.maxDiffLines,
       });
-      // The diff representation (diffSummary plus truncation flags) is bounded by
-      // maxDiffPreviewSize in addition to the maxDiffLines safeguard.
-      const diffSummaryBytes = Buffer.byteLength(JSON.stringify(diff.summary), 'utf8');
-      const diffTruncated = diffSummaryBytes > config.maxDiffPreviewSize;
+      // The model-facing diff representation is diffSummary (line counts) plus
+      // truncation flags. diffSummary carries small integers bounded by
+      // maxDiffLines, so it is inherently byte-bounded; maxDiffPreviewSize is an
+      // explicit defense-in-depth budget. If the serialized diff representation
+      // ever exceeds it, replace the counts with zeros and mark diffTruncated
+      // rather than returning oversized data.
+      const diffSummaryCandidate: {
+        readonly linesAdded: number;
+        readonly linesRemoved: number;
+        readonly linesModified: number;
+      } = {
+        linesAdded: diff.summary.linesAdded,
+        linesRemoved: diff.summary.linesRemoved,
+        linesModified: diff.summary.linesModified,
+      };
+      const diffSummarySerialized = JSON.stringify(diffSummaryCandidate);
+      const diffSummaryBytes = Buffer.byteLength(diffSummarySerialized, 'utf8');
+      const diffExceedsByteBudget = diffSummaryBytes > config.maxDiffPreviewSize;
+      const diffTruncated = diff.truncated || diffExceedsByteBudget;
+      const diffSummary: {
+        readonly linesAdded: number;
+        readonly linesRemoved: number;
+        readonly linesModified: number;
+      } = diffExceedsByteBudget
+        ? { linesAdded: 0, linesRemoved: 0, linesModified: 0 }
+        : diffSummaryCandidate;
       const preview: z.infer<typeof BoundedEditPreviewSchema> = {
         kind: 'edit-preview',
         proposalId: '', // filled in once the boundary confirms the proposal identity
@@ -501,9 +544,8 @@ export function createProposeEditToolDefinition(
         relativePath: rel,
         originalContent: originalPreview.content,
         proposedContent: proposedPreview.content,
-        diffSummary: diff.summary,
-        truncated:
-          originalPreview.truncated || proposedPreview.truncated || diff.truncated || diffTruncated,
+        diffSummary,
+        truncated: originalPreview.truncated || proposedPreview.truncated || diffTruncated,
         originalTruncated: originalPreview.truncated,
         proposedTruncated: proposedPreview.truncated,
         diffTruncated,
