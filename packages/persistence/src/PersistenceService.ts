@@ -152,9 +152,7 @@ const MIGRATIONS: Migration[] = [
           PRIMARY KEY (id, proposal_version)
         )
       `);
-      db.exec(
-        `CREATE INDEX IF NOT EXISTS idx_proposal_versions_id ON proposal_versions(id)`
-      );
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_proposal_versions_id ON proposal_versions(id)`);
       db.exec(
         `CREATE INDEX IF NOT EXISTS idx_proposal_versions_status ON proposal_versions(status)`
       );

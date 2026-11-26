@@ -72,34 +72,35 @@ export interface CreateProposalInput {
   readonly expiresAt: number;
 }
 
-export const ProposalRecordSchema = z.object({
-  id: z.string().uuid('id must be a valid UUID'),
-  proposalVersion: z.number().int().positive().max(999),
-  workspaceId: z.string().min(1, 'workspaceId is required'),
-  workspaceFolderUri: z.string().min(1, 'workspaceFolderUri is required'),
-  fileUri: z.string().min(1, 'fileUri is required'),
-  relativePath: z.string().min(1, 'relativePath is required'),
-  originalContentHash: z
-    .string()
-    .regex(
-      /^[a-f0-9]{64}$/,
-      'originalContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
-    ),
-  originalSize: z.number().int().nonnegative(),
-  originalMtime: z.number().int().nonnegative(),
-  operations: z.array(z.unknown()).min(1).max(50),
-  proposedContent: z.string(),
-  proposedContentHash: z
-    .string()
-    .regex(
-      /^[a-f0-9]{64}$/,
-      'proposedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
-    ),
-  proposedSize: z.number().int().nonnegative(),
-  status: ProposalStatusSchema,
-  createdAt: z.number().int().positive(),
-  expiresAt: z.number().int().positive(),
-})
+export const ProposalRecordSchema = z
+  .object({
+    id: z.string().uuid('id must be a valid UUID'),
+    proposalVersion: z.number().int().positive().max(999),
+    workspaceId: z.string().min(1, 'workspaceId is required'),
+    workspaceFolderUri: z.string().min(1, 'workspaceFolderUri is required'),
+    fileUri: z.string().min(1, 'fileUri is required'),
+    relativePath: z.string().min(1, 'relativePath is required'),
+    originalContentHash: z
+      .string()
+      .regex(
+        /^[a-f0-9]{64}$/,
+        'originalContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
+      ),
+    originalSize: z.number().int().nonnegative(),
+    originalMtime: z.number().int().nonnegative(),
+    operations: z.array(z.unknown()).min(1).max(50),
+    proposedContent: z.string(),
+    proposedContentHash: z
+      .string()
+      .regex(
+        /^[a-f0-9]{64}$/,
+        'proposedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
+      ),
+    proposedSize: z.number().int().nonnegative(),
+    status: ProposalStatusSchema,
+    createdAt: z.number().int().positive(),
+    expiresAt: z.number().int().positive(),
+  })
   .refine(data => data.expiresAt > data.createdAt, 'expiresAt must be after createdAt');
 
 export type ValidatedProposal = z.infer<typeof ProposalRecordSchema>;
@@ -208,10 +209,7 @@ export class SqlJsProposalRepository implements ProposalRepository {
     }
   }
 
-  async getProposal(
-    proposalId: string,
-    proposalVersion: number
-  ): Promise<ProposalResult> {
+  async getProposal(proposalId: string, proposalVersion: number): Promise<ProposalResult> {
     await Promise.resolve();
     try {
       const result = this.db.exec(
@@ -240,8 +238,7 @@ export class SqlJsProposalRepository implements ProposalRepository {
         `SELECT ${PROPOSAL_COLUMNS} FROM proposal_versions WHERE id = ? ORDER BY proposal_version ASC`,
         [proposalId] as SqlValue[]
       );
-      const proposals =
-        result.length > 0 ? result[0].values.map(mapProposalRow) : [];
+      const proposals = result.length > 0 ? result[0].values.map(mapProposalRow) : [];
       return { proposals, error: null };
     } catch (error) {
       return {
@@ -268,6 +265,8 @@ export class SqlJsProposalRepository implements ProposalRepository {
       if (existing.proposal === null) {
         return { proposal: null, error: new PersistenceError('Proposal not found') };
       }
+
+      ProposalStatusSchema.parse(status);
 
       this.db.exec(
         `UPDATE proposal_versions SET status = ? WHERE id = ? AND proposal_version = ?`,
@@ -326,8 +325,7 @@ export class SqlJsProposalRepository implements ProposalRepository {
       params.push(safeLimit, safeOffset);
 
       const result = this.db.exec(sql, params as SqlValue[]);
-      const proposals =
-        result.length > 0 ? result[0].values.map(mapProposalRow) : [];
+      const proposals = result.length > 0 ? result[0].values.map(mapProposalRow) : [];
       return { proposals, error: null };
     } catch (error) {
       return {

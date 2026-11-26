@@ -45,10 +45,7 @@ export type ApprovalDecision = z.infer<typeof ApprovalDecisionSchema>;
 
 export const ContentHashSchema = z
   .string()
-  .regex(
-    /^[a-f0-9]{64}$/,
-    'content hash must be a lowercase SHA-256 hex string (64 hex chars)'
-  );
+  .regex(/^[a-f0-9]{64}$/, 'content hash must be a lowercase SHA-256 hex string (64 hex chars)');
 
 export const TimestampSchema = z
   .number()
@@ -160,9 +157,7 @@ function validateCreateApprovalInput(input: CreateApprovalInput): ApprovalRecord
     record.decision === 'approve' &&
     !['approved', 'expired', 'revoked'].includes(record.lifecycleState)
   ) {
-    throw new Error(
-      'an approval decision must have lifecycle state approved, expired, or revoked'
-    );
+    throw new Error('an approval decision must have lifecycle state approved, expired, or revoked');
   }
 
   return record;
@@ -188,14 +183,8 @@ export interface ApprovalListFilter {
 export interface ApprovalRepository {
   createApproval(input: CreateApprovalInput): Promise<ApprovalResult>;
   getApproval(approvalId: string): Promise<ApprovalResult>;
-  getApprovalsByProposal(
-    proposalId: string,
-    proposalVersion?: number
-  ): Promise<ApprovalListResult>;
-  getApprovalForVersion(
-    proposalId: string,
-    proposalVersion: number
-  ): Promise<ApprovalResult>;
+  getApprovalsByProposal(proposalId: string, proposalVersion?: number): Promise<ApprovalListResult>;
+  getApprovalForVersion(proposalId: string, proposalVersion: number): Promise<ApprovalResult>;
   updateApprovalLifecycle(
     approvalId: string,
     nextState: ApprovalLifecycleState
@@ -310,8 +299,7 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
       sql += ' ORDER BY created_at ASC, id ASC';
 
       const result = this.db.exec(sql, params as SqlValue[]);
-      const approvals =
-        result.length > 0 ? result[0].values.map(mapApprovalRow) : [];
+      const approvals = result.length > 0 ? result[0].values.map(mapApprovalRow) : [];
       return { approvals, error: null };
     } catch (error) {
       return {
@@ -365,10 +353,7 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
 
       let resolvedNext: ApprovalLifecycleState;
       try {
-        resolvedNext = applyApprovalTransition(
-          existing.approval.lifecycleState,
-          nextState
-        );
+        resolvedNext = applyApprovalTransition(existing.approval.lifecycleState, nextState);
       } catch (error) {
         return {
           approval: null,
@@ -383,10 +368,10 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
         return existing;
       }
 
-      this.db.exec(
-        `UPDATE approval_decisions SET lifecycle_state = ? WHERE id = ?`,
-        [resolvedNext, approvalId] as SqlValue[]
-      );
+      this.db.exec(`UPDATE approval_decisions SET lifecycle_state = ? WHERE id = ?`, [
+        resolvedNext,
+        approvalId,
+      ] as SqlValue[]);
 
       return this.getApproval(approvalId);
     } catch (error) {
@@ -421,10 +406,9 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
         return existing;
       }
 
-      this.db.exec(
-        `UPDATE approval_decisions SET lifecycle_state = 'expired' WHERE id = ?`,
-        [approvalId] as SqlValue[]
-      );
+      this.db.exec(`UPDATE approval_decisions SET lifecycle_state = 'expired' WHERE id = ?`, [
+        approvalId,
+      ] as SqlValue[]);
 
       return this.getApproval(approvalId);
     } catch (error) {
@@ -460,10 +444,9 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
         };
       }
 
-      this.db.exec(
-        `UPDATE approval_decisions SET lifecycle_state = 'revoked' WHERE id = ?`,
-        [approvalId] as SqlValue[]
-      );
+      this.db.exec(`UPDATE approval_decisions SET lifecycle_state = 'revoked' WHERE id = ?`, [
+        approvalId,
+      ] as SqlValue[]);
 
       return this.getApproval(approvalId);
     } catch (error) {
@@ -517,8 +500,7 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
       params.push(safeLimit, safeOffset);
 
       const result = this.db.exec(sql, params as SqlValue[]);
-      const approvals =
-        result.length > 0 ? result[0].values.map(mapApprovalRow) : [];
+      const approvals = result.length > 0 ? result[0].values.map(mapApprovalRow) : [];
       return { approvals, error: null };
     } catch (error) {
       return {
