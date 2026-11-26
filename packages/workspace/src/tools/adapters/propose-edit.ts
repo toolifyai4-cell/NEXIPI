@@ -10,6 +10,10 @@
  * an injected {@link ProposalCreationBoundary}, which Stage E will back with a
  * real ProposalStore. Until then the boundary must be supplied by the caller; a
  * missing or failing boundary fails closed (no proposal is reported as created).
+ *
+ * Preview output is bounded so the model never receives unbounded file content.
+ * Complete content hashes and sizes are preserved internally and reported; only
+ * the preview representation is truncated.
  */
 
 import { z } from 'zod';
@@ -49,6 +53,100 @@ import {
   computeWorkspaceId,
 } from '../classification.js';
 import { validateSymlinkFreePath } from '../path-security.js';
+
+/**
+ * Statuses that are valid immediately after a proposal is created.
+ *
+ * These are the only pre-approval, non-terminal statuses a newly created proposal
+ * may carry. Terminal or post-approval statuses (approved, applied, rejected,
+ * expired, failed, cancelled) are never valid initial creation results.
+ */
+export const INITIAL_PROPOSAL_STATUSES = [
+  'pending-validation',
+  'validated',
+  'awaiting-approval',
+] as const satisfies readonly ProposalStatus[];
+
+type InitialProposalStatus = (typeof INITIAL_PROPOSAL_STATUSES)[number];
+
+export function isInitialProposalStatus(status: ProposalStatus): status is InitialProposalStatus {
+  return INITIAL_PROPOSAL_STATUSES.includes(status as InitialProposalStatus);
+}
+
+/**
+ * Configuration for preview output bounds.
+ *
+ * Consistent with existing repository conventions: content preview mirrors
+ * FileReadConfig.maxOutputSize (512 KB) and diff truncation mirrors
+ * computeDiff's default maxLines (4000).
+ */
+export interface ProposeEditConfig {
+  /** Maximum bytes of original content included in the model-facing preview. */
+  readonly maxPreviewContentSize: number;
+  /** Maximum bytes of proposed content included in the model-facing preview. */
+  readonly maxProposedPreviewSize: number;
+  /** Maximum total lines for diff computation/reporting. */
+  readonly maxDiffLines: number;
+}
+
+export const defaultProposeEditConfig: ProposeEditConfig = {
+  maxPreviewContentSize: 512 * 1024,
+  maxProposedPreviewSize: 512 * 1024,
+  maxDiffLines: 4000,
+};
+
+function safeValidateProposeEditConfig(
+  config: unknown
+): { success: true; data: ProposeEditConfig } | { success: false; error: z.ZodError } {
+  const result = z
+    .object({
+      maxPreviewContentSize: z
+        .number()
+        .int()
+        .positive()
+        .default(defaultProposeEditConfig.maxPreviewContentSize),
+      maxProposedPreviewSize: z
+        .number()
+        .int()
+        .positive()
+        .default(defaultProposeEditConfig.maxProposedPreviewSize),
+      maxDiffLines: z.number().int().positive().default(defaultProposeEditConfig.maxDiffLines),
+    })
+    .safeParse(config);
+  if (result.success) {
+    return { success: true, data: result.data };
+  }
+  return { success: false, error: result.error };
+}
+
+/**
+ * Truncates content to a byte budget without splitting multi-byte UTF-8
+ * characters. Returns the (possibly shortened) content and whether truncation
+ * occurred.
+ */
+function truncateContentByBytes(
+  content: string,
+  maxBytes: number
+): { content: string; truncated: boolean } {
+  const byteLength = Buffer.byteLength(content, 'utf8');
+  if (byteLength <= maxBytes) {
+    return { content, truncated: false };
+  }
+  const encoder = new TextEncoder();
+  const bytes = encoder.encode(content);
+  const decoder = new TextDecoder();
+  // Find the largest cut point at or before maxBytes that decodes cleanly.
+  let cut = maxBytes;
+  while (cut > 0) {
+    try {
+      const decoded = decoder.decode(bytes.subarray(0, cut));
+      return { content: decoded, truncated: true };
+    } catch {
+      cut--;
+    }
+  }
+  return { content: '', truncated: true };
+}
 
 /**
  * Request handed to the trusted proposal-creation boundary.
@@ -98,7 +196,7 @@ export interface ProposeEditAdapterDependencies {
   fileSystem: FileSystemProvider;
   workspaceFolder: WorkspaceFolder;
   proposalCreation: ProposalCreationBoundary;
-  config?: Partial<FileReadConfig> | undefined;
+  config?: Partial<ProposeEditConfig> | undefined;
 }
 
 const ProposeEditInputSchema = z
@@ -109,6 +207,15 @@ const ProposeEditInputSchema = z
   .strict();
 
 export type ProposeEditInput = z.infer<typeof ProposeEditInputSchema>;
+
+/**
+ * Bounded preview schema used for model-facing output. Enforces preview content
+ * size limits so oversized content cannot be returned to the model.
+ */
+const BoundedEditPreviewSchema = EditPreviewSchema.extend({
+  originalContent: z.string().max(defaultProposeEditConfig.maxPreviewContentSize),
+  proposedContent: z.string().max(defaultProposeEditConfig.maxProposedPreviewSize),
+});
 
 const ProposeEditOutputSchema = z.object({
   kind: z.literal('propose-edit-result'),
@@ -133,7 +240,7 @@ const ProposeEditOutputSchema = z.object({
       'proposedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
     ),
   proposedSize: z.number().int().nonnegative(),
-  preview: EditPreviewSchema,
+  preview: BoundedEditPreviewSchema,
   approvalRequired: z.boolean(),
   createdAt: z.number().int().positive(),
   expiresAt: z.number().int().positive(),
@@ -159,21 +266,33 @@ function isAbortError(error: unknown): boolean {
 export function createProposeEditToolDefinition(
   deps: ProposeEditAdapterDependencies
 ): ToolDefinition {
-  const configValidation = safeValidateFileReadConfig(deps.config ?? {});
-  if (!configValidation.success) {
+  const fileConfigValidation = safeValidateFileReadConfig(deps.config ?? {});
+  if (!fileConfigValidation.success) {
     throw createToolError(
       ToolErrorCode.TOOL_INVALID_ARGUMENTS,
-      `Invalid propose edit config: ${configValidation.error.issues.map(i => i.message).join(', ')}`
+      `Invalid propose edit config: ${fileConfigValidation.error.issues.map(i => i.message).join(', ')}`
     );
   }
-  const config: FileReadConfig = { ...defaultFileReadConfig, ...configValidation.data };
+  const fileConfig: FileReadConfig = { ...defaultFileReadConfig, ...fileConfigValidation.data };
+
+  const previewConfigValidation = safeValidateProposeEditConfig(deps.config ?? {});
+  if (!previewConfigValidation.success) {
+    throw createToolError(
+      ToolErrorCode.TOOL_INVALID_ARGUMENTS,
+      `Invalid propose edit preview config: ${previewConfigValidation.error.issues.map(i => i.message).join(', ')}`
+    );
+  }
+  const config: ProposeEditConfig = {
+    ...defaultProposeEditConfig,
+    ...previewConfigValidation.data,
+  };
 
   const computedWorkspaceId = computeWorkspaceId(deps.workspaceFolder.uri);
 
   return {
     name: 'propose_edit',
     description:
-      'Propose a controlled edit to a workspace file without modifying it. Reads the target file, validates the edit operations, and returns a structured proposal preview. The model cannot supply proposal identity, timestamps, approval status, or file metadata; those are derived by trusted code. No filesystem write is performed.',
+      'Propose a controlled edit to a workspace file without modifying it. Reads the target file, validates the edit operations, and returns a structured, size-bounded proposal preview. Preview content is truncated to a configurable byte budget; complete content hashes and sizes are always preserved. The model cannot supply proposal identity, timestamps, approval status, or file metadata; those are derived by trusted code. A newly created proposal always requires a separate user approval action (approvalRequired is always true). No filesystem write is performed.',
     inputSchema: ProposeEditInputSchema,
     outputSchema: ProposeEditOutputSchema,
     metadata: {
@@ -252,10 +371,10 @@ export function createProposeEditToolDefinition(
       }
 
       // Pre-read content size limit enforced from stat metadata.
-      if (stat.size > config.maxFileSize) {
+      if (stat.size > fileConfig.maxFileSize) {
         throw createToolError(
           ToolErrorCode.TOOL_EXECUTION_FAILED,
-          `File size ${stat.size} bytes exceeds the maximum of ${config.maxFileSize} bytes`,
+          `File size ${stat.size} bytes exceeds the maximum of ${fileConfig.maxFileSize} bytes`,
           { toolName: 'propose_edit' }
         );
       }
@@ -270,7 +389,7 @@ export function createProposeEditToolDefinition(
       }
 
       // Sensitive-file protection (filename-based, before content is read).
-      if (config.respectSensitiveFiles) {
+      if (fileConfig.respectSensitiveFiles) {
         const baseName = absPath.slice(absPath.lastIndexOf('/') + 1);
         const { extension } = splitNameExtension(baseName);
         if (isSensitiveFileName(baseName, extension)) {
@@ -302,7 +421,7 @@ export function createProposeEditToolDefinition(
       checkCancelled(context.signal);
 
       // Binary-content protection after reading.
-      if (config.enableBinaryDetection) {
+      if (fileConfig.enableBinaryDetection) {
         const baseName = absPath.slice(absPath.lastIndexOf('/') + 1);
         const { extension } = splitNameExtension(baseName);
         if (isBinaryExtension(extension) || isBinaryContent(originalContent)) {
@@ -321,7 +440,9 @@ export function createProposeEditToolDefinition(
       const originalSize = Buffer.byteLength(originalContent, 'utf8');
 
       // Validate edit operations using Stage B pure editing functions. This also
-      // computes the proposed content, its hash, and its size.
+      // computes the complete proposed content, its hash, and its size. The
+      // complete proposed content is preserved internally; only the preview is
+      // truncated for the model-facing output.
       let proposedResult: ApplyOperationsResult;
       try {
         proposedResult = applyOperations(originalContent, operations);
@@ -339,19 +460,28 @@ export function createProposeEditToolDefinition(
         );
       }
 
-      // Produce a structured preview and diff summary.
-      const diff = computeDiff(originalContent, proposedResult.content);
+      // Build the bounded model-facing preview. Truncation applies only to the
+      // preview representation; the complete content, hashes, and sizes remain
+      // intact for the trusted boundary and output.
+      const originalPreview = truncateContentByBytes(originalContent, config.maxPreviewContentSize);
+      const proposedPreview = truncateContentByBytes(
+        proposedResult.content,
+        config.maxProposedPreviewSize
+      );
+      const diff = computeDiff(originalContent, proposedResult.content, {
+        maxLines: config.maxDiffLines,
+      });
       const preview: z.infer<typeof EditPreviewSchema> = {
         kind: 'edit-preview',
         proposalId: '', // filled in once the boundary confirms the proposal identity
         fileUri,
         relativePath: rel,
-        originalContent: originalContent,
-        proposedContent: proposedResult.content,
+        originalContent: originalPreview.content,
+        proposedContent: proposedPreview.content,
         diffSummary: diff.summary,
-        truncated: diff.truncated,
-        originalTruncated: diff.truncated,
-        proposedTruncated: diff.truncated,
+        truncated: originalPreview.truncated || proposedPreview.truncated || diff.truncated,
+        originalTruncated: originalPreview.truncated,
+        proposedTruncated: proposedPreview.truncated,
       };
 
       // Delegate proposal creation to the trusted injected boundary. The boundary
@@ -381,6 +511,21 @@ export function createProposeEditToolDefinition(
         );
       }
 
+      // Enforce lifecycle separation: a newly created proposal may only carry a
+      // pre-approval initial status. Terminal/post-approval statuses from the
+      // boundary indicate a boundary violation and are rejected, not converted.
+      if (!isInitialProposalStatus(creation.status)) {
+        throw createToolError(
+          ToolErrorCode.TOOL_INVALID_RESULT,
+          `Proposal creation returned invalid initial status '${creation.status}'; a newly created proposal must be pending-validation, validated, or awaiting-approval`,
+          { toolName: 'propose_edit' }
+        );
+      }
+
+      // A successful proposal always requires a separate trusted user approval
+      // action. Proposal creation is never equivalent to approval.
+      const approvalRequired = true;
+
       const output: ProposeEditOutput = {
         kind: 'propose-edit-result',
         proposalId: creation.proposalId,
@@ -395,7 +540,7 @@ export function createProposeEditToolDefinition(
         proposedContentHash: proposedResult.contentHash,
         proposedSize: proposedResult.size,
         preview: { ...preview, proposalId: creation.proposalId },
-        approvalRequired: creation.status !== 'approved',
+        approvalRequired,
         createdAt: creation.createdAt,
         expiresAt: creation.expiresAt,
       };

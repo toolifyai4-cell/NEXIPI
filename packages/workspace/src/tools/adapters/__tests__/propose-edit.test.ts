@@ -1,15 +1,12 @@
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import { z } from 'zod';
 import {
   createProposeEditToolDefinition,
   type ProposeEditAdapterDependencies,
+  type ProposeEditConfig,
+  defaultProposeEditConfig,
 } from '../propose-edit.js';
-import {
-  ToolDefinition,
-  ToolExecutionContext,
-  ToolExecutionResult,
-  ToolErrorCode,
-} from '@nexipi/models/tools';
+import { ToolDefinition, ToolExecutionContext, ToolErrorCode } from '@nexipi/models/tools';
 import type {
   FileSystemProvider,
   DirectoryEntry,
@@ -51,6 +48,8 @@ function computeTestWorkspaceId(uri: string): string {
 
 const TEST_WORKSPACE_ID = computeTestWorkspaceId('file:///root');
 const ROOT_URI = 'file:///root';
+
+const VALID_PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
 
 class TrackingFileSystem implements FileSystemProvider {
   private files = new Map<string, string>();
@@ -151,7 +150,7 @@ function createContext(
 }
 
 function makeProposalBoundary(overrides: {
-  result?: { proposalId: string; proposalVersion: number; status: 'awaiting-approval' };
+  result?: { proposalId: string; proposalVersion: number; status: string };
   fail?: boolean;
 }): ProposalCreationBoundary {
   return {
@@ -160,7 +159,7 @@ function makeProposalBoundary(overrides: {
         throw new Error('Proposal store unavailable');
       }
       return {
-        proposalId: overrides.result?.proposalId ?? '550e8400-e29b-41d4-a716-446655440000',
+        proposalId: overrides.result?.proposalId ?? VALID_PROPOSAL_ID,
         proposalVersion: overrides.result?.proposalVersion ?? 1,
         status: overrides.result?.status ?? 'awaiting-approval',
         createdAt: 1700000000000,
@@ -194,12 +193,14 @@ interface ProposalCreationBoundary {
 function buildDeps(
   vfs: TrackingFileSystem,
   workspaceFolder: WorkspaceFolder,
-  boundary?: ProposalCreationBoundary
+  boundary?: ProposalCreationBoundary,
+  config?: Partial<ProposeEditConfig>
 ): ProposeEditAdapterDependencies {
   return {
     fileSystem: vfs,
     workspaceFolder,
     proposalCreation: boundary ?? makeProposalBoundary({}),
+    config,
   };
 }
 
@@ -212,7 +213,7 @@ describe('propose_edit tool definition', () => {
   });
 
   describe('metadata', () => {
-    it('has the proposed_edit name and read-only metadata', () => {
+    it('has the propose_edit name and read-only metadata', () => {
       const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder));
       expect(tool.name).toBe('propose_edit');
       expect(tool.metadata.capabilities).toEqual(['read']);
@@ -314,7 +315,7 @@ describe('propose_edit tool definition', () => {
       );
 
       expect(result.kind).toBe('propose-edit-result');
-      expect(result.proposalId).toBe('550e8400-e29b-41d4-a716-446655440000');
+      expect(result.proposalId).toBe(VALID_PROPOSAL_ID);
       expect(result.proposalVersion).toBe(1);
       expect(result.status).toBe('awaiting-approval');
       expect(result.relativePath).toBe('test.ts');
@@ -363,68 +364,320 @@ describe('propose_edit tool definition', () => {
       expect(result.approvalRequired).toBe(true);
     });
 
-    it('reports approval not required when boundary returns approved', async () => {
+    it('creates a pending-validation proposal and always requires approval', async () => {
       vfs.addFile('/root/test.ts', 'content\n');
       const boundary = makeProposalBoundary({
-        result: {
-          proposalId: '11111111-1111-1111-1111-111111111111',
-          proposalVersion: 1,
-          status: 'approved',
-        },
+        result: { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1, status: 'pending-validation' },
       });
       const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder, boundary));
 
       const result = await tool.execute(
         {
           uri: makeUri('/root/test.ts'),
-          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'x\n' }],
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'top\n' }],
         },
         createContext()
       );
 
-      expect(result.status).toBe('approved');
-      expect(result.approvalRequired).toBe(false);
+      expect(result.status).toBe('pending-validation');
+      expect(result.approvalRequired).toBe(true);
     });
+  });
 
-    it('generates a correct diff summary and preview', async () => {
-      vfs.addFile('/root/diff.ts', 'a\nb\nc\n');
+  describe('proposal lifecycle separation', () => {
+    const prohibitedStatuses: Array<[string, string]> = [
+      ['approved', 'approved'],
+      ['applied', 'applied'],
+      ['rejected', 'rejected'],
+      ['expired', 'expired'],
+      ['failed', 'failed'],
+      ['cancelled', 'cancelled'],
+    ];
+
+    it.each(prohibitedStatuses)(
+      'rejects %s as an initial proposal creation status',
+      async (_label, status) => {
+        vfs.addFile('/root/test.ts', 'content\n');
+        const boundary = makeProposalBoundary({
+          result: { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1, status },
+        });
+        const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder, boundary));
+
+        await expect(
+          tool.execute(
+            {
+              uri: makeUri('/root/test.ts'),
+              operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'x\n' }],
+            },
+            createContext()
+          )
+        ).rejects.toMatchObject({ code: ToolErrorCode.TOOL_INVALID_RESULT });
+      }
+    );
+
+    it('does not convert an invalid boundary status into a valid one', async () => {
+      vfs.addFile('/root/test.ts', 'content\n');
+      const boundary = makeProposalBoundary({
+        result: { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1, status: 'approved' },
+      });
+      const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder, boundary));
+
+      await expect(
+        tool.execute(
+          {
+            uri: makeUri('/root/test.ts'),
+            operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'x\n' }],
+          },
+          createContext()
+        )
+      ).rejects.toMatchObject({ code: ToolErrorCode.TOOL_INVALID_RESULT });
+    });
+  });
+
+  describe('preview bounds', () => {
+    it('returns a normal small preview without truncation', async () => {
+      vfs.addFile('/root/small.ts', 'line one\nline two\nline three\n');
       const tool = createProposeEditToolDefinition(
         buildDeps(vfs, workspaceFolder, makeProposalBoundary({}))
       );
 
       const result = await tool.execute(
         {
-          uri: makeUri('/root/diff.ts'),
-          operations: [{ kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'B\n' }],
+          uri: makeUri('/root/small.ts'),
+          operations: [
+            { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'line two edited\n' },
+          ],
         },
         createContext()
       );
 
-      expect(result.preview.originalContent).toBe('a\nb\nc\n');
-      expect(result.preview.proposedContent).toBe('a\nB\nc\n');
-      expect(result.preview.diffSummary.linesRemoved).toBe(1);
-      expect(result.preview.diffSummary.linesAdded).toBe(1);
-      expect(result.preview.relativePath).toBe('diff.ts');
-      expect(result.preview.fileUri).toBe(makeUri('/root/diff.ts'));
+      expect(result.preview.truncated).toBe(false);
+      expect(result.preview.originalTruncated).toBe(false);
+      expect(result.preview.proposedTruncated).toBe(false);
+      expect(result.preview.originalContent).toBe('line one\nline two\nline three\n');
+      expect(result.preview.proposedContent).toBe('line one\nline two edited\nline three\n');
+      // Complete hashes retained
+      expect(result.originalContentHash).toBe(sha256('line one\nline two\nline three\n'));
+      const proposed = applyOperations('line one\nline two\nline three\n', [
+        { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'line two edited\n' },
+      ]);
+      expect(result.proposedContentHash).toBe(proposed.contentHash);
+      expect(result.proposedSize).toBe(proposed.size);
     });
 
-    it('does not perform any filesystem write during proposal creation', async () => {
-      vfs.addFile('/root/readonly.ts', 'data\n');
+    it('truncates original content exceeding preview limit', async () => {
+      const longContent = 'x'.repeat(200) + '\n';
+      vfs.addFile('/root/long.ts', longContent);
       const tool = createProposeEditToolDefinition(
-        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}))
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 100,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 4000,
+        })
       );
 
-      await tool.execute(
+      const result = await tool.execute(
         {
-          uri: makeUri('/root/readonly.ts'),
-          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'x\n' }],
+          uri: makeUri('/root/long.ts'),
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'y\n' }],
         },
         createContext()
       );
 
-      expect(vfs.writeCalls).toEqual([]);
-      // Only read operations should have happened.
-      expect(vfs.readCalls.length).toBeGreaterThan(0);
+      expect(result.preview.originalTruncated).toBe(true);
+      expect(result.preview.truncated).toBe(true);
+      expect(Buffer.byteLength(result.preview.originalContent, 'utf8')).toBeLessThanOrEqual(100);
+      // Complete hash retained despite truncation
+      expect(result.originalContentHash).toBe(sha256(longContent));
+    });
+
+    it('truncates proposed content exceeding preview limit', async () => {
+      vfs.addFile('/root/orig.ts', 'a\nb\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 20,
+          maxDiffLines: 4000,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/orig.ts'),
+          operations: [{ kind: 'replace-full', newContent: 'z'.repeat(100) + '\n' }],
+        },
+        createContext()
+      );
+
+      expect(result.preview.proposedTruncated).toBe(true);
+      expect(result.preview.truncated).toBe(true);
+      expect(Buffer.byteLength(result.preview.proposedContent, 'utf8')).toBeLessThanOrEqual(20);
+      // Complete proposed hash and size retained internally
+      expect(result.proposedContentHash).toBe(sha256('z'.repeat(100) + '\n'));
+      expect(result.proposedSize).toBe(Buffer.byteLength('z'.repeat(100) + '\n', 'utf8'));
+    });
+
+    it('truncates diff exceeding preview limit', async () => {
+      const manyLines = Array.from({ length: 5000 }, (_, i) => `line ${i}\n`).join('');
+      vfs.addFile('/root/many.ts', manyLines);
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 1000000,
+          maxProposedPreviewSize: 1000000,
+          maxDiffLines: 10,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/many.ts'),
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'top\n' }],
+        },
+        createContext()
+      );
+
+      expect(result.preview.truncated).toBe(true);
+      expect(result.originalContentHash).toBe(sha256(manyLines));
+    });
+
+    it('retains complete hashes despite preview truncation', async () => {
+      const longContent = 'a'.repeat(1000) + '\n';
+      vfs.addFile('/root/hash.ts', longContent);
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}), {
+          maxPreviewContentSize: 10,
+          maxProposedPreviewSize: 10,
+          maxDiffLines: 4000,
+        })
+      );
+
+      const result = await tool.execute(
+        {
+          uri: makeUri('/root/hash.ts'),
+          operations: [{ kind: 'replace-full', newContent: 'b'.repeat(2000) + '\n' }],
+        },
+        createContext()
+      );
+
+      // Preview truncated
+      expect(result.preview.truncated).toBe(true);
+      expect(Buffer.byteLength(result.preview.originalContent, 'utf8')).toBeLessThanOrEqual(10);
+      expect(Buffer.byteLength(result.preview.proposedContent, 'utf8')).toBeLessThanOrEqual(10);
+      // Complete hashes intact
+      expect(result.originalContentHash).toBe(sha256(longContent));
+      expect(result.proposedContentHash).toBe(sha256('b'.repeat(2000) + '\n'));
+      expect(result.proposedSize).toBe(Buffer.byteLength('b'.repeat(2000) + '\n', 'utf8'));
+    });
+
+    it('passes complete content hash and size to the trusted boundary', async () => {
+      const content = 'line one\nline two\nline three\n';
+      vfs.addFile('/root/boundary.ts', content);
+      let receivedRequest: ProposalCreationRequest | undefined;
+      const boundary: ProposalCreationBoundary = {
+        createProposal: async request => {
+          receivedRequest = request;
+          return {
+            proposalId: VALID_PROPOSAL_ID,
+            proposalVersion: 1,
+            status: 'awaiting-approval',
+            createdAt: 1700000000000,
+            expiresAt: 1700000120000,
+          };
+        },
+      };
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, boundary, {
+          maxPreviewContentSize: 100,
+          maxProposedPreviewSize: 100,
+          maxDiffLines: 4000,
+        })
+      );
+
+      const operations = [
+        { kind: 'replace-lines', startLine: 2, endLine: 2, newContent: 'edited\n' },
+      ];
+      await tool.execute({ uri: makeUri('/root/boundary.ts'), operations }, createContext());
+
+      expect(receivedRequest).toBeDefined();
+      expect(receivedRequest!.originalContentHash).toBe(sha256(content));
+      expect(receivedRequest!.originalSize).toBe(Buffer.byteLength(content, 'utf8'));
+      const proposed = applyOperations(content, operations);
+      expect(receivedRequest!.proposedContentHash).toBe(proposed.contentHash);
+      expect(receivedRequest!.proposedSize).toBe(proposed.size);
+    });
+  });
+
+  describe('output schema enforces preview bounds', () => {
+    it('rejects oversized preview original content', async () => {
+      const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder));
+      const oversizedContent = 'x'.repeat(defaultProposeEditConfig.maxPreviewContentSize + 1);
+      const preview = {
+        kind: 'edit-preview' as const,
+        proposalId: VALID_PROPOSAL_ID,
+        fileUri: makeUri('/root/x.ts'),
+        relativePath: 'x.ts',
+        originalContent: oversizedContent,
+        proposedContent: 'y\n',
+        diffSummary: { linesAdded: 0, linesRemoved: 0, linesModified: 0 },
+        truncated: true,
+        originalTruncated: true,
+        proposedTruncated: false,
+      };
+      const parsed = tool.outputSchema!.safeParse({
+        kind: 'propose-edit-result',
+        proposalId: VALID_PROPOSAL_ID,
+        proposalVersion: 1,
+        status: 'awaiting-approval',
+        relativePath: 'x.ts',
+        fileUri: makeUri('/root/x.ts'),
+        workspaceId: TEST_WORKSPACE_ID,
+        originalContentHash: '0'.repeat(64),
+        originalSize: oversizedContent.length,
+        originalMtime: 1,
+        proposedContentHash: '0'.repeat(64),
+        proposedSize: 2,
+        preview,
+        approvalRequired: true,
+        createdAt: 1700000000000,
+        expiresAt: 1700000120000,
+      });
+      expect(parsed.success).toBe(false);
+    });
+
+    it('rejects oversized preview proposed content', async () => {
+      const tool = createProposeEditToolDefinition(buildDeps(vfs, workspaceFolder));
+      const oversizedContent = 'x'.repeat(defaultProposeEditConfig.maxProposedPreviewSize + 1);
+      const preview = {
+        kind: 'edit-preview' as const,
+        proposalId: VALID_PROPOSAL_ID,
+        fileUri: makeUri('/root/x.ts'),
+        relativePath: 'x.ts',
+        originalContent: 'a\n',
+        proposedContent: oversizedContent,
+        diffSummary: { linesAdded: 0, linesRemoved: 0, linesModified: 0 },
+        truncated: true,
+        originalTruncated: false,
+        proposedTruncated: true,
+      };
+      const parsed = tool.outputSchema!.safeParse({
+        kind: 'propose-edit-result',
+        proposalId: VALID_PROPOSAL_ID,
+        proposalVersion: 1,
+        status: 'awaiting-approval',
+        relativePath: 'x.ts',
+        fileUri: makeUri('/root/x.ts'),
+        workspaceId: TEST_WORKSPACE_ID,
+        originalContentHash: '0'.repeat(64),
+        originalSize: 2,
+        originalMtime: 1,
+        proposedContentHash: '0'.repeat(64),
+        proposedSize: oversizedContent.length,
+        preview,
+        approvalRequired: true,
+        createdAt: 1700000000000,
+        expiresAt: 1700000120000,
+      });
+      expect(parsed.success).toBe(false);
     });
   });
 
@@ -585,6 +838,25 @@ describe('propose_edit tool definition', () => {
           createContext('ws_other')
         )
       ).rejects.toMatchObject({ code: ToolErrorCode.TOOL_RESOURCE_LIMIT });
+    });
+
+    it('does not perform any filesystem write during proposal creation', async () => {
+      vfs.addFile('/root/readonly.ts', 'data\n');
+      const tool = createProposeEditToolDefinition(
+        buildDeps(vfs, workspaceFolder, makeProposalBoundary({}))
+      );
+
+      await tool.execute(
+        {
+          uri: makeUri('/root/readonly.ts'),
+          operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'x\n' }],
+        },
+        createContext()
+      );
+
+      expect(vfs.writeCalls).toEqual([]);
+      // Only read operations should have happened.
+      expect(vfs.readCalls.length).toBeGreaterThan(0);
     });
 
     it('output validates against the output schema', async () => {
