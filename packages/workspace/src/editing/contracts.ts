@@ -17,11 +17,7 @@ export type ProposalStatus =
   | 'failed'
   | 'cancelled';
 
-export type EditOperationKind =
-  | 'replace-lines'
-  | 'insert-lines'
-  | 'delete-lines'
-  | 'replace-full';
+export type EditOperationKind = 'replace-lines' | 'insert-lines' | 'delete-lines' | 'replace-full';
 
 export interface EditOperationReplaceLines {
   readonly kind: 'replace-lines';

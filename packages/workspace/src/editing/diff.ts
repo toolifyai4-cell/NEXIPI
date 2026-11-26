@@ -12,7 +12,7 @@
  * inputs are truncated before diffing and `truncated` is reported.
  */
 
-import { DiffHunk, DiffSummary } from './contracts.js';
+import type { DiffHunk, DiffSummary } from './contracts.js';
 import { splitLinesPreserveEndings } from './operations.js';
 
 export interface DiffEntry {
@@ -86,10 +86,10 @@ function lcsDiff(a: readonly string[], b: readonly string[]): DiffEntry[] {
   const m = b.length;
 
   if (n === 0) {
-    return b.map((value) => ({ kind: 'insert' as const, value }));
+    return b.map(value => ({ kind: 'insert' as const, value }));
   }
   if (m === 0) {
-    return a.map((value) => ({ kind: 'delete' as const, value }));
+    return a.map(value => ({ kind: 'delete' as const, value }));
   }
 
   const dp: number[][] = Array.from({ length: n + 1 }, () => new Array<number>(m + 1).fill(0));

@@ -56,30 +56,43 @@ export type EditOperation = z.infer<typeof EditOperationSchema>;
 export const MAX_EDIT_OPERATIONS = 50;
 export const MAX_EDIT_CONTENT_SIZE = 10 * 1024 * 1024; // 10 MB
 
-export const EditProposalSchema = z.object({
-  kind: z.literal('edit-proposal'),
-  proposalId: z.string().uuid('proposalId must be a valid UUID'),
-  proposalVersion: z.number().int().positive().max(999),
-  workspaceId: z.string().min(1, 'workspaceId is required'),
-  workspaceFolderUri: z.string().min(1, 'workspaceFolderUri is required'),
-  fileUri: z.string().min(1, 'fileUri is required'),
-  relativePath: z.string().min(1, 'relativePath is required'),
-  originalContentHash: z.string().regex(
-    /^[a-f0-9]{64}$/,
-    'originalContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
-  ),
-  originalSize: z.number().int().nonnegative(),
-  originalMtime: z.number().int().nonnegative(),
-  operations: z.array(EditOperationSchema).min(1).max(MAX_EDIT_OPERATIONS),
-  proposedContentHash: z.string().regex(
-    /^[a-f0-9]{64}$/,
-    'proposedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
-  ),
-  proposedSize: z.number().int().nonnegative(),
-  createdAt: z.number().int().positive(),
-  expiresAt: z.number().int().positive(),
-  status: ProposalStatusSchema,
-});
+export const EditProposalSchema = z
+  .object({
+    kind: z.literal('edit-proposal'),
+    proposalId: z.string().uuid('proposalId must be a valid UUID'),
+    proposalVersion: z.number().int().positive().max(999),
+    workspaceId: z.string().min(1, 'workspaceId is required'),
+    workspaceFolderUri: z.string().min(1, 'workspaceFolderUri is required'),
+    fileUri: z.string().min(1, 'fileUri is required'),
+    relativePath: z.string().min(1, 'relativePath is required'),
+    originalContentHash: z
+      .string()
+      .regex(
+        /^[a-f0-9]{64}$/,
+        'originalContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
+      ),
+    originalSize: z.number().int().nonnegative(),
+    originalMtime: z.number().int().nonnegative(),
+    operations: z.array(EditOperationSchema).min(1).max(MAX_EDIT_OPERATIONS),
+    proposedContentHash: z
+      .string()
+      .regex(
+        /^[a-f0-9]{64}$/,
+        'proposedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
+      ),
+    proposedSize: z.number().int().nonnegative(),
+    createdAt: z.number().int().positive(),
+    expiresAt: z.number().int().positive(),
+    status: ProposalStatusSchema,
+  })
+  .refine(data => {
+    const hasReplaceFull = data.operations.some(op => op.kind === 'replace-full');
+    if (hasReplaceFull && data.operations.length > 1) {
+      return false;
+    }
+    return true;
+  }, 'replace-full cannot be combined with other operations')
+  .refine(data => data.expiresAt > data.createdAt, 'expiresAt must be after createdAt');
 
 export type EditProposal = z.infer<typeof EditProposalSchema>;
 
@@ -121,10 +134,12 @@ export const EditApprovalSchema = z.object({
   kind: z.literal('edit-approval'),
   proposalId: z.string().uuid('proposalId must be a valid UUID'),
   proposalVersion: z.number().int().positive().max(999),
-  approvedContentHash: z.string().regex(
-    /^[a-f0-9]{64}$/,
-    'approvedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
-  ),
+  approvedContentHash: z
+    .string()
+    .regex(
+      /^[a-f0-9]{64}$/,
+      'approvedContentHash must be a lowercase SHA-256 hex string (64 hex chars)'
+    ),
   approvedAt: z.number().int().positive(),
   approvedBy: z.literal('user'),
   workspaceId: z.string().min(1, 'workspaceId is required'),
@@ -140,7 +155,10 @@ export const ApplyResultSchema = z.object({
   relativePath: z.string().min(1, 'relativePath is required'),
   outcome: z.enum(['applied', 'failed', 'cancelled']),
   appliedAt: z.number().int().positive().nullable(),
-  finalContentHash: z.string().regex(/^[a-f0-9]{64}$/).nullable(),
+  finalContentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/)
+    .nullable(),
   finalSize: z.number().int().nonnegative().nullable(),
   error: z
     .object({

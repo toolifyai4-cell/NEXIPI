@@ -2,9 +2,7 @@
  * Phase 10 Stage B — Editing domain public exports.
  */
 
-export {
-  EditDomainError,
-} from './errors.js';
+export { EditDomainError } from './errors.js';
 
 export {
   ProposalStatus,
@@ -44,11 +42,7 @@ export {
   safeValidateApplyResult,
 } from './schemas.js';
 
-export {
-  sha256,
-  sha256Bytes,
-  isValidSha256Hash,
-} from './hash.js';
+export { sha256, sha256Bytes, isValidSha256Hash } from './hash.js';
 
 export {
   applyOperations,

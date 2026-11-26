@@ -30,9 +30,7 @@ function makeValidProposal(overrides: Partial<EditProposal> = {}): EditProposal 
     originalContentHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
     originalSize: 0,
     originalMtime: 0,
-    operations: [
-      { kind: 'insert-lines', atLine: 1, newContent: 'line one\n' },
-    ],
+    operations: [{ kind: 'insert-lines', atLine: 1, newContent: 'line one\n' }],
     proposedContentHash: '3a5d7c1b9e2f4a6c8d0e1f2a3b4c5d6e7f8a9b0c1d2e3f4a5b6c7d8e9f0a1b2c',
     proposedSize: 10,
     createdAt: 1700000000000,

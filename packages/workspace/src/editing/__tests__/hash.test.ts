@@ -5,16 +5,12 @@ describe('Editing hash utilities', () => {
   describe('sha256', () => {
     it('hashes empty content', () => {
       const result = sha256('');
-      expect(result).toBe(
-        'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855'
-      );
+      expect(result).toBe('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855');
     });
 
     it('hashes simple ASCII', () => {
       const result = sha256('hello');
-      expect(result).toBe(
-        '2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824'
-      );
+      expect(result).toBe('2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824');
     });
 
     it('preserves CRLF endings', () => {
@@ -65,20 +61,28 @@ describe('Editing hash utilities', () => {
 
   describe('isValidSha256Hash', () => {
     it('accepts valid lowercase hash', () => {
-      expect(isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')).toBe(true);
+      expect(
+        isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855')
+      ).toBe(true);
     });
 
     it('rejects uppercase', () => {
-      expect(isValidSha256Hash('E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855')).toBe(false);
+      expect(
+        isValidSha256Hash('E3B0C44298FC1C149AFBF4C8996FB92427AE41E4649B934CA495991B7852B855')
+      ).toBe(false);
     });
 
     it('rejects wrong length', () => {
       expect(isValidSha256Hash('e3b0c442')).toBe(false);
-      expect(isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855x')).toBe(false);
+      expect(
+        isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855x')
+      ).toBe(false);
     });
 
     it('rejects non-hex characters', () => {
-      expect(isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85g')).toBe(false);
+      expect(
+        isValidSha256Hash('e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b85g')
+      ).toBe(false);
     });
 
     it('rejects empty string', () => {

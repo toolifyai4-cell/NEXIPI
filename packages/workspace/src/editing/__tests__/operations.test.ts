@@ -48,31 +48,41 @@ describe('Editing operations', () => {
     });
 
     it('rejects startLine > endLine', () => {
-      expect(() => applyOperations('a\n', [
-        { kind: 'replace-lines', startLine: 2, endLine: 1, newContent: 'x\n' },
-      ])).toThrow(EditDomainError);
+      expect(() =>
+        applyOperations('a\n', [
+          { kind: 'replace-lines', startLine: 2, endLine: 1, newContent: 'x\n' },
+        ])
+      ).toThrow(EditDomainError);
     });
 
     it('rejects endLine beyond file length', () => {
-      expect(() => applyOperations('a\n', [
-        { kind: 'replace-lines', startLine: 1, endLine: 2, newContent: 'x\n' },
-      ])).toThrow(EditDomainError);
+      expect(() =>
+        applyOperations('a\n', [
+          { kind: 'replace-lines', startLine: 1, endLine: 2, newContent: 'x\n' },
+        ])
+      ).toThrow(EditDomainError);
     });
   });
 
   describe('applyOperations - insert-lines', () => {
     it('inserts at line 1 (top)', () => {
-      const result = applyOperations('a\n', [{ kind: 'insert-lines', atLine: 1, newContent: 'X\n' }]);
+      const result = applyOperations('a\n', [
+        { kind: 'insert-lines', atLine: 1, newContent: 'X\n' },
+      ]);
       expect(result.content).toBe('X\na\n');
     });
 
     it('inserts at end (atLine = lineCount + 1)', () => {
-      const result = applyOperations('a\n', [{ kind: 'insert-lines', atLine: 2, newContent: 'X\n' }]);
+      const result = applyOperations('a\n', [
+        { kind: 'insert-lines', atLine: 2, newContent: 'X\n' },
+      ]);
       expect(result.content).toBe('a\nX\n');
     });
 
     it('inserts in middle', () => {
-      const result = applyOperations('a\nb\n', [{ kind: 'insert-lines', atLine: 2, newContent: 'X\n' }]);
+      const result = applyOperations('a\nb\n', [
+        { kind: 'insert-lines', atLine: 2, newContent: 'X\n' },
+      ]);
       expect(result.content).toBe('a\nX\nb\n');
     });
   });
@@ -104,17 +114,21 @@ describe('Editing operations', () => {
     });
 
     it('rejects overlapping operations', () => {
-      expect(() => applyOperations('a\nb\nc\n', [
-        { kind: 'replace-lines', startLine: 1, endLine: 2, newContent: 'A\n' },
-        { kind: 'delete-lines', startLine: 2, endLine: 2 },
-      ])).toThrow(EditDomainError);
+      expect(() =>
+        applyOperations('a\nb\nc\n', [
+          { kind: 'replace-lines', startLine: 1, endLine: 2, newContent: 'A\n' },
+          { kind: 'delete-lines', startLine: 2, endLine: 2 },
+        ])
+      ).toThrow(EditDomainError);
     });
 
     it('rejects replace-full combined with other ops', () => {
-      expect(() => applyOperations('a\n', [
-        { kind: 'replace-full', newContent: 'x\n' },
-        { kind: 'insert-lines', atLine: 1, newContent: 'y\n' },
-      ])).toThrow(EditDomainError);
+      expect(() =>
+        applyOperations('a\n', [
+          { kind: 'replace-full', newContent: 'x\n' },
+          { kind: 'insert-lines', atLine: 1, newContent: 'y\n' },
+        ])
+      ).toThrow(EditDomainError);
     });
 
     it('rejects empty operations array', () => {
@@ -134,9 +148,9 @@ describe('Editing operations', () => {
   describe('applyOperations - content limits', () => {
     it('rejects content exceeding size limit', () => {
       const bigContent = 'x'.repeat(1024 * 1024 * 11);
-      expect(() => applyOperations(bigContent, [
-        { kind: 'replace-full', newContent: bigContent },
-      ])).toThrow(EditDomainError);
+      expect(() =>
+        applyOperations(bigContent, [{ kind: 'replace-full', newContent: bigContent }])
+      ).toThrow(EditDomainError);
     });
   });
 

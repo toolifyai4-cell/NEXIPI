@@ -5,14 +5,8 @@
  * No filesystem access, no VS Code imports, no I/O of any kind.
  */
 
-import {
-  EditOperation,
-  EditOperationKind,
-} from './contracts.js';
-import {
-  MAX_EDIT_OPERATIONS,
-  MAX_EDIT_CONTENT_SIZE,
-} from './schemas.js';
+import type { EditOperation, EditOperationKind } from './contracts.js';
+import { MAX_EDIT_OPERATIONS, MAX_EDIT_CONTENT_SIZE } from './schemas.js';
 import { EditDomainError } from './errors.js';
 import { sha256 } from './hash.js';
 
@@ -70,10 +64,7 @@ function joinLines(lines: readonly string[]): string {
   return result;
 }
 
-function validateOperations(
-  operations: readonly EditOperation[],
-  lineCount: number
-): void {
+function validateOperations(operations: readonly EditOperation[], lineCount: number): void {
   if (operations.length === 0) {
     throw new EditDomainError('EDIT_EMPTY_OPERATIONS', 'Edit operations array must not be empty');
   }
@@ -85,7 +76,7 @@ function validateOperations(
   }
 
   // replace-full must be standalone
-  const replaceFull = operations.find((op) => op.kind === 'replace-full');
+  const replaceFull = operations.find(op => op.kind === 'replace-full');
   if (replaceFull !== undefined && operations.length > 1) {
     throw new EditDomainError(
       'EDIT_CONFLICTING_OPERATIONS',
@@ -200,7 +191,7 @@ export function applyOperations(
 
   validateOperations(operations, lineCount);
 
-  const replaceFull = operations.find((op) => op.kind === 'replace-full');
+  const replaceFull = operations.find(op => op.kind === 'replace-full');
   if (replaceFull !== undefined) {
     const resultContent = (replaceFull as { newContent: string }).newContent;
     if (resultContent.length > EDIT_CONTENT_SIZE_LIMIT) {
