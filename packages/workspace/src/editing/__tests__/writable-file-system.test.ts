@@ -116,7 +116,7 @@ describe('generateTempFileName', () => {
     const temp1 = generateTempFileName('file:///workspace/src/file.ts');
     const temp2 = generateTempFileName('file:///workspace/src/file.ts');
     expect(temp1).not.toBe(temp2);
-    expect(/^.nexipi-tmp-[0-9a-f-]{36}-file\.ts$/).to.test(temp1);
+    expect(temp1).toMatch(/\.nexipi-tmp-[0-9a-f-]{36}-file\.ts$/);
   });
 
   it('preserves the target basename in the temp name', () => {
