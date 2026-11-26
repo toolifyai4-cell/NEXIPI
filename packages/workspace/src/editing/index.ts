@@ -60,6 +60,69 @@ export {
 } from './operations.js';
 
 export {
+  ApprovalId,
+  ProposalVersion,
+  ApprovalLifecycleState,
+  ApprovalDecision,
+  ApprovalProvenance,
+  Approval,
+  ApprovalDecisionRequest,
+  ApprovalVerificationInput,
+  ApprovalVerificationResult,
+  AuthorizationToApply,
+  ApprovalCreationRequest,
+  ApprovalCreationResult,
+  ApprovalCreationBoundary,
+  isTrustedProvenance,
+  isTerminalState,
+  isApplicationAuthorizedState,
+  isPendingState,
+  CreatePendingApprovalInput,
+  createPendingApproval,
+} from './approval-contracts.js';
+
+export {
+  ApprovalDomainError,
+  ApprovalErrorCode,
+  createApprovalError,
+} from './approval-errors.js';
+
+export {
+  ApprovalIdSchema,
+  ProposalIdSchema,
+  ProposalVersionSchema,
+  ApprovalLifecycleStateSchema,
+  ApprovalDecisionSchema,
+  ContentHashSchema,
+  TimestampSchema,
+  ApprovalProvenanceSchema,
+  ApprovalSchema,
+  ApprovalDecisionRequestSchema,
+  ApprovalVerificationInputSchema,
+  AuthorizationToApplySchema,
+  CreatePendingApprovalInputSchema,
+  validateApproval,
+  safeValidateApproval,
+  validateApprovalDecisionRequest,
+  safeValidateApprovalDecisionRequest,
+  validateApprovalVerificationInput,
+  safeValidateApprovalVerificationInput,
+  validateAuthorizationToApply,
+  safeValidateAuthorizationToApply,
+  validateCreatePendingApprovalInput,
+  safeValidateCreatePendingApprovalInput,
+} from './approval-schemas.js';
+
+export {
+  applyTransition,
+  decideApproval,
+  revokeApproval,
+  markExpired,
+  verifyApprovalForApplication,
+  createAuthorizationToApply,
+} from './approval-lifecycle.js';
+
+export {
   computeDiff,
   type DiffEntry,
   type ComputeDiffOptions,
