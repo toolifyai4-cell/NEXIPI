@@ -117,4 +117,8 @@ export {
   type SearchCodeAdapterDependencies,
   createFindReferencesToolDefinition,
   type FindReferencesAdapterDependencies,
+  createProposeEditToolDefinition,
+  type ProposeEditAdapterDependencies,
+  createApplyEditToolDefinition,
+  type ApplyEditAdapterDependencies,
 } from './adapters/index.js';
