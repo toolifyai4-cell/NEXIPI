@@ -119,6 +119,25 @@ export {
 } from './approval-lifecycle.js';
 
 export {
+  TrustedApprovalService,
+  createTrustedApprovalService,
+  defaultNow,
+  defaultCreateApprovalId,
+  TrustedDecisionProvider,
+  TrustedUserDecisionRequest,
+  TrustedUserDecision,
+  FailingTrustedDecisionProvider,
+  ProposalView,
+  ProposalRepositoryPort,
+  ApprovalRecordView,
+  CreateApprovalView,
+  ApprovalRepositoryResult,
+  ApprovalRepositoryListResult,
+  ApprovalRepositoryPort,
+  isTrustedBoundaryError,
+} from './trusted-approval-service.js';
+
+export {
   computeDiff,
   type DiffEntry,
   type ComputeDiffOptions,
