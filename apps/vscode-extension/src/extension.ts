@@ -874,7 +874,7 @@ export function createRoutedProposeEditTool(): ToolDefinition {
       version: '1.0.0',
     },
     execute: async (input: unknown, context: ToolExecutionContext): Promise<ProposeEditOutputLike> => {
-      const { uri, operations } = input as ProposeEditInputLike;
+      const { uri } = input as ProposeEditInputLike;
 
       if (context.signal?.aborted) {
         throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Operation cancelled', {
@@ -1695,7 +1695,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // proposals and decisions can be posted to the UI.
   gApprovalController = new ApprovalController({
     trustedApprovalService: gTrustedApprovalService,
-    trustedDecisionProvider: new VSCodeTrustedDecisionProvider(),
     proposals: gProposalRepositoryPort,
     approvals: gApprovalRepositoryPort,
     postMessage: sidebarProvider.postMessage.bind(sidebarProvider),

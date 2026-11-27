@@ -481,4 +481,134 @@ describe('useChat hook', () => {
     });
     expect(result.current.modelConfigured).toBe(false);
   });
+
+  const simulateProposalCreated = (overrides: Record<string, unknown> = {}) => {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          type: 'proposalCreated',
+          payload: {
+            proposalId: 'prop-1',
+            proposalVersion: 1,
+            fileUri: 'file:///ws-1/file.txt',
+            relativePath: 'file.txt',
+            workspaceId: 'ws-1',
+            workspaceName: 'workspace-1',
+            proposedContentHash: 'aaa'.repeat(21 + 1),
+            proposedSize: 10,
+            createdAt: 1000,
+            expiresAt: 2000,
+            preview: {},
+            ...overrides,
+          },
+        },
+      })
+    );
+  };
+
+  const simulateApprovalDecision = (overrides: Record<string, unknown> = {}) => {
+    window.dispatchEvent(
+      new MessageEvent('message', {
+        data: {
+          type: 'approvalDecision',
+          payload: {
+            proposalId: 'prop-1',
+            proposalVersion: 1,
+            decision: 'approve',
+            status: 'approved',
+            ...overrides,
+          },
+        },
+      })
+    );
+  };
+
+  const mockVscodeApi = (postMessage: ReturnType<typeof vi.fn>) => {
+    vi.stubGlobal('acquireVsCodeApi', () => ({ postMessage }) as never);
+  };
+
+  it('proposalCreated message adds a pending proposal for review', () => {
+    const { result } = renderHook(() => useChat());
+    expect(result.current.pendingProposals).toEqual([]);
+
+    act(() => {
+      simulateProposalCreated();
+    });
+
+    expect(result.current.pendingProposals).toHaveLength(1);
+    expect(result.current.pendingProposals[0].proposalId).toBe('prop-1');
+    expect(result.current.pendingProposals[0].status).toBe('pending');
+    expect(result.current.pendingProposals[0].fileUri).toBe('file:///ws-1/file.txt');
+  });
+
+  it('approvalDecision message updates the proposal status', () => {
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      simulateProposalCreated();
+    });
+    expect(result.current.pendingProposals).toHaveLength(1);
+    expect(result.current.pendingProposals[0].status).toBe('pending');
+
+    act(() => {
+      simulateApprovalDecision({ status: 'approved', decision: 'approve' });
+    });
+
+    expect(result.current.pendingProposals).toHaveLength(1);
+    expect(result.current.pendingProposals[0].status).toBe('approved');
+  });
+
+  it('approvalDecision for an unknown proposal is ignored', () => {
+    const { result } = renderHook(() => useChat());
+    act(() => {
+      simulateApprovalDecision({ status: 'approved' });
+    });
+    expect(result.current.pendingProposals).toEqual([]);
+  });
+
+  it('handleApprovalAction posts an approvalAction webview message', () => {
+    const postMessage = vi.fn();
+    mockVscodeApi(postMessage);
+    const { result } = renderHook(() => useChat());
+
+    act(() => {
+      result.current.handleApprovalAction(
+        'prop-1',
+        1,
+        'approve',
+        'ws-1',
+        'file:///ws-1/file.txt'
+      );
+    });
+
+    expect(postMessage).toHaveBeenCalledWith({
+      type: 'approvalAction',
+      payload: {
+        proposalId: 'prop-1',
+        proposalVersion: 1,
+        decision: 'approve',
+        workspaceId: 'ws-1',
+        fileUri: 'file:///ws-1/file.txt',
+      },
+    });
+  });
+
+  it('handleApprovalAction can reject and dismiss', () => {
+    const postMessage = vi.fn();
+    mockVscodeApi(postMessage);
+    const { result } = renderHook(() => useChat());
+
+    act(() => {
+      result.current.handleApprovalAction('prop-1', 1, 'reject', 'ws-1', 'file:///ws-1/file.txt');
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'approvalAction', payload: expect.objectContaining({ decision: 'reject' }) })
+    );
+
+    act(() => {
+      result.current.handleApprovalAction('prop-1', 1, 'dismiss', 'ws-1', 'file:///ws-1/file.txt');
+    });
+    expect(postMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'approvalAction', payload: expect.objectContaining({ decision: 'dismiss' }) })
+    );
+  });
 });

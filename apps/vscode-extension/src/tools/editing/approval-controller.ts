@@ -27,11 +27,10 @@
  */
 
 import type {
+  Approval,
   ApprovalRepositoryPort,
   ProposalRepositoryPort,
   TrustedApprovalService,
-  TrustedDecisionProvider,
-  TrustedUserDecision,
 } from '@nexipi/workspace';
 import type { Logger } from '@nexipi/core';
 
@@ -81,7 +80,6 @@ export interface ProposalCreatedPayload {
 
 export interface ApprovalControllerDependencies {
   trustedApprovalService: TrustedApprovalService;
-  trustedDecisionProvider: TrustedDecisionProvider;
   proposals: ProposalRepositoryPort;
   approvals: ApprovalRepositoryPort;
   postMessage: (message: unknown) => void;
@@ -93,7 +91,6 @@ export interface ApprovalControllerDependencies {
  */
 export class ApprovalController {
   private readonly service: TrustedApprovalService;
-  private readonly provider: TrustedDecisionProvider;
   private readonly proposals: ProposalRepositoryPort;
   private readonly approvals: ApprovalRepositoryPort;
   private readonly postMessage: (message: unknown) => void;
@@ -103,7 +100,6 @@ export class ApprovalController {
 
   constructor(deps: ApprovalControllerDependencies) {
     this.service = deps.trustedApprovalService;
-    this.provider = deps.trustedDecisionProvider;
     this.proposals = deps.proposals;
     this.approvals = deps.approvals;
     this.postMessage = deps.postMessage;
@@ -176,7 +172,7 @@ export class ApprovalController {
    */
   async handleApprovalAction(action: ApprovalActionPayload): Promise<void> {
     if (this._isDisposed) {
-      await this.postMessage({
+      void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: action.proposalId,
@@ -191,7 +187,7 @@ export class ApprovalController {
 
     const pending = this.pending.get(action.proposalId);
     if (!pending) {
-      await this.postMessage({
+      void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: action.proposalId,
@@ -206,7 +202,7 @@ export class ApprovalController {
 
     // Workspace and file identity must match the pending (persisted) proposal.
     if (pending.workspaceId !== action.workspaceId || pending.fileUri !== action.fileUri) {
-      await this.postMessage({
+      void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: action.proposalId,
@@ -224,7 +220,7 @@ export class ApprovalController {
     // provider, which confirms the user's actual choice.
     if (action.decision === 'dismiss') {
       this.pending.delete(action.proposalId);
-      await this.postMessage({
+      void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: pending.proposalId,
@@ -237,97 +233,56 @@ export class ApprovalController {
       return;
     }
 
-    // Establish the trusted user decision through the host-controlled provider.
-    // The provider confirms the decision; the webview request alone is never
-    // sufficient.
-    let confirmed: TrustedUserDecision | null;
+    // Approve/reject: establish the trusted decision through the service. The
+    // service invokes the host-controlled provider exactly once and persists the
+    // provider's confirmed decision. The webview request is only a hint; the
+    // provider's confirmed decision is what gets recorded. Fail closed on any
+    // error (provider cancelled, duplicate/terminal decision, or provider
+    // unavailable) -- no approval is established.
+    let result: { approvalId: string; approval: Approval };
     try {
-      confirmed = await this.provider.establishUserDecision({
+      result = await this.service.createApprovalDecision({
         proposalId: pending.proposalId,
         proposalVersion: pending.proposalVersion,
         decision: action.decision,
-        workspaceId: pending.workspaceId,
-        fileUri: pending.fileUri,
-        expiresAt: pending.expiresAt,
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.error('Trusted decision provider failed', {
-        proposalId: pending.proposalId,
-        error: err.message,
-      });
-      await this.postMessage({
-        type: 'approvalDecision',
-        payload: {
-          proposalId: pending.proposalId,
-          proposalVersion: pending.proposalVersion,
-          decision: null,
-          status: 'failed',
-          reason: 'Approval provider unavailable',
-        },
-      });
-      return;
-    }
-
-    if (confirmed === null) {
-      // User cancelled / dismissed / timed out. No decision is established.
-      // Fail closed: do not approve.
-      this.pending.delete(action.proposalId);
-      await this.postMessage({
-        type: 'approvalDecision',
-        payload: {
-          proposalId: pending.proposalId,
-          proposalVersion: pending.proposalVersion,
-          decision: null,
-          status: 'dismissed',
-          reason: 'No trusted decision established',
-        },
-      });
-      return;
-    }
-
-    // Record the decision through the trusted approval service. Trust-relevant
-    // fields come from the confirmed provider decision, not the caller.
-    try {
-      await this.service.createApprovalDecision({
-        proposalId: pending.proposalId,
-        proposalVersion: pending.proposalVersion,
-        decision: confirmed.decision,
         approvedContentHash: pending.proposedContentHash,
-        provenance: { kind: 'trusted-boundary', boundary: confirmed.boundary },
-        decidedAt: confirmed.decidedAt,
-        expiresAt: confirmed.expiresAt,
+        provenance: { kind: 'trusted-boundary', boundary: 'vscode-host:confirm-dialog' },
+        decidedAt: Date.now(),
+        expiresAt: pending.expiresAt,
         workspaceId: pending.workspaceId,
         fileUri: pending.fileUri,
       });
-
-      this.pending.delete(action.proposalId);
-      await this.postMessage({
-        type: 'approvalDecision',
-        payload: {
-          proposalId: pending.proposalId,
-          proposalVersion: pending.proposalVersion,
-          decision: confirmed.decision,
-          status: confirmed.decision === 'approve' ? 'approved' : 'rejected',
-        },
-      });
     } catch (error) {
       const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.error('Failed to record approval decision', {
+      this.logger.error('Failed to establish trusted approval decision', {
         proposalId: pending.proposalId,
         code: (error as { code?: string })?.code,
         error: err.message,
       });
-      await this.postMessage({
+      this.pending.delete(action.proposalId);
+      void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: pending.proposalId,
           proposalVersion: pending.proposalVersion,
           decision: null,
           status: 'failed',
-          reason: 'Failed to record approval decision',
+          reason: 'No trusted approval decision established',
         },
       });
+      return;
     }
+
+    const decision = result.approval.decision;
+    this.pending.delete(action.proposalId);
+    void this.postMessage({
+      type: 'approvalDecision',
+      payload: {
+        proposalId: pending.proposalId,
+        proposalVersion: pending.proposalVersion,
+        decision,
+        status: decision === 'approve' ? 'approved' : 'rejected',
+      },
+    });
   }
 }

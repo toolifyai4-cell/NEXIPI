@@ -28,7 +28,7 @@ import type {
   ProposalCreationRequest,
   ProposalCreationResult,
 } from '@nexipi/workspace/tools';
-import { SqlJsProposalRepository } from '@nexipi/persistence';
+import type { SqlJsProposalRepository } from '@nexipi/persistence';
 import { applyOperations, sha256 } from '@nexipi/workspace';
 import { randomUUID } from 'node:crypto';
 
