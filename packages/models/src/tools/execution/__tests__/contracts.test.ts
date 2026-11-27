@@ -15,7 +15,7 @@ import {
   type TerminalExecutionResult,
   type ApprovalBinding,
   DEFAULT_TERMINAL_EXECUTION_LIMITS,
-} from '../execution/contracts.js';
+} from '../contracts.js';
 
 const VALID_STATE: TerminalLifecycleState = 'running';
 
@@ -179,3 +179,4 @@ describe('Default terminal execution limits', () => {
     expect(DEFAULT_TERMINAL_EXECUTION_LIMITS.maxExecutionMs).toBe(30_000);
   });
 });
+

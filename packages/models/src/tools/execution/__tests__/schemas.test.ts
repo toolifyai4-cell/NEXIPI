@@ -2,6 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { z } from 'zod';
 import {
   TerminalCommandSchema,
+  TerminalExecutionRequestSchema,
+  TerminalExecutionResultSchema,
+  ApprovalBindingSchema,
+  CancellationRequestSchema,
+  TerminalExecutionLimitsSchema,
   validateTerminalCommand,
   safeValidateTerminalCommand,
   validateTerminalExecutionRequest,
@@ -17,7 +22,7 @@ import {
   isTerminalStateSchema,
   isActiveStateSchema,
   DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED,
-} from '../execution/schemas.js';
+} from '../schemas.js';
 
 const BASE_COMMAND = {
   kind: 'terminal-command',
@@ -271,9 +276,9 @@ describe('TerminalExecutionLimitsSchema', () => {
   });
 
   it('rejects non-positive limits', () => {
-    expect(
-      validateTerminalExecutionLimits({ ...DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED, maxExecutionMs: 0 }).success
-    ).toBe(false);
+    expect(() =>
+      validateTerminalExecutionLimits({ ...DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED, maxExecutionMs: 0 })
+    ).toThrow();
   });
 });
 
@@ -353,3 +358,4 @@ describe('isTerminalStateSchema / isActiveStateSchema', () => {
     expect(isActiveStateSchema('completed')).toBe(false);
   });
 });
+
