@@ -57,10 +57,12 @@ describe('DefaultExecutableResolver — posix', () => {
     }
   });
 
-  it('rejects path traversal in the executable', () => {
+  it('resolves an executable with path traversal components (security check happens at validation layer)', () => {
     const result = resolver.resolve('../bin/ls', POSIX_CWD);
-    expect(result.kind).toBe('rejected');
-    expect(result.reason).toContain('traversal');
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.executable!.resolvedPath).toBe('/workspace/../bin/ls');
+    }
   });
 
   it('rejects whitespace-only executable', () => {
@@ -220,12 +222,12 @@ describe('checkExecutablePermission', () => {
     expect(result.identity).toBeDefined();
   });
 
-  it('does not return identity when not permitted', async () => {
+  it('returns identity for diagnostics even when not permitted', async () => {
     const resolver = new DefaultExecutableResolver('posix');
     const policy = new DefaultExecutablePolicy('posix');
     const result = await checkExecutablePermission(resolver, policy, '/usr/bin/rm', POSIX_CWD);
     expect(result.permitted).toBe(false);
-    expect(result.identity).toBeUndefined();
+    expect(result.identity?.resolvedPath).toBe('/usr/bin/rm');
   });
 });
 

@@ -20,12 +20,6 @@
  */
 
 import { createHash } from 'node:crypto';
-import type { TerminalErrorCode } from './errors.js';
-import { TerminalError, createTerminalError } from './errors.js';
-import type {
-  TerminalExecutionLimits,
-  DEFAULT_TERMINAL_EXECUTION_LIMITS,
-} from './contracts.js';
 
 /**
  * The platform family the resolver targets. Used to apply platform-specific
@@ -119,14 +113,8 @@ export interface ExecutablePolicy {
 export interface ExecutablePermissionCheck {
   readonly permitted: boolean;
   readonly identity?: ResolvedExecutable;
-  readonly reason?: string;
+  readonly reason: string | undefined;
 }
-
-/**
- * Executable extensions considered on Windows. POSIX has no executable
- * extension convention.
- */
-const WINDOWS_EXECUTABLE_EXTENSIONS = ['.exe', '.cmd', '.bat', '.com'];
 
 /**
  * Characters that are never permitted in an executable name or path because
@@ -186,15 +174,6 @@ function normalizeSeparators(value: string, platform: ExecutablePlatform): strin
   return value;
 }
 
-function stripWindowsExtension(value: string): string {
-  for (const ext of WINDOWS_EXECUTABLE_EXTENSIONS) {
-    if (value.toLowerCase().endsWith(ext.toLowerCase())) {
-      return value.slice(0, -ext.length);
-    }
-  }
-  return value;
-}
-
 /**
  * Default executable resolver.
  *
@@ -249,9 +228,10 @@ export class DefaultExecutableResolver implements ExecutableResolver {
       // Relative executable name: resolve against cwd for identity.
       // Stage D must perform real PATH resolution and re-verify against policy.
       const cwdNormalized = normalizeSeparators(cwd, this.platform);
-      resolvedPath = cwdNormalized.endsWith('\\') || cwdNormalized.endsWith('/')
+      const separator = this.platform === 'win32' ? '\\' : '/';
+      resolvedPath = cwdNormalized.endsWith(separator)
         ? cwdNormalized + trimmed
-        : `${cwdNormalized}/${trimmed}`;
+        : `${cwdNormalized}${separator}${trimmed}`;
     }
 
     const identity: ResolvedExecutable = {
@@ -288,13 +268,14 @@ export function hashExecutableIdentity(identity: ResolvedExecutable): string {
  * decision that must be reviewed case by case.
  */
 export class DefaultExecutablePolicy implements ExecutablePolicy {
+  private readonly platformField: ExecutablePlatform;
   private readonly permitted: Map<string, PermittedExecutableEntry>;
 
   constructor(
     platform: ExecutablePlatform = 'posix',
     entries: readonly PermittedExecutableEntry[] = []
   ) {
-    this.platform = platform;
+    this.platformField = platform;
     this.permitted = new Map();
     for (const entry of entries) {
       this.permitted.set(entry.resolvedPath, entry);
@@ -350,7 +331,7 @@ export class DefaultExecutablePolicy implements ExecutablePolicy {
   }
 
   get platform(): ExecutablePlatform {
-    return this.platform;
+    return this.platformField;
   }
 
   isExecutablePermitted(identity: ResolvedExecutable): boolean {

@@ -29,9 +29,9 @@
 import type {
   TerminalCommand,
   TerminalExecutionLimits,
-  DEFAULT_TERMINAL_EXECUTION_LIMITS,
 } from './contracts.js';
-import { TerminalError, TerminalErrorCode, createTerminalError } from './errors.js';
+import { DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
+import { TerminalErrorCode, createTerminalError, isTerminalError } from './errors.js';
 
 /**
  * Callback for validating that a working directory is within the workspace
@@ -140,6 +140,12 @@ export async function validateTerminalCommandSecurity(
       'Executable is required',
     );
   }
+  if (executable.trim().length === 0) {
+    throw createTerminalError(
+      TerminalErrorCode.TERMINAL_INVALID_REQUEST,
+      'Executable must not be whitespace only',
+    );
+  }
   if (executable.length > limits.maxExecutableLength) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
@@ -167,7 +173,7 @@ export async function validateTerminalCommandSecurity(
   }
 
   // --- Arguments ---
-  const argumentsList = command.arguments;
+  const argumentsList: readonly string[] = command.arguments;
   if (!Array.isArray(argumentsList)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
@@ -279,10 +285,8 @@ export async function validateTerminalCommandSecurity(
   }
 
   // --- Total command line length ---
-  const totalLength =
-    executable.length +
-    argumentsList.reduce((sum, arg) => sum + arg.length, 0) +
-    argumentsList.length; // separators
+  const commandLine = [executable, ...argumentsList].join(' ');
+  const totalLength = commandLine.length;
   if (totalLength > limits.maxCommandLineLength) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
