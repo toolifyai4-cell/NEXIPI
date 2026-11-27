@@ -1,591 +1,644 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { PersistenceFoundation } from '@nexipi/persistence';
-import { SqlJsProposalRepository, SqlJsApprovalRepository } from '@nexipi/persistence';
-import { TrustedApprovalService, defaultNow, ApprovalErrorCode } from '@nexipi/workspace';
-import { ApprovalController } from '../approval-controller';
+import {
+  PersistenceFoundation,
+  SqlJsProposalRepository,
+  SqlJsApprovalRepository,
+  type SQLDatabase,
+  type ProposalStatus,
+} from '@nexipi/persistence';
+import {
+  createTrustedApprovalService,
+  defaultNow,
+  TrustedApprovalService,
+  sha256,
+  type TrustedDecisionProvider,
+  type TrustedUserDecision,
+  type TrustedUserDecisionRequest,
+  type ProposalRepositoryPort,
+  type ApprovalRepositoryPort,
+} from '@nexipi/workspace';
 import {
   ProposalRepositoryAdapter,
   ApprovalRepositoryAdapter,
-} from '../persistence-repository-adapters';
+} from '../persistence-repository-adapters.js';
+import { ApprovalController } from '../approval-controller.js';
+import type { Logger } from '@nexipi/core';
 
-const ORIGINAL_HASH = '1111111111111111111111111111111111111111111111111111111111111111';
-const PROPOSED_HASH = '2222222222222222222222222222222222222222222222222222222222222222';
-const OTHER_HASH = '3333333333333333333333333333333333333333333333333333333333333333';
+const NOW = 1_700_000_000_000;
+const WORKSPACE_ID = 'ws_a';
+const FILE_URI = 'file:///rootA/file.ts';
+const PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
+const PROPOSED_CONTENT = 'const x = 1;';
+const PROPOSED_HASH = sha256(PROPOSED_CONTENT);
+const ORIGINAL_CONTENT = 'const x = 0;';
+const ORIGINAL_HASH = sha256(ORIGINAL_CONTENT);
 
-function makeProposalInput(overrides: Record<string, unknown> = {}) {
+interface Posted {
+  type: string;
+  payload: unknown;
+}
+
+function makeLogger(): Logger {
+  return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
+}
+
+function makeGate(): {
+  provider: TrustedDecisionProvider;
+  calls: TrustedUserDecisionRequest[];
+  settle: (value: TrustedUserDecision | null) => void;
+} {
+  const calls: TrustedUserDecisionRequest[] = [];
+  let resolveFn: ((value: TrustedUserDecision | null) => void) | undefined;
+  let queued: TrustedUserDecision | null | undefined;
+  const provider: TrustedDecisionProvider = {
+    establishUserDecision: async request => {
+      calls.push(request);
+      return new Promise<TrustedUserDecision | null>(resolve => {
+        resolveFn = resolve;
+        if (queued !== undefined) {
+          const value = queued;
+          queued = undefined;
+          resolve(value);
+        }
+      });
+    },
+  };
   return {
-    id: '11111111-1111-1111-1111-111111111111',
-    proposalVersion: 1,
-    workspaceId: 'ws-1',
-    workspaceFolderUri: 'file:///workspace',
-    fileUri: 'file:///workspace/file.txt',
-    relativePath: 'file.txt',
-    originalContentHash: ORIGINAL_HASH,
-    originalSize: 10,
-    originalMtime: 1000,
-    operations: [{ kind: 'replace-lines', startLine: 1, endLine: 1, newContent: 'proposed' }],
-    proposedContent: 'proposed',
-    proposedContentHash: PROPOSED_HASH,
-    proposedSize: 8,
-    status: 'awaiting-approval' as const,
-    createdAt: 1000,
-    expiresAt: 2_000_000_000_000,
-    ...overrides,
+    provider,
+    calls,
+    settle: (value: TrustedUserDecision | null) => {
+      if (resolveFn) {
+        resolveFn(value);
+      } else {
+        queued = value;
+      }
+    },
   };
 }
 
-function pendingProposal(overrides: Record<string, unknown> = {}) {
+interface Harness {
+  db: SQLDatabase;
+  proposalRepo: SqlJsProposalRepository;
+  approvalRepo: SqlJsApprovalRepository;
+  service: TrustedApprovalService;
+  controller: ApprovalController;
+  gate: ReturnType<typeof makeGate>;
+  posted: Posted[];
+  dispose: () => Promise<void>;
+}
+
+async function createHarness(
+  overrides: { now?: () => number; provider?: TrustedDecisionProvider } = {}
+): Promise<Harness> {
+  const foundation = new PersistenceFoundation();
+  await foundation.init();
+  const db = foundation.getRawDatabase() as SQLDatabase;
+  const proposalRepo = new SqlJsProposalRepository(db);
+  const approvalRepo = new SqlJsApprovalRepository(db);
+  const proposalPort = new ProposalRepositoryAdapter(proposalRepo);
+  const approvalPort = new ApprovalRepositoryAdapter(approvalRepo);
+  const gate = makeGate();
+  const provider = overrides.provider ?? gate.provider;
+  const now = overrides.now ?? (() => NOW);
+  const service = createTrustedApprovalService({
+    proposals: proposalPort,
+    approvals: approvalPort,
+    trustedDecisionProvider: provider,
+    now,
+    createApprovalId: () => 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa',
+  });
+  const posted: Posted[] = [];
+  const controller = new ApprovalController({
+    trustedApprovalService: service,
+    proposals: proposalPort,
+    approvals: approvalPort,
+    postMessage: message => posted.push({ type: 'message', payload: message }),
+    logger: makeLogger(),
+  });
   return {
-    proposalId: '11111111-1111-1111-1111-111111111111',
-    proposalVersion: 1,
-    fileUri: 'file:///workspace/file.txt',
-    relativePath: 'file.txt',
-    workspaceId: 'ws-1',
-    workspaceName: 'workspace',
-    proposedContentHash: PROPOSED_HASH,
-    proposedSize: 8,
-    createdAt: 1000,
-    expiresAt: 2_000_000_000_000,
-    preview: {},
-    ...overrides,
+    db,
+    proposalRepo,
+    approvalRepo,
+    service,
+    controller,
+    gate,
+    posted,
+    dispose: async () => {
+      controller.dispose();
+      foundation.close();
+    },
   };
 }
 
-describe('ApprovalController', () => {
-  let service: PersistenceFoundation;
-  let proposalRepository: SqlJsProposalRepository;
-  let approvalRepository: SqlJsApprovalRepository;
-  let proposalPort: ProposalRepositoryAdapter;
-  let approvalPort: ApprovalRepositoryAdapter;
-  let trustedService: TrustedApprovalService;
-  let provider: { establishUserDecision: ReturnType<typeof vi.fn> };
-  let postMessage: ReturnType<typeof vi.fn>;
-  let controller: ApprovalController;
+async function createProposalInRepo(
+  repo: SqlJsProposalRepository,
+  overrides: Partial<{
+    id: string;
+    proposalVersion: number;
+    workspaceId: string;
+    fileUri: string;
+    relativePath: string;
+    originalContentHash: string;
+    proposedContent: string;
+    proposedContentHash: string;
+    status: ProposalStatus;
+    createdAt: number;
+    expiresAt: number;
+  }> = {}
+): Promise<void> {
+  const input = {
+    id: overrides.id ?? PROPOSAL_ID,
+    proposalVersion: overrides.proposalVersion ?? 1,
+    workspaceId: overrides.workspaceId ?? WORKSPACE_ID,
+    workspaceFolderUri: 'file:///rootA',
+    fileUri: overrides.fileUri ?? FILE_URI,
+    relativePath: overrides.relativePath ?? 'file.ts',
+    originalContentHash: overrides.originalContentHash ?? ORIGINAL_HASH,
+    originalSize: Buffer.byteLength(ORIGINAL_CONTENT, 'utf8'),
+    originalMtime: overrides.createdAt ?? NOW,
+    operations: [{ kind: 'replace-lines', startLine: 1, endLine: 1, newContent: PROPOSED_CONTENT }],
+    proposedContent: overrides.proposedContent ?? PROPOSED_CONTENT,
+    proposedContentHash: overrides.proposedContentHash ?? PROPOSED_HASH,
+    proposedSize: Buffer.byteLength(PROPOSED_CONTENT, 'utf8'),
+    status: (overrides.status ?? 'awaiting-approval') as ProposalStatus,
+    createdAt: overrides.createdAt ?? NOW,
+    expiresAt: overrides.expiresAt ?? NOW + 1_000_000,
+  };
+  const result = await repo.createProposal(input);
+  if (result.error !== null) {
+    throw new Error(`createProposal failed: ${result.error.message}`);
+  }
+}
+
+function registerPending(
+  controller: ApprovalController,
+  overrides: Partial<{
+    proposalId: string;
+    proposalVersion: number;
+    workspaceId: string;
+    fileUri: string;
+    proposedContentHash: string;
+    expiresAt: number;
+  }> = {}
+): void {
+  controller.onProposalCreated({
+    proposalId: overrides.proposalId ?? PROPOSAL_ID,
+    proposalVersion: overrides.proposalVersion ?? 1,
+    fileUri: overrides.fileUri ?? FILE_URI,
+    relativePath: 'file.ts',
+    workspaceId: overrides.workspaceId ?? WORKSPACE_ID,
+    workspaceName: 'rootA',
+    proposedContentHash: overrides.proposedContentHash ?? PROPOSED_HASH,
+    proposedSize: Buffer.byteLength(PROPOSED_CONTENT, 'utf8'),
+    createdAt: NOW,
+    expiresAt: overrides.expiresAt ?? NOW + 1_000_000,
+    preview: {
+      kind: 'edit-preview',
+      proposalId: '',
+      fileUri: FILE_URI,
+      relativePath: 'file.ts',
+      originalContent: '',
+      proposedContent: '',
+      diffSummary: { linesAdded: 0, linesRemoved: 0, linesModified: 0 },
+      truncated: false,
+      originalTruncated: false,
+      proposedTruncated: false,
+    },
+  });
+}
+
+function approvalDecisionMessages(
+  h: Harness
+): Array<{ decision: 'approve' | 'reject' | null; status: string; reason?: string }> {
+  return h.posted
+    .filter(
+      m =>
+        m.type === 'message' &&
+        typeof m.payload === 'object' &&
+        m.payload !== null &&
+        (m.payload as { type?: string }).type === 'approvalDecision'
+    )
+    .map(
+      m =>
+        (
+          m.payload as {
+            payload: { decision: 'approve' | 'reject' | null; status: string; reason?: string };
+          }
+        ).payload
+    );
+}
+
+async function getApprovalForVersion(h: Harness, proposalId: string, proposalVersion: number) {
+  return h.service.getApprovalForVersion(proposalId, proposalVersion);
+}
+
+describe('ApprovalController — trusted approval flow', () => {
+  let h: Harness;
 
   beforeEach(async () => {
-    service = new PersistenceFoundation();
-    await service.init();
-    const rawDb = service.getRawDatabase();
-    proposalRepository = new SqlJsProposalRepository(rawDb);
-    approvalRepository = new SqlJsApprovalRepository(rawDb);
-    proposalPort = new ProposalRepositoryAdapter(proposalRepository);
-    approvalPort = new ApprovalRepositoryAdapter(approvalRepository);
-
-    provider = { establishUserDecision: vi.fn() };
-    trustedService = new TrustedApprovalService({
-      proposals: proposalPort,
-      approvals: approvalPort,
-      trustedDecisionProvider: provider as never,
-      now: defaultNow,
-      createApprovalId: () => crypto.randomUUID() as never,
-    });
-
-    postMessage = vi.fn();
-    controller = new ApprovalController({
-      trustedApprovalService: trustedService,
-      proposals: proposalPort,
-      approvals: approvalPort,
-      postMessage,
-      logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never,
-    });
-
-    await proposalRepository.createProposal(makeProposalInput());
+    h = await createHarness();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await h.dispose();
     vi.restoreAllMocks();
-    service.close();
   });
 
-  it('presents a created proposal for review and tracks it as pending', () => {
-    controller.onProposalCreated(pendingProposal());
+  it('approve action establishes a trusted decision and persists an approval record', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    expect(controller.getPendingProposals()).toHaveLength(1);
-    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'proposalCreated' }));
-  });
-
-  it('records an explicit approval through the trusted service', async () => {
-    vi.mocked(provider.establishUserDecision).mockResolvedValue({
-      decision: 'approve',
-      boundary: 'vscode-host:confirm-dialog',
-      decidedAt: 1_500_000_000_000,
-      expiresAt: 2_000_000_000_000,
-    });
-    controller.onProposalCreated(pendingProposal());
-
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+    h.gate.settle({
+      decision: 'approve',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
+      expiresAt: null,
     });
 
-    expect(controller.getPendingProposals()).toHaveLength(0);
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'approved', decision: 'approve' }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
-    expect(approval.error).toBeNull();
+    await decisionPromise;
+
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions.length).toBe(1);
+    expect(decisions[0]!.decision).toBe('approve');
+    expect(decisions[0]!.status).toBe('approved');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval).not.toBeNull();
+    expect(approval.approval!.lifecycleState).toBe('approved');
     expect(approval.approval!.decision).toBe('approve');
     expect(approval.approval!.approvedContentHash).toBe(PROPOSED_HASH);
+    expect(approval.approval!.provenance.kind).toBe('trusted-boundary');
+    expect(h.gate.calls.length).toBe(1);
   });
 
-  it('records an explicit rejection', async () => {
-    vi.mocked(provider.establishUserDecision).mockResolvedValue({
-      decision: 'reject',
-      boundary: 'vscode-host:confirm-dialog',
-      decidedAt: 1_500_000_000_000,
-      expiresAt: null,
-    });
-    controller.onProposalCreated(pendingProposal());
+  it('reject action records a rejection and denies application', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'reject',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+    h.gate.settle({
+      decision: 'reject',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
+      expiresAt: null,
     });
 
-    expect(controller.getPendingProposals()).toHaveLength(0);
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'rejected', decision: 'reject' }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
-    expect(approval.approval!.decision).toBe('reject');
+    await decisionPromise;
+
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.decision).toBe('reject');
+    expect(decisions[0]!.status).toBe('rejected');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval!.lifecycleState).toBe('rejected');
+
+    const authorized = await h.service.verifyApplicationAuthorization(PROPOSAL_ID, 1, NOW);
+    expect(authorized.authorized).toBe(false);
   });
 
-  it('dismissal does not approve and records no approval', async () => {
-    controller.onProposalCreated(pendingProposal());
+  it('dismiss records no decision and application is denied', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
+    await h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'dismiss',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
     });
 
-    expect(provider.establishUserDecision).not.toHaveBeenCalled();
-    expect(controller.getPendingProposals()).toHaveLength(0);
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'dismissed', decision: null }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
+    expect(h.gate.calls.length).toBe(0);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions.length).toBe(1);
+    expect(decisions[0]!.decision).toBeNull();
+    expect(decisions[0]!.status).toBe('dismissed');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
     expect(approval.approval).toBeNull();
+
+    const authorized = await h.service.verifyApplicationAuthorization(PROPOSAL_ID, 1, NOW);
+    expect(authorized.authorized).toBe(false);
   });
 
-  it('fails closed when the provider establishes no decision (cancel)', async () => {
-    vi.mocked(provider.establishUserDecision).mockResolvedValue(null);
-    controller.onProposalCreated(pendingProposal());
+  it('provider returning null (cancel) fails closed with no approval record', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
     });
+    h.gate.settle(null);
 
-    expect(controller.getPendingProposals()).toHaveLength(0);
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'failed', decision: null }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
+    await expect(decisionPromise).resolves.not.toThrow();
+
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
     expect(approval.approval).toBeNull();
+    expect(h.gate.calls.length).toBe(1);
   });
 
-  it('rejects a wrong content hash', async () => {
-    vi.mocked(provider.establishUserDecision).mockResolvedValue({
+  it('provider failure fails closed with no approval record', async () => {
+    const failingProvider: TrustedDecisionProvider = {
+      establishUserDecision: async () => {
+        throw new Error('dialog crashed');
+      },
+    };
+    const h2 = await createHarness({ provider: failingProvider });
+    await createProposalInRepo(h2.proposalRepo);
+    registerPending(h2.controller);
+
+    await h2.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
       decision: 'approve',
-      boundary: 'vscode-host:confirm-dialog',
-      decidedAt: 1_500_000_000_000,
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    const decisions = approvalDecisionMessages(h2);
+    expect(decisions[0]!.status).toBe('failed');
+
+    const approval = await getApprovalForVersion(h2, PROPOSAL_ID, 1);
+    expect(approval.approval).toBeNull();
+
+    await h2.dispose();
+  });
+
+  it('unavailable trusted provider fails closed', async () => {
+    const h2 = await createHarness({ provider: { establishUserDecision: async () => null } });
+    await createProposalInRepo(h2.proposalRepo);
+    registerPending(h2.controller);
+
+    await h2.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    const decisions = approvalDecisionMessages(h2);
+    expect(decisions[0]!.status).toBe('failed');
+
+    const approval = await getApprovalForVersion(h2, PROPOSAL_ID, 1);
+    expect(approval.approval).toBeNull();
+
+    await h2.dispose();
+  });
+
+  it('disposal during an open approval prevents any late approval record', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
+
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    h.controller.dispose();
+
+    h.gate.settle({
+      decision: 'approve',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
       expiresAt: null,
     });
-    controller.onProposalCreated(pendingProposal({ proposedContentHash: OTHER_HASH }));
 
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
+    await expect(decisionPromise).resolves.not.toThrow();
+
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval).toBeNull();
+    expect(h.controller.isDisposed()).toBe(true);
+  });
+
+  it('concurrent approval attempts establish only one trusted decision', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
+
+    const p1 = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
     });
 
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'failed' }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
+    // Wait for the first call to reach the provider gate before issuing the
+    // second call, so the concurrency guard is meaningfully exercised.
+    let calls = 0;
+    for (let i = 0; i < 100 && calls !== 1; i++) {
+      await Promise.resolve();
+      calls = h.gate.calls.length;
+    }
+    expect(h.gate.calls.length).toBe(1);
+
+    const p2 = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    await p2;
+
+    expect(h.gate.calls.length).toBe(1);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions.find(d => d.status === 'failed')?.reason).toContain('already in progress');
+
+    h.gate.settle({
+      decision: 'approve',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
+      expiresAt: null,
+    });
+    await p1;
+
+    const approvals = await h.service.getApprovalsByProposal(PROPOSAL_ID, 1);
+    expect(approvals.approvals.length).toBe(1);
+    expect(approvals.approvals[0]!.lifecycleState).toBe('approved');
+
+    const authorized = await h.service.verifyApplicationAuthorization(PROPOSAL_ID, 1, NOW);
+    expect(authorized.authorized).toBe(true);
+  });
+
+  it('disposed controller rejects any approval action', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
+    h.controller.dispose();
+
+    await h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+    expect(decisions[0]!.reason).toContain('disposing');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
     expect(approval.approval).toBeNull();
   });
 
-  it('rejects a wrong workspace identity', async () => {
-    controller.onProposalCreated(pendingProposal());
+  it('workspace or file identity mismatch is rejected', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    await controller.handleApprovalAction({
+    await h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      workspaceId: 'ws_b',
+      fileUri: 'file:///rootB/file.ts',
+    });
+
+    expect(h.gate.calls.length).toBe(0);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+    expect(decisions[0]!.reason).toContain('identity mismatch');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval).toBeNull();
+  });
+
+  it('unknown proposal not pending is rejected', async () => {
+    await h.controller.handleApprovalAction({
       proposalId: '11111111-1111-1111-1111-111111111111',
       proposalVersion: 1,
       decision: 'approve',
-      workspaceId: 'ws-other',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
     });
 
-    expect(provider.establishUserDecision).not.toHaveBeenCalled();
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({
-          status: 'failed',
-          reason: 'Workspace or file identity mismatch',
-        }),
-      })
-    );
+    expect(h.gate.calls.length).toBe(0);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+    expect(decisions[0]!.reason).toContain('No pending approval request');
   });
 
-  it('does not process a duplicate decision for an already-terminal approval', async () => {
-    vi.mocked(provider.establishUserDecision).mockResolvedValue({
+  it('expired proposal cannot be approved', async () => {
+    await createProposalInRepo(h.proposalRepo, {
+      createdAt: NOW - 2_000_000,
+      expiresAt: NOW - 1_000_000,
+    });
+    registerPending(h.controller, { expiresAt: NOW - 1_000_000 });
+
+    await h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
       decision: 'approve',
-      boundary: 'vscode-host:confirm-dialog',
-      decidedAt: 1_500_000_000_000,
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+
+    expect(h.gate.calls.length).toBe(0);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('failed');
+
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval).toBeNull();
+  });
+
+  it('webview content hash hint is ignored; trusted proposal hash is bound', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
+
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      approvedContentHash: '0'.repeat(64),
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
+    });
+    h.gate.settle({
+      decision: 'approve',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
       expiresAt: null,
     });
-    controller.onProposalCreated(pendingProposal());
+    await decisionPromise;
 
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
+    // The controller binds the hash from the trusted proposal, not the webview hint.
+    expect(h.gate.calls.length).toBe(1);
+    const decisions = approvalDecisionMessages(h);
+    expect(decisions[0]!.status).toBe('approved');
 
-    // Second conflicting decision for the same terminal proposal: fail closed.
-    await controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'reject',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'failed' }),
-      })
-    );
-    const approval = await approvalPort.getApprovalForVersion(
-      '11111111-1111-1111-1111-111111111111',
-      1
-    );
-    expect(approval.approval!.decision).toBe('approve');
+    const approval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(approval.approval!.approvedContentHash).toBe(PROPOSED_HASH);
+    expect(approval.approval!.approvedContentHash).not.toBe('0'.repeat(64));
   });
 
-  it('rejects an unknown proposal', async () => {
-    controller.onProposalCreated(
-      pendingProposal({ proposalId: '00000000-0000-0000-0000-000000000000' })
-    );
+  it('persistence reload preserves the approval and authorization', async () => {
+    await createProposalInRepo(h.proposalRepo);
+    registerPending(h.controller);
 
-    await controller.handleApprovalAction({
-      proposalId: '00000000-0000-0000-0000-000000000000',
+    const decisionPromise = h.controller.handleApprovalAction({
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      workspaceId: WORKSPACE_ID,
+      fileUri: FILE_URI,
     });
-
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({
-        type: 'approvalDecision',
-        payload: expect.objectContaining({ status: 'failed' }),
-      })
-    );
-  });
-
-  it('two concurrent Approve clicks establish only one trusted decision', async () => {
-    let firstResolve:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    const firstPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        firstResolve = resolve;
-      }
-    );
-    vi.spyOn(trustedService, 'createApprovalDecision').mockImplementation(
-      () => firstPromise as never
-    );
-    controller.onProposalCreated(pendingProposal());
-
-    // Launch both clicks without awaiting the first (it is suspended on createApprovalDecision).
-    const first = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
+    h.gate.settle({
       decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+      boundary: 'test-boundary',
+      decidedAt: NOW,
+      expiresAt: null,
     });
-    // Yield so the first call reaches the suspended createApprovalDecision await.
-    await Promise.resolve();
-    const second = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
+    await decisionPromise;
 
-    // The second click should fail closed immediately while the first is suspended.
-    await second;
+    const firstApproval = await getApprovalForVersion(h, PROPOSAL_ID, 1);
+    expect(firstApproval.approval!.lifecycleState).toBe('approved');
 
-    expect(trustedService.createApprovalDecision).toHaveBeenCalledTimes(1);
-    const failedCall = vi
-      .mocked(postMessage)
-      .mock.calls.find(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'failed'
-      );
-    expect(failedCall).toBeDefined();
-    expect((failedCall![0] as { payload: { reason?: string } }).payload.reason).toContain(
-      'already in progress'
-    );
-
-    // Resolve the first createApprovalDecision as Approve; it succeeds.
-    firstResolve!({
-      approvalId: 'approval-1',
-      approval: { decision: 'approve' },
-    });
-    await first;
-
-    // The approval decision message reflects the approved outcome.
-    const decisionCall = vi
-      .mocked(postMessage)
-      .mock.calls.find(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'approved'
-      );
-    expect(decisionCall).toBeDefined();
-    expect((decisionCall![0] as { payload: { decision?: string } }).payload.decision).toBe(
-      'approve'
-    );
-    expect(controller.getPendingProposals()).toHaveLength(0);
-  });
-
-  it('concurrent Approve and Reject for the same proposal establish only one decision', async () => {
-    let firstResolve:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    const firstPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        firstResolve = resolve;
-      }
-    );
-    vi.spyOn(trustedService, 'createApprovalDecision').mockImplementation(
-      () => firstPromise as never
-    );
-    controller.onProposalCreated(pendingProposal());
-
-    const first = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-    await Promise.resolve();
-    const second = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'reject',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
+    const proposalPort2 = new ProposalRepositoryAdapter(new SqlJsProposalRepository(h.db));
+    const approvalPort2 = new ApprovalRepositoryAdapter(new SqlJsApprovalRepository(h.db));
+    const reloadedService = createTrustedApprovalService({
+      proposals: proposalPort2,
+      approvals: approvalPort2,
+      trustedDecisionProvider: h.gate.provider,
+      now: defaultNow,
+      createApprovalId: () => 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
     });
 
-    await second;
+    const authorization = await reloadedService.verifyApplicationAuthorization(PROPOSAL_ID, 1, NOW);
+    expect(authorization.authorized).toBe(true);
+    expect(authorization.approval!.lifecycleState).toBe('approved');
 
-    expect(trustedService.createApprovalDecision).toHaveBeenCalledTimes(1);
-    const failedCall = vi
-      .mocked(postMessage)
-      .mock.calls.find(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'failed'
-      );
-    expect(failedCall).toBeDefined();
-  });
-
-  it('concurrent clicks for different proposals remain isolated', async () => {
-    let resolveA:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    let resolveB:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    const promiseA = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        resolveA = resolve;
-      }
-    );
-    const promiseB = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        resolveB = resolve;
-      }
-    );
-    let callCount = 0;
-    vi.spyOn(trustedService, 'createApprovalDecision').mockImplementation(() => {
-      callCount += 1;
-      return callCount === 1 ? (promiseA as unknown) : (promiseB as unknown);
-    });
-    controller.onProposalCreated(
-      pendingProposal({ proposalId: '11111111-1111-1111-1111-111111111111' })
-    );
-    controller.onProposalCreated(
-      pendingProposal({ proposalId: '22222222-2222-2222-2222-222222222222' })
-    );
-
-    const first = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-    await Promise.resolve();
-    const second = controller.handleApprovalAction({
-      proposalId: '22222222-2222-2222-2222-222222222222',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-
-    // Both proposals are different, so neither blocks the other.
-    expect(trustedService.createApprovalDecision).toHaveBeenCalledTimes(2);
-
-    resolveA!({ approvalId: 'approval-a', approval: { decision: 'approve' } });
-    resolveB!({ approvalId: 'approval-b', approval: { decision: 'approve' } });
-
-    await first;
-    await second;
-
-    expect(controller.getPendingProposals()).toHaveLength(0);
-
-    // Both approval decision messages reflect the approved outcome.
-    const approvedCalls = vi
-      .mocked(postMessage)
-      .mock.calls.filter(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'approved'
-      );
-    expect(approvedCalls).toHaveLength(2);
-    expect(
-      approvedCalls.map(c => (c[0] as { payload: { proposalId?: string } }).payload.proposalId)
-    ).toEqual(['11111111-1111-1111-1111-111111111111', '22222222-2222-2222-2222-222222222222']);
-  });
-
-  it('disposal while dialog is unresolved prevents any approval record', async () => {
-    let resolveDecision:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    const decisionPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        resolveDecision = resolve;
-      }
-    );
-    vi.spyOn(trustedService, 'createApprovalDecision').mockImplementation(() => decisionPromise);
-    controller.onProposalCreated(pendingProposal());
-
-    const decision = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-    await Promise.resolve();
-
-    // Dispose while the dialog is unresolved.
-    controller.dispose();
-    expect(controller.isDisposed()).toBe(true);
-    expect(controller.getPendingProposals()).toHaveLength(0);
-
-    // Resolve the dialog with Approve after disposal.
-    resolveDecision!({ approvalId: 'approval-1', approval: { decision: 'approve' } });
-    await decision;
-
-    // No approval decision message was posted (no success notification).
-    const approvedCalls = vi
-      .mocked(postMessage)
-      .mock.calls.filter(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'approved'
-      );
-    expect(approvedCalls).toHaveLength(0);
-
-    // The failed notification was posted instead.
-    const failedCalls = vi
-      .mocked(postMessage)
-      .mock.calls.filter(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'failed'
-      );
-    expect(failedCalls.length).toBeGreaterThan(0);
-  });
-
-  it('late dialog response after disposal cannot resurrect the request', async () => {
-    let resolveDecision:
-      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
-    const decisionPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
-      resolve => {
-        resolveDecision = resolve;
-      }
-    );
-    vi.spyOn(trustedService, 'createApprovalDecision').mockImplementation(() => decisionPromise);
-    controller.onProposalCreated(pendingProposal());
-
-    const decision = controller.handleApprovalAction({
-      proposalId: '11111111-1111-1111-1111-111111111111',
-      proposalVersion: 1,
-      decision: 'approve',
-      workspaceId: 'ws-1',
-      fileUri: 'file:///workspace/file.txt',
-    });
-    await Promise.resolve();
-
-    controller.dispose();
-
-    // Resolve after disposal: must be ignored (controller returns normally).
-    resolveDecision!({ approvalId: 'approval-1', approval: { decision: 'approve' } });
-    await decision;
-
-    // Proposal is not in pending state.
-    expect(controller.getPendingProposals()).toHaveLength(0);
-    expect(controller.isDisposed()).toBe(true);
-
-    // No approved status was posted.
-    const approvedCalls = vi
-      .mocked(postMessage)
-      .mock.calls.filter(
-        call => call[0]?.type === 'approvalDecision' && call[0]?.payload?.status === 'approved'
-      );
-    expect(approvedCalls).toHaveLength(0);
+    const reloadedApproval = await reloadedService.getApprovalForVersion(PROPOSAL_ID, 1);
+    expect(reloadedApproval.approval!.proposalId).toBe(PROPOSAL_ID);
+    expect(reloadedApproval.approval!.proposalVersion).toBe(1);
+    expect(reloadedApproval.approval!.workspaceId).toBe(WORKSPACE_ID);
+    expect(reloadedApproval.approval!.fileUri).toBe(FILE_URI);
+    expect(reloadedApproval.approval!.approvedContentHash).toBe(PROPOSED_HASH);
   });
 });
