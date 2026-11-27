@@ -58,6 +58,12 @@ interface TerminalExecutionEntry {
   timeoutTimer: ReturnType<typeof setTimeout> | null;
   resolve: ((value: TerminalExecutionResult) => void) | null;
   reject: ((reason: unknown) => void) | null;
+  /**
+   * Records why this execution was cancelled, if it was cancelled.
+   * Used to distinguish user cancellation, timeout, and disposal in the
+   * final result, since the abort signal alone cannot carry that reason.
+   */
+  cancelReason: 'user' | 'shutdown' | 'timeout' | undefined;
 }
 
 /**
@@ -200,6 +206,7 @@ export class TerminalExecutionService {
       timeoutTimer: null,
       resolve: null,
       reject: null,
+      cancelReason: undefined,
     };
 
     const promise = new Promise<TerminalExecutionResult>((resolve, reject) => {
@@ -262,6 +269,25 @@ export class TerminalExecutionService {
             entry,
             TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH,
             'Approval binding does not match the requested command'
+          );
+          return;
+        }
+
+        // --- Require trusted approval decision ---
+        // An ApprovalBinding only proves parameter matching; it does NOT
+        // prove trusted user approval. Stage E must supply a
+        // TrustedApprovalDecision with decision === 'approved' before any
+        // process may start. Fail closed when missing or not approved.
+        const trustedDecision = request.trustedApprovalDecision;
+        if (
+          !trustedDecision ||
+          trustedDecision.kind !== 'trusted-approval-decision' ||
+          trustedDecision.decision !== 'approved'
+        ) {
+          this.failEntry(
+            entry,
+            TerminalErrorCode.TERMINAL_INVALID_REQUEST,
+            'Execution requires a trusted approval decision'
           );
           return;
         }
@@ -334,6 +360,10 @@ export class TerminalExecutionService {
       // AbortController may already be aborted; safe to ignore.
     }
 
+    // Record the cancellation reason so the final result can distinguish
+    // user cancellation, timeout, and disposal.
+    entry.cancelReason = reason;
+
     // Kill the process tree if a handle is available.
     if (entry.processHandle !== null) {
       void terminateProcessTree(entry.processHandle, this.killProcessTreeFn);
@@ -383,6 +413,7 @@ export class TerminalExecutionService {
         code: TerminalErrorCode.TERMINAL_CANCELLED,
         message: `Execution cancelled: ${reason}`,
       },
+      trustedApprovalDecision: entry.request.trustedApprovalDecision,
     };
     entry.result = cancelledResult;
     if (entry.reject) {
@@ -552,15 +583,30 @@ export class TerminalExecutionService {
             const processResult = result;
             entry.processHandle = null;
 
-            // Map process result to terminal execution result.
-            const state: TerminalLifecycleState =
-              processResult.exitCode === 0 && !processResult.killed && !processResult.timedOut
-                ? 'completed'
-                : processResult.timedOut
-                  ? 'timed-out'
-                  : processResult.killed
-                    ? 'cancelled'
-                    : 'failed';
+            // Determine final state and timedOut. If the execution was
+            // cancelled (user, timeout, or disposal), the cancel reason
+            // takes precedence over the process adapter's timedOut flag,
+            // because the abort signal fires for both cancellation and
+            // timeout and the adapter cannot distinguish them.
+            let state: TerminalLifecycleState;
+            let timedOut: boolean;
+            if (entry.cancelReason === 'timeout') {
+              state = 'timed-out';
+              timedOut = true;
+            } else if (entry.cancelReason !== undefined) {
+              state = 'cancelled';
+              timedOut = false;
+            } else {
+              timedOut = processResult.timedOut;
+              state =
+                processResult.exitCode === 0 && !processResult.killed && !timedOut
+                  ? 'completed'
+                  : timedOut
+                    ? 'timed-out'
+                    : processResult.killed
+                      ? 'cancelled'
+                      : 'failed';
+            }
 
             const executionResult: TerminalExecutionResult = {
               kind: 'terminal-execution-result',
@@ -577,15 +623,16 @@ export class TerminalExecutionService {
               startedAt: processResult.startedAt,
               completedAt: processResult.completedAt,
               executionMs: processResult.executionMs,
-              cancelled: processResult.killed,
-              timedOut: processResult.timedOut,
+              cancelled: state === 'cancelled' || state === 'timed-out',
+              timedOut,
               error:
-                processResult.exitCode !== 0 && !processResult.killed && !processResult.timedOut
+                processResult.exitCode !== 0 && !processResult.killed && !timedOut
                   ? {
                       code: TerminalErrorCode.TERMINAL_INVALID_RESULT,
                       message: `Process exited with code ${processResult.exitCode}`,
                     }
                   : null,
+              trustedApprovalDecision: request.trustedApprovalDecision,
             };
 
             this.completeEntry(entry, executionResult);
@@ -643,10 +690,10 @@ export class TerminalExecutionService {
     }
     if (transitioned) {
       entry.result = result;
-    }
-    if (entry.resolve) {
-      entry.resolve(result);
-      entry.resolve = null;
+      if (entry.resolve) {
+        entry.resolve(result);
+        entry.resolve = null;
+      }
     }
   }
 
@@ -678,6 +725,7 @@ export class TerminalExecutionService {
         cancelled: false,
         timedOut: false,
         error: { code, message },
+        trustedApprovalDecision: entry.request.trustedApprovalDecision,
       };
     }
     if (entry.reject) {

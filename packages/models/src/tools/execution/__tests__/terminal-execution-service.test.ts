@@ -42,11 +42,18 @@ function makeRequest(overrides: Partial<TerminalExecutionRequest> = {}): Termina
       workspaceId: 'ws_1',
       createdAt: 1700000000000,
     });
+  const trustedDecision = overrides.trustedApprovalDecision ?? {
+    kind: 'trusted-approval-decision',
+    decision: 'approved' as const,
+    boundary: 'vscode-host:confirm-dialog',
+    decidedAt: 1700000000000,
+  };
   return {
     kind: 'terminal-execution-request',
     requestId: 'req-1',
     command: makeCommand(),
     approvalBinding: binding,
+    trustedApprovalDecision: trustedDecision,
     ...overrides,
   };
 }
@@ -572,6 +579,209 @@ describe('TerminalExecutionService — late event handling', () => {
     const entry = service.getExecution(submission.terminalId);
     expect(entry?.state).toBe('cancelled');
     expect(entry?.result?.state).toBe('cancelled');
+
+    service.dispose();
+  });
+});
+
+describe('TerminalExecutionService — trusted authorization boundary', () => {
+  it('rejects submission without trusted approval decision', async () => {
+    const service = new TerminalExecutionService(makeOptions());
+
+    await expect(
+      service.submit({
+        kind: 'terminal-execution-request',
+        requestId: 'req-no-trusted',
+        command: makeCommand(),
+        approvalBinding: createApprovalBinding({
+          bindingId: 'bind-1',
+          executable: '/usr/bin/ls',
+          arguments: ['-la'],
+          workingDirectory: '/workspace',
+          workspaceId: 'ws_1',
+          createdAt: 1700000000000,
+        }),
+      } as TerminalExecutionRequest).promise
+    ).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('rejects submission with rejected trusted approval decision', async () => {
+    const service = new TerminalExecutionService(makeOptions());
+
+    await expect(
+      service.submit(
+        makeRequest({
+          trustedApprovalDecision: {
+            kind: 'trusted-approval-decision',
+            decision: 'rejected',
+            boundary: 'vscode-host:confirm-dialog',
+            decidedAt: 1700000000000,
+          },
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('rejects submission with expired trusted approval decision', async () => {
+    const service = new TerminalExecutionService(makeOptions());
+
+    await expect(
+      service.submit(
+        makeRequest({
+          trustedApprovalDecision: {
+            kind: 'trusted-approval-decision',
+            decision: 'expired',
+            boundary: 'vscode-host:confirm-dialog',
+            decidedAt: 1700000000000,
+            expiresAt: 1700000000000,
+          },
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('accepts submission with approved trusted approval decision', async () => {
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+
+    const submission = service.submit(makeRequest());
+    const result = await submission.promise;
+
+    expect(result.state).toBe('completed');
+    expect(result.trustedApprovalDecision?.decision).toBe('approved');
+
+    service.dispose();
+  });
+
+  it('passes trusted approval decision through to result', async () => {
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const decision = {
+      kind: 'trusted-approval-decision',
+      decision: 'approved',
+      boundary: 'vscode-host:confirm-dialog',
+      decidedAt: 1700000000000,
+    };
+
+    const submission = service.submit(makeRequest({ trustedApprovalDecision: decision }));
+    const result = await submission.promise;
+
+    expect(result.trustedApprovalDecision).toBe(decision);
+
+    service.dispose();
+  });
+});
+
+describe('TerminalExecutionService — cancel/timeout/disposal distinction', () => {
+  it('manual cancellation has timedOut: false', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-cancel' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const cancelled = service.cancel(submission.terminalId, 'user');
+    expect(cancelled).toBe(true);
+
+    release();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.result?.cancelled).toBe(true);
+    expect(entry?.result?.timedOut).toBe(false);
+
+    service.dispose();
+  });
+
+  it('timeout has timedOut: true', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: fn,
+        limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxExecutionMs: 30 },
+      })
+    );
+    const submission = service.submit(makeRequest({ requestId: 'req-timeout' }));
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    await expect(submission.promise).rejects.toThrow();
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.result?.cancelled).toBe(true);
+    expect(entry?.result?.timedOut).toBe(true);
+
+    release();
+    service.dispose();
+  });
+
+  it('disposal has timedOut: false', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-dispose' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const entry = service.getExecution(submission.terminalId);
+
+    service.dispose();
+    release();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    expect(entry?.result?.cancelled).toBe(true);
+    expect(entry?.result?.timedOut).toBe(false);
+
+    service.dispose();
+  });
+
+  it('late completion does not overwrite cancelled state', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-late-complete' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    service.cancel(submission.terminalId, 'user');
+
+    release();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.state).toBe('cancelled');
+    expect(entry?.result?.state).toBe('cancelled');
+    expect(entry?.result?.cancelled).toBe(true);
+    expect(entry?.result?.timedOut).toBe(false);
+
+    service.dispose();
+  });
+
+  it('late timeout event does not overwrite previously settled cancellation', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-race' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    // User cancels first
+    service.cancel(submission.terminalId, 'user');
+
+    // Then release - process completes but state should remain cancelled
+    release();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.state).toBe('cancelled');
+    expect(entry?.result?.timedOut).toBe(false);
 
     service.dispose();
   });

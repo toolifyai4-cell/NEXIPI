@@ -138,6 +138,12 @@ export interface TerminalExecutionRequest {
   readonly requestId: string;
   readonly command: TerminalCommand;
   readonly approvalBinding?: ApprovalBinding | undefined;
+  /**
+   * Trusted user authorization decision from Stage E. Must be present with
+   * `decision === 'approved'` before execution may proceed. Stage D fails
+   * closed when this is missing or not approved.
+   */
+  readonly trustedApprovalDecision?: TrustedApprovalDecision | undefined;
 }
 
 /**
@@ -146,6 +152,12 @@ export interface TerminalExecutionRequest {
  * Changing any execution-relevant field (executable, arguments, working
  * directory, workspace, environment config identity) invalidates the
  * content hash and therefore the approval binding.
+ *
+ * NOTE: An ApprovalBinding only proves that execution parameters match a
+ * particular binding. It does NOT prove that the user approved those
+ * parameters. Trusted user authorization is represented separately by
+ * `TrustedApprovalDecision`, which Stage E produces via
+ * `TrustedApprovalService`.
  */
 export interface ApprovalBinding {
   readonly kind: 'terminal-approval-binding';
@@ -157,6 +169,21 @@ export interface ApprovalBinding {
   readonly environmentConfigId?: EnvironmentConfigId | undefined;
   readonly contentHash: string;
   readonly createdAt: number;
+}
+
+/**
+ * Trusted user authorization decision produced by Stage E's
+ * `TrustedApprovalService`. A matching `ApprovalBinding` hash alone does
+ * NOT constitute authorization; only a `TrustedApprovalDecision` with
+ * `decision === 'approved'` from the trusted boundary grants permission to
+ * execute.
+ */
+export interface TrustedApprovalDecision {
+  readonly kind: 'trusted-approval-decision';
+  readonly decision: 'approved' | 'rejected' | 'expired';
+  readonly boundary: string;
+  readonly decidedAt: number;
+  readonly expiresAt?: number | undefined;
 }
 
 /**
@@ -183,6 +210,11 @@ export interface TerminalExecutionResult {
   readonly cancelled: boolean;
   readonly timedOut: boolean;
   readonly error: { readonly code: string; readonly message: string } | null;
+  /**
+   * Trusted approval decision that authorized this execution, if any.
+   * Absent when execution was not approved or was cancelled before approval.
+   */
+  readonly trustedApprovalDecision?: TrustedApprovalDecision | undefined;
 }
 
 /**

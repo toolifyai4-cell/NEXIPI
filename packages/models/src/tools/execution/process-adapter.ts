@@ -284,7 +284,7 @@ export async function spawnControlledProcess(
   let stdoutTruncated = false;
   let stderrTruncated = false;
   let killed = false;
-  let timedOut = false;
+  const timedOut = false;
   let completedAt: number | null = null;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
@@ -305,7 +305,6 @@ export async function spawnControlledProcess(
   const abortHandler = (): void => {
     if (!child.killed) {
       killed = true;
-      timedOut = true;
       child.kill('SIGTERM');
     }
   };
