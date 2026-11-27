@@ -154,7 +154,7 @@ describe('resolveExecutable — win32', () => {
       cwd: 'C:\\Windows',
       statFile,
       pathEnv: 'C:\\Windows',
-      pathextEnv: '.COM;.EXE;.BAT;.CMD',
+      pathextEnv: '.com;.exe;.bat;.cmd',
     }));
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {

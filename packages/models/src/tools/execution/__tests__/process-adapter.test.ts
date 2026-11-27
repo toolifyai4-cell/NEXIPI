@@ -36,38 +36,33 @@ function createMockChildProcess(overrides: {
     }),
     stdout: {
       on: vi.fn((event: string, handler: (chunk: Buffer) => void) => {
-        if (overrides.stdoutData) {
-          setTimeout(() => {
-            for (const chunk of overrides.stdoutData) {
-              handler(chunk);
-            }
-          }, 5);
+        if (event === 'data' && overrides.stdoutData) {
+          for (const chunk of overrides.stdoutData) {
+            handler(chunk);
+          }
         }
       }),
     },
     stderr: {
       on: vi.fn((event: string, handler: (chunk: Buffer) => void) => {
-        if (overrides.stderrData) {
-          setTimeout(() => {
-            for (const chunk of overrides.stderrData) {
-              handler(chunk);
-            }
-          }, 5);
+        if (event === 'data' && overrides.stderrData) {
+          for (const chunk of overrides.stderrData) {
+            handler(chunk);
+          }
         }
       }),
     },
     on: vi.fn((event: string, handler: (...args: any[]) => void) => {
       if (event === 'close') {
-        setTimeout(() => {
-          if (overrides.error) {
-            handler(1, null);
-          } else {
-            handler(overrides.exitCode ?? 0, overrides.exitSignal ?? null);
-          }
-        }, overrides.closeDelay ?? 10);
+        // Fire close synchronously
+        if (overrides.error) {
+          handler(1, null);
+        } else {
+          handler(overrides.exitCode ?? 0, overrides.exitSignal ?? null);
+        }
       } else if (event === 'error') {
         if (overrides.error) {
-          setTimeout(() => handler(overrides.error), 5);
+          handler(overrides.error);
         }
       }
     }),
@@ -266,7 +261,6 @@ describe('spawnControlledProcess — cancellation via AbortSignal', () => {
 
     await expect(promise).resolves.toMatchObject({
       killed: true,
-      cancelled: true, // This is set by the service layer, not the adapter
     });
 
     await closePromise;

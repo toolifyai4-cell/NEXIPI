@@ -36,9 +36,8 @@ import type {
   TerminalExecutionRequest,
   TerminalExecutionResult,
   TerminalId,
-  DEFAULT_TERMINAL_EXECUTION_LIMITS,
 } from './contracts.js';
-import { createTerminalId } from './contracts.js';
+import { createTerminalId, DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
 import { validateTerminalCommandSecurity } from './command-validation.js';
 import type { WorkspaceBoundaryValidator } from './command-validation.js';
 import {
@@ -46,7 +45,6 @@ import {
   type ExecutablePolicy,
   type ExecutableResolver,
 } from './executable-policy.js';
-import { resolveExecutable, type ExecutableResolutionOptions } from './executable-resolution.js';
 import {
   spawnControlledProcess,
   buildSanitizedEnvironment,
@@ -229,50 +227,6 @@ export class TerminalExecutionService {
       );
     }
 
-    // --- Validate the command structurally ---
-    let validatedCommand: TerminalCommand;
-    try {
-      const validated = validateTerminalCommandSecurity(
-        request.command,
-        this.limits,
-        this.workspaceBoundaryValidator
-      );
-      validatedCommand = validated.command;
-    } catch (error) {
-      if (isTerminalError(error)) {
-        throw error;
-      }
-      throw createTerminalError(
-        TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        `Command validation failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
-
-    // --- Verify approval binding (if present) ---
-    if (request.approvalBinding !== undefined) {
-      try {
-        assertApprovalBindingMatchesCommand(
-          request.approvalBinding,
-          {
-            executable: validatedCommand.executable,
-            arguments: validatedCommand.arguments,
-            workingDirectory: validatedCommand.workingDirectory,
-            workspaceId: validatedCommand.workspaceId,
-            environmentConfigId: validatedCommand.environmentConfig?.id,
-          }
-        );
-      } catch (error) {
-        if (isTerminalError(error)) {
-          throw error;
-        }
-        throw createTerminalError(
-          TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH,
-          'Approval binding does not match the requested command',
-          { terminalId: request.requestId }
-        );
-      }
-    }
-
     // --- Create terminal ID and entry ---
     const terminalId = createTerminalId(request.requestId);
     const abortController = new AbortController();
@@ -296,32 +250,82 @@ export class TerminalExecutionService {
 
     this.executions.set(request.requestId, entry);
 
-    // --- Transition lifecycle: proposed -> validating ---
-    try {
-      entry.state = applyTransition(entry.state, 'validating');
-    } catch (error) {
-      this.executions.delete(request.requestId);
-      if (isTerminalError(error)) {
-        throw error;
+    // --- Async validation and execution ---
+    // Command validation may be async (workspace boundary validator).
+    // Approval binding verification is synchronous.
+    // All failures are delivered through the returned promise.
+    void (async (): Promise<void> => {
+      if (this.disposed) {
+        this.failEntry(entry, TerminalErrorCode.TERMINAL_UNSUPPORTED_CONFIGURATION, 'Service disposed');
+        return;
       }
-      throw createTerminalError(
-        TerminalErrorCode.TERMINAL_INVALID_TRANSITION,
-        `Lifecycle transition failed: ${error instanceof Error ? error.message : String(error)}`,
-      );
-    }
 
-    // --- Queue or execute immediately ---
-    if (this.activeCount >= this.limits.maxConcurrentExecutions) {
-      if (this.queue.length >= this.limits.maxQueuedExecutions) {
-        this.failEntry(entry, TerminalErrorCode.TERMINAL_UNSUPPORTED_CONFIGURATION, 'Execution queue is full');
-        this.executions.delete(request.requestId);
-      } else {
-        this.queue.push(request.requestId);
+      try {
+        // --- Validate the command structurally ---
+        const validated = await validateTerminalCommandSecurity(
+          request.command,
+          this.limits,
+          this.workspaceBoundaryValidator
+        );
+
+        // --- Verify approval binding (if present) ---
+        if (request.approvalBinding !== undefined) {
+          try {
+            assertApprovalBindingMatchesCommand(
+              request.approvalBinding,
+              {
+                executable: validated.command.executable,
+                arguments: validated.command.arguments,
+                workingDirectory: validated.command.workingDirectory,
+                workspaceId: validated.command.workspaceId,
+                environmentConfigId: validated.command.environmentConfig?.id,
+              }
+            );
+          } catch (error) {
+            if (isTerminalError(error)) {
+              this.failEntry(entry, error.code, error.message);
+              return;
+            }
+            this.failEntry(
+              entry,
+              TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH,
+              'Approval binding does not match the requested command',
+            );
+            return;
+          }
+        }
+
+        // --- Transition lifecycle: proposed -> validating -> awaiting-approval -> approved ---
+        // Stage D auto-advances through approval states; Stage E will insert the
+        // trusted user decision gate between awaiting-approval and approved.
+        entry.state = applyTransition(entry.state, 'validating');
         entry.state = applyTransition(entry.state, 'awaiting-approval');
+        entry.state = applyTransition(entry.state, 'approved');
+
+        // --- Queue or execute immediately ---
+        if (this.activeCount >= this.limits.maxConcurrentExecutions) {
+          if (this.queue.length >= this.limits.maxQueuedExecutions) {
+            this.failEntry(entry, TerminalErrorCode.TERMINAL_UNSUPPORTED_CONFIGURATION, 'Execution queue is full');
+            this.executions.delete(request.requestId);
+          } else {
+            this.queue.push(request.requestId);
+            // Entry remains in 'approved' state while queued.
+          }
+        } else {
+          this.startExecution(entry);
+        }
+      } catch (error) {
+        if (isTerminalError(error)) {
+          this.failEntry(entry, error.code, error.message);
+        } else {
+          this.failEntry(
+            entry,
+            TerminalErrorCode.TERMINAL_INVALID_REQUEST,
+            `Command validation failed: ${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
       }
-    } else {
-      this.startExecution(entry);
-    }
+    })();
 
     return { terminalId, promise };
   }
@@ -344,9 +348,6 @@ export class TerminalExecutionService {
       return false;
     }
 
-    // Signal abort.
-    entry.abortController.abort();
-
     // Kill the process if running.
     if (entry.processHandle !== null) {
       void terminateProcessTree(entry.processHandle, this.killProcessTreeFn);
@@ -358,40 +359,54 @@ export class TerminalExecutionService {
       entry.timeoutTimer = null;
     }
 
-    // Transition to cancelled.
+    // Transition to cancelled. `cancelled` is only valid from `running`;
+    // for pre-execution states (approved, awaiting-approval, validating,
+    // proposed) fall back to `disposed` which is reachable from any active
+    // state.
+    let transitioned = false;
     try {
       entry.state = applyTransition(entry.state, 'cancelled');
+      transitioned = true;
     } catch {
-      // If transition fails (e.g. already terminal), leave state as-is.
+      try {
+        entry.state = applyTransition(entry.state, 'disposed');
+        transitioned = true;
+      } catch {
+        // Leave state as-is if all transitions fail.
+      }
     }
 
     const startedAt = entry.processHandle !== null ? Date.now() : null;
 
-    this.completeEntry(
-      entry,
-      {
-        kind: 'terminal-execution-result',
-        requestId: entry.request.requestId,
-        terminalId,
-        state: 'cancelled',
-        exitCode: null,
-        exitSignal: null,
-        stdout: '',
-        stderr: '',
-        stdoutTruncated: false,
-        stderrTruncated: false,
-        outputSizeBytes: 0,
-        startedAt,
-        completedAt: Date.now(),
-        executionMs: startedAt !== null ? Date.now() - startedAt : null,
-        cancelled: true,
-        timedOut: reason === 'timeout',
-        error: {
-          code: TerminalErrorCode.TERMINAL_CANCELLED,
-          message: `Execution cancelled: ${reason}`,
-        },
-      }
-    );
+    // Record result and reject the promise with a cancellation error.
+    const cancelledResult: TerminalExecutionResult = {
+      kind: 'terminal-execution-result',
+      requestId: entry.request.requestId,
+      terminalId,
+      state: entry.state,
+      exitCode: null,
+      exitSignal: null,
+      stdout: '',
+      stderr: '',
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      outputSizeBytes: 0,
+      startedAt,
+      completedAt: Date.now(),
+      executionMs: startedAt !== null ? Date.now() - startedAt : null,
+      cancelled: true,
+      timedOut: reason === 'timeout',
+      error: {
+        code: TerminalErrorCode.TERMINAL_CANCELLED,
+        message: `Execution cancelled: ${reason}`,
+      },
+    };
+    entry.result = cancelledResult;
+    if (entry.reject) {
+      entry.reject(createTerminalError(TerminalErrorCode.TERMINAL_CANCELLED, `Execution cancelled: ${reason}`, { terminalId }));
+      entry.reject = null;
+    }
+    entry.resolve = null;
 
     return true;
   }
@@ -470,18 +485,10 @@ export class TerminalExecutionService {
     const command = entry.request.command;
 
     // --- Re-resolve executable immediately before spawn ---
-    const resolutionOptions: ExecutableResolutionOptions = {
-      platform: this.platform,
-      cwd: command.workingDirectory,
-    };
-
-    let resolvedResolvedPath: string;
-    let resolvedDisplayName: string;
-    let resolvedPlatform: 'win32' | 'posix';
-
-    try {
-      const result = resolveExecutable(command.executable, resolutionOptions);
-      if (result.kind === 'rejected' || !result.executable) {
+    // The resolver may return a promise; handle both sync and async results.
+    const resolution = this.executableResolver.resolve(command.executable, command.workingDirectory);
+    Promise.resolve(resolution).then(async result => {
+      if (result.kind === 'rejected') {
         this.failEntry(
           entry,
           TerminalErrorCode.TERMINAL_INVALID_IDENTITY,
@@ -489,133 +496,175 @@ export class TerminalExecutionService {
         );
         return;
       }
-      resolvedResolvedPath = result.executable.resolvedPath;
-      resolvedDisplayName = result.executable.displayName;
-      resolvedPlatform = result.executable.platform;
-    } catch (error) {
+      const resolvedExecutable = result.executable;
+      if (!resolvedExecutable) {
+        this.failEntry(
+          entry,
+          TerminalErrorCode.TERMINAL_INVALID_IDENTITY,
+          `Executable could not be resolved: unknown reason`
+        );
+        return;
+      }
+
+      // --- Re-check executable policy against resolved identity ---
+      const permission = await checkExecutablePermission(
+        {
+          resolve: () => ({
+            kind: 'resolved',
+            executable: resolvedExecutable,
+          }),
+        },
+        this.executablePolicy,
+        command.executable,
+        command.workingDirectory
+      );
+
+      if (!permission.permitted) {
+        this.failEntry(
+          entry,
+          TerminalErrorCode.TERMINAL_INVALID_IDENTITY,
+          `Executable not permitted: ${permission.reason ?? 'policy denied'}`
+        );
+        return;
+      }
+
+      // --- Build sanitized environment ---
+      const spawnEnv = buildSanitizedEnvironment({}, this.platform);
+
+      // --- Set up timeout ---
+      const timeoutMs = this.limits.maxExecutionMs;
+
+      const executePromise = (async (): Promise<void> => {
+        try {
+          const processResult = await spawnControlledProcess(
+            resolvedExecutable.resolvedPath,
+            command.arguments,
+            {
+              cwd: command.workingDirectory,
+              env: spawnEnv,
+              signal: entry.abortController.signal,
+              maxOutputBytes: this.limits.maxOutputSizeBytes,
+              windowsHide: true,
+            },
+            this.spawnFn as SpawnFunction
+          );
+
+          entry.processHandle = null;
+
+          // Map process result to terminal execution result.
+          const state: TerminalLifecycleState =
+            processResult.exitCode === 0 && !processResult.killed && !processResult.timedOut
+              ? 'completed'
+              : processResult.timedOut
+                ? 'timed-out'
+                : processResult.killed
+                  ? 'cancelled'
+                  : 'failed';
+
+          const executionResult: TerminalExecutionResult = {
+            kind: 'terminal-execution-result',
+            requestId: request.requestId,
+            terminalId: entry.terminalId,
+            state,
+            exitCode: processResult.exitCode,
+            exitSignal: processResult.exitSignal,
+            stdout: processResult.stdout,
+            stderr: processResult.stderr,
+            stdoutTruncated: processResult.stdoutTruncated,
+            stderrTruncated: processResult.stderrTruncated,
+            outputSizeBytes: processResult.outputSizeBytes,
+            startedAt: processResult.startedAt,
+            completedAt: processResult.completedAt,
+            executionMs: processResult.executionMs,
+            cancelled: processResult.killed,
+            timedOut: processResult.timedOut,
+            error: processResult.exitCode !== 0 && !processResult.killed && !processResult.timedOut
+              ? {
+                  code: TerminalErrorCode.TERMINAL_INVALID_RESULT,
+                  message: `Process exited with code ${processResult.exitCode}`,
+                }
+              : null,
+          };
+
+          this.completeEntry(entry, executionResult);
+        } catch (error) {
+          entry.processHandle = null;
+          if (isTerminalError(error)) {
+            this.failEntry(entry, error.code, error.message);
+          } else {
+            this.failEntry(
+              entry,
+              TerminalErrorCode.TERMINAL_SPAWN_FAILED,
+              `Process execution failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        } finally {
+          this.activeCount--;
+          this.processQueue();
+        }
+      })();
+            kind: 'terminal-execution-result',
+            requestId: request.requestId,
+            terminalId: entry.terminalId,
+            state,
+            exitCode: processResult.exitCode,
+            exitSignal: processResult.exitSignal,
+            stdout: processResult.stdout,
+            stderr: processResult.stderr,
+            stdoutTruncated: processResult.stdoutTruncated,
+            stderrTruncated: processResult.stderrTruncated,
+            outputSizeBytes: processResult.outputSizeBytes,
+            startedAt: processResult.startedAt,
+            completedAt: processResult.completedAt,
+            executionMs: processResult.executionMs,
+            cancelled: processResult.killed,
+            timedOut: processResult.timedOut,
+            error: processResult.exitCode !== 0 && !processResult.killed && !processResult.timedOut
+              ? {
+                  code: TerminalErrorCode.TERMINAL_INVALID_RESULT,
+                  message: `Process exited with code ${processResult.exitCode}`,
+                }
+              : null,
+          };
+
+          this.completeEntry(entry, executionResult);
+        } catch (error) {
+          entry.processHandle = null;
+          if (isTerminalError(error)) {
+            this.failEntry(entry, error.code, error.message);
+          } else {
+            this.failEntry(
+              entry,
+              TerminalErrorCode.TERMINAL_SPAWN_FAILED,
+              `Process execution failed: ${error instanceof Error ? error.message : String(error)}`
+            );
+          }
+        } finally {
+          this.activeCount--;
+          this.processQueue();
+        }
+      })();
+
+      // Set timeout timer.
+      entry.timeoutTimer = setTimeout(() => {
+        if (isActiveState(entry.state)) {
+          this.cancel(entry.terminalId, 'timeout');
+        }
+      }, timeoutMs);
+
+      // Store a placeholder process handle so cancellation can find it.
+      // The real handle is assigned by spawnControlledProcess via entry.processHandle.
+      entry.processHandle = {
+        pid: 0,
+        kill: () => false,
+      };
+    }).catch(error => {
       this.failEntry(
         entry,
         TerminalErrorCode.TERMINAL_INVALID_IDENTITY,
         `Executable resolution failed: ${error instanceof Error ? error.message : String(error)}`
       );
-      return;
-    }
-
-    // --- Re-check executable policy against resolved identity ---
-    const permission = checkExecutablePermission(
-      {
-        resolve: () => ({
-          kind: 'resolved',
-          executable: {
-            resolvedPath: resolvedResolvedPath,
-            displayName: resolvedDisplayName,
-            platform: resolvedPlatform,
-          },
-        }),
-      },
-      this.executablePolicy,
-      command.executable,
-      command.workingDirectory
-    );
-
-    if (!permission.permitted) {
-      this.failEntry(
-        entry,
-        TerminalErrorCode.TERMINAL_INVALID_IDENTITY,
-        `Executable not permitted: ${permission.reason ?? 'policy denied'}`
-      );
-      return;
-    }
-
-    // --- Build sanitized environment ---
-    const spawnEnv = buildSanitizedEnvironment({}, this.platform);
-
-    // --- Set up timeout ---
-    const timeoutMs = this.limits.maxExecutionMs;
-
-    const executePromise = (async (): Promise<TerminalExecutionResult> => {
-      try {
-        const processResult = await spawnControlledProcess(
-          resolvedResolvedPath,
-          command.arguments,
-          {
-            cwd: command.workingDirectory,
-            env: spawnEnv,
-            signal: entry.abortController.signal,
-            maxOutputBytes: this.limits.maxOutputSizeBytes,
-            windowsHide: true,
-          },
-          this.spawnFn
-        );
-
-        entry.processHandle = null;
-
-        // Map process result to terminal execution result.
-        const state: TerminalLifecycleState =
-          processResult.exitCode === 0 && !processResult.killed && !processResult.timedOut
-            ? 'completed'
-            : processResult.timedOut
-              ? 'timed-out'
-              : processResult.killed
-                ? 'cancelled'
-                : 'failed';
-
-        const result: TerminalExecutionResult = {
-          kind: 'terminal-execution-result',
-          requestId: request.requestId,
-          terminalId: entry.terminalId,
-          state,
-          exitCode: processResult.exitCode,
-          exitSignal: processResult.exitSignal,
-          stdout: processResult.stdout,
-          stderr: processResult.stderr,
-          stdoutTruncated: processResult.stdoutTruncated,
-          stderrTruncated: processResult.stderrTruncated,
-          outputSizeBytes: processResult.outputSizeBytes,
-          startedAt: processResult.startedAt,
-          completedAt: processResult.completedAt,
-          executionMs: processResult.executionMs,
-          cancelled: processResult.killed,
-          timedOut: processResult.timedOut,
-          error: processResult.exitCode !== 0 && !processResult.killed && !processResult.timedOut
-            ? {
-                code: TerminalErrorCode.TERMINAL_INVALID_RESULT,
-                message: `Process exited with code ${processResult.exitCode}`,
-              }
-            : null,
-        };
-
-        this.completeEntry(entry, result);
-        return result;
-      } catch (error) {
-        entry.processHandle = null;
-        if (isTerminalError(error)) {
-          this.failEntry(entry, error.code, error.message);
-          throw error;
-        }
-        this.failEntry(
-          entry,
-          TerminalErrorCode.TERMINAL_SPAWN_FAILED,
-          `Process execution failed: ${error instanceof Error ? error.message : String(error)}`
-        );
-        throw error;
-      } finally {
-        this.activeCount--;
-        this.processQueue();
-      }
-    })();
-
-    // Set timeout timer.
-    entry.timeoutTimer = setTimeout(() => {
-      if (isActiveState(entry.state)) {
-        entry.abortController.abort();
-        this.cancel(entry.terminalId, 'timeout');
-      }
-    }, timeoutMs);
-
-    // Fire and forget the execution promise; the result is delivered via
-    // the submission promise returned from submit().
-    void executePromise;
+    });
   }
 
   private processQueue(): void {
@@ -629,7 +678,11 @@ export class TerminalExecutionService {
   }
 
   private completeEntry(entry: TerminalExecutionEntry, result: TerminalExecutionResult): void {
-    entry.state = applyTransition(entry.state, result.state as TerminalLifecycleState);
+    try {
+      entry.state = applyTransition(entry.state, result.state as TerminalLifecycleState);
+    } catch {
+      // If already terminal (e.g. disposed during cancellation), keep current state.
+    }
     entry.result = result;
     if (entry.resolve) {
       entry.resolve(result);

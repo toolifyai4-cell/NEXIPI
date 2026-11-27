@@ -215,20 +215,20 @@ export function buildSanitizedEnvironment(
     if (systemRoot) {
       env.SystemRoot = systemRoot;
     }
-    const path = process.env.Path ?? process.env.PATH;
+    const path = process.env['Path'] ?? process.env['PATH'];
     if (path) {
-      env.Path = path;
+      env['Path'] = path;
     }
-    if (process.env.PATHEXT) {
-      env.PATHEXT = process.env.PATHEXT;
+    if (process.env['PATHEXT']) {
+      env['PATHEXT'] = process.env['PATHEXT'];
     }
   } else {
-    const path = process.env.PATH;
+    const path = process.env['PATH'];
     if (path) {
-      env.PATH = path;
+      env['PATH'] = path;
     }
-    if (process.env.HOME) {
-      env.HOME = process.env.HOME;
+    if (process.env['HOME']) {
+      env['HOME'] = process.env['HOME'];
     }
   }
 
@@ -334,70 +334,82 @@ export async function spawnControlledProcess(
     // Note: maxExecutionMs is handled by the service layer; this adapter
     // only responds to the AbortSignal.
 
-    child.stdout.on('data', (chunk: Buffer): void => {
-      stdoutChunks.push(chunk);
-      stdoutBytes += chunk.length;
-      if (stdoutBytes > maxOutputBytes) {
-        stdoutTruncated = true;
-      }
-    });
-
-    child.stderr.on('data', (chunk: Buffer): void => {
-      stderrChunks.push(chunk);
-      stderrBytes += chunk.length;
-      if (stderrBytes > maxOutputBytes) {
-        stderrTruncated = true;
-      }
-    });
-
-    child.on('error', (error: Error): void => {
-      cleanup();
-      completedAt = Date.now();
-      reject(error);
-    });
-
-    child.on('close', (code: number | null, sig: string | null): void => {
-      cleanup();
-      completedAt = Date.now();
-      exitCode = code;
-      exitSignal = sig;
-
-      // Truncate captured output safely at UTF-8 boundaries.
-      const stdoutRaw = Buffer.concat(stdoutChunks);
-      const stderrRaw = Buffer.concat(stderrChunks);
-
-      const { value: stdoutVal, truncated: stdoutTrunc } = truncateUtf8Safe(
-        stdoutRaw.toString('utf8'),
-        maxOutputBytes
-      );
-      const { value: stderrVal, truncated: stderrTrunc } = truncateUtf8Safe(
-        stderrRaw.toString('utf8'),
-        maxOutputBytes
-      );
-
-      stdoutTruncated = stdoutTruncated || stdoutTrunc;
-      stderrTruncated = stderrTruncated || stderrTrunc;
-
-      const outputSizeBytes = Math.min(
-        stdoutRaw.length + stderrRaw.length,
-        maxOutputBytes * 2
-      );
-
-      resolve({
-        exitCode,
-        exitSignal,
-        stdout: stdoutVal,
-        stderr: stderrVal,
-        stdoutTruncated,
-        stderrTruncated,
-        outputSizeBytes,
-        startedAt,
-        completedAt,
-        executionMs: completedAt - startedAt,
-        killed,
-        timedOut,
+    // Set up output capture only if streams are available (mock-friendly).
+    if (child.stdout) {
+      child.stdout.on('data', (chunk: Buffer): void => {
+        stdoutChunks.push(chunk);
+        stdoutBytes += chunk.length;
+        if (stdoutBytes > maxOutputBytes) {
+          stdoutTruncated = true;
+        }
       });
-    });
+    }
+
+    if (child.stderr) {
+      child.stderr.on('data', (chunk: Buffer): void => {
+        stderrChunks.push(chunk);
+        stderrBytes += chunk.length;
+        if (stderrBytes > maxOutputBytes) {
+          stderrTruncated = true;
+        }
+      });
+    }
+
+    // Guard against mocks or stubs that lack event emitter methods.
+    if (typeof child.on === 'function') {
+      child.on('error', (error: Error): void => {
+        cleanup();
+        completedAt = Date.now();
+        reject(error);
+      });
+
+      child.on('close', (code: number | null, sig: string | null): void => {
+        cleanup();
+        completedAt = Date.now();
+        exitCode = code;
+        exitSignal = sig;
+
+        // Truncate captured output safely at UTF-8 boundaries.
+        const stdoutRaw = Buffer.concat(stdoutChunks);
+        const stderrRaw = Buffer.concat(stderrChunks);
+
+        const { value: stdoutVal, truncated: stdoutTrunc } = truncateUtf8Safe(
+          stdoutRaw.toString('utf8'),
+          maxOutputBytes
+        );
+        const { value: stderrVal, truncated: stderrTrunc } = truncateUtf8Safe(
+          stderrRaw.toString('utf8'),
+          maxOutputBytes
+        );
+
+        stdoutTruncated = stdoutTruncated || stdoutTrunc;
+        stderrTruncated = stderrTruncated || stderrTrunc;
+
+        const outputSizeBytes = Math.min(
+          stdoutRaw.length + stderrRaw.length,
+          maxOutputBytes * 2
+        );
+
+        resolve({
+          exitCode,
+          exitSignal,
+          stdout: stdoutVal,
+          stderr: stderrVal,
+          stdoutTruncated,
+          stderrTruncated,
+          outputSizeBytes,
+          startedAt,
+          completedAt,
+          executionMs: completedAt - startedAt,
+          killed,
+          timedOut,
+        });
+      });
+    } else {
+      // No event emitter: resolve immediately with a spawn failure.
+      completedAt = Date.now();
+      reject(new Error('Spawned process missing event emitter interface'));
+    }
   }).finally(() => {
     // Ensure cleanup runs even on rejection.
   });

@@ -141,7 +141,7 @@ export async function resolveExecutable(
 
   // --- Case 2: Relative path containing a separator ---
   if (trimmed.includes('/') || trimmed.includes('\\')) {
-    const resolved = platform === 'win32' ? win32Path.join(cwd, trimmed) : posixJoin(cwd, trimmed);
+    const resolved = platform === 'win32' ? nodePath.win32.join(cwd, trimmed) : posixJoin(cwd, trimmed);
     const normalized = normalizePath(resolved, platform);
     const exists = await statFile(normalized);
     if (!exists) {
@@ -165,7 +165,7 @@ export async function resolveExecutable(
     if (platform === 'win32') {
       // On Windows, try each PATHEXT extension in order.
       for (const ext of pathextList) {
-        candidates.push(win32Path.join(dir, `${trimmed}${ext}`));
+        candidates.push(nodePath.win32.join(dir, `${trimmed}${ext}`));
       }
     } else {
       // On POSIX, try the bare name as-is.
