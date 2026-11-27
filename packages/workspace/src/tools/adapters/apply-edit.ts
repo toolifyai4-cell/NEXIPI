@@ -266,7 +266,8 @@ function isWriteCancelled(error: unknown): boolean {
     return error.code === 'WRITE_CANCELLED';
   }
   if (error instanceof Error) {
-    return error.name === 'AbortError' || (error as Error & { code?: string }).code === 'ABORT_ERR';
+    const code = (error as Error & { code?: string }).code;
+    return error.name === 'AbortError' || code === 'ABORT_ERR' || code === 'WRITE_CANCELLED';
   }
   return false;
 }

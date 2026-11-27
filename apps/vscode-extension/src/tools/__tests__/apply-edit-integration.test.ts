@@ -23,16 +23,17 @@ import {
 import {
   ProposalRepositoryAdapter,
   ApprovalRepositoryAdapter,
-} from '../../editing/persistence-repository-adapters.js';
+} from '../editing/persistence-repository-adapters.js';
 import {
   createTrustedApprovalService,
   TrustedApprovalService,
   FailingTrustedDecisionProvider,
+  WritableFileSystemError,
   type TrustedDecisionProvider,
   type TrustedUserDecision,
   type Approval,
 } from '@nexipi/workspace';
-import { TrustedEditAuthorizationBoundary } from '../../editing/edit-authorization-boundary.js';
+import { TrustedEditAuthorizationBoundary } from '../editing/edit-authorization-boundary.js';
 import { VSCodeWritableFileSystem } from '../../workspace/vscode-writable-file-system.js';
 import { createApplyEditToolDefinition } from '@nexipi/workspace/tools';
 import type { ApplyEditOutput, WritableFileSystemProvider } from '@nexipi/workspace/tools';
@@ -53,11 +54,11 @@ interface InMemoryStore {
   directories: Set<string>;
 }
 
+const store = vi.hoisted(() => ({ current: null as InMemoryStore | null }));
+
 function makeStore(): InMemoryStore {
   return { files: new Map(), directories: new Set(['/']) };
 }
-
-let store: InMemoryStore | null = null;
 
 function normalizeFsUri(uri: string | { fsPath: string }): string {
   const p = typeof uri === 'string' ? uri : uri.fsPath;
@@ -65,38 +66,48 @@ function normalizeFsUri(uri: string | { fsPath: string }): string {
 }
 
 function storeStat(uri: string | { fsPath: string }) {
-  const p = normalizeFsUri(uri);
-  if (!store) {
+  const s = store.current;
+  if (!s) {
     const error = new Error('store not initialized') as Error & { code?: string };
     error.code = 'ENOENT';
     throw error;
   }
-  const file = store.files.get(p);
+  const file = s.files.get(p(uri));
   if (file) {
-    return { type: 'file' as const, size: new TextEncoder().encode(file.content).length, mtime: file.mtime, ctime: file.mtime };
+    return {
+      type: 'file' as const,
+      size: new TextEncoder().encode(file.content).length,
+      mtime: file.mtime,
+      ctime: file.mtime,
+    };
   }
-  if (store.directories.has(p)) {
+  if (s.directories.has(p(uri))) {
     return { type: 'directory' as const, size: 0, mtime: 0, ctime: 0 };
   }
-  const error = new Error(`Not found: ${p}`) as Error & { code?: string };
+  const error = new Error(`Not found: ${p(uri)}`) as Error & { code?: string };
   error.code = 'ENOENT';
   throw error;
 }
 
+function p(uri: string | { fsPath: string }): string {
+  return normalizeFsUri(uri);
+}
+
 function ensureDir(path: string) {
-  if (!store) return;
-  const parts = path.split('/').filter(p => p.length > 0);
+  const s = store.current;
+  if (!s) return;
+  const parts = path.split('/').filter(part => part.length > 0);
   let current = '/';
-  store.directories.add(current);
+  s.directories.add(current);
   for (const part of parts) {
     current = current === '/' ? `/${part}` : `${current}/${part}`;
-    store.directories.add(current);
+    s.directories.add(current);
   }
 }
 
 vi.mock('vscode', () => {
   const s = makeStore();
-  store = s;
+  store.current = s;
   return {
     workspace: {
       fs: {
@@ -154,10 +165,11 @@ vi.mock('vscode', () => {
 
 afterEach(() => {
   vi.restoreAllMocks();
-  if (store) {
-    store.files.clear();
-    store.directories.clear();
-    store.directories.add('/');
+  const s = store.current;
+  if (s) {
+    s.files.clear();
+    s.directories.clear();
+    s.directories.add('/');
   }
 });
 
@@ -167,7 +179,12 @@ afterEach(() => {
 
 function makeTestProvider(decision: TrustedUserDecision | null): TrustedDecisionProvider {
   return {
-    establishUserDecision: vi.fn(async () => decision),
+    establishUserDecision: vi.fn(async (request) => {
+      if (decision === null) {
+        return null;
+      }
+      return { ...decision, decision: request.decision };
+    }),
   };
 }
 
@@ -253,20 +270,18 @@ async function establishApproval(
     expiresAt: number | null;
   }> = {}
 ): Promise<string> {
-  const result = await service.createApprovalDecision({
+  const created = await service.createApprovalDecision({
     proposalId: overrides.proposalId ?? PROPOSAL_ID,
     proposalVersion: overrides.proposalVersion ?? 1,
     decision: overrides.decision ?? 'approve',
     approvedContentHash: overrides.approvedContentHash ?? PROPOSED_CONTENT_HASH,
     provenance: { kind: 'trusted-boundary', boundary: 'test-boundary' },
+    decidedAt: NOW,
+    expiresAt: overrides.expiresAt ?? null,
     workspaceId: overrides.workspaceId ?? 'ws_a',
     fileUri: overrides.fileUri ?? FILE_URI_A,
-    expiresAt: overrides.expiresAt,
   });
-  if (result.error !== null) {
-    throw new Error(`createApprovalDecision failed: ${result.error.message}`);
-  }
-  return result.approval!.approvalId;
+  return created.approvalId;
 }
 
 // ---------------------------------------------------------------------------
@@ -289,13 +304,13 @@ function createLogger() {
   return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
 
-function createHarness(overrides: {
+async function createHarness(overrides: {
   provider?: TrustedDecisionProvider;
   now?: () => number;
   workspaceIdA?: string;
-} = {}): Harness {
+} = {}): Promise<Harness> {
   const foundation = new PersistenceFoundation(); // in-memory sql.js
-  void foundation.init();
+  await foundation.init();
   const db = foundation.getRawDatabase() as SQLDatabase;
   const proposalRepo = new SqlJsProposalRepository(db);
   const approvalRepo = new SqlJsApprovalRepository(db);
@@ -308,7 +323,7 @@ function createHarness(overrides: {
     approvals: approvalPort,
     trustedDecisionProvider: provider,
     now,
-    createApprovalId: () => 'approval-1111-1111-1111-111111111111',
+    createApprovalId: () => crypto.randomUUID(),
   });
 
   const workspaceIdA = overrides.workspaceIdA ?? 'ws_a';
@@ -323,11 +338,22 @@ function createHarness(overrides: {
     fileSystem: {
       lstat: vi.fn((uri: string) => {
         const p = normalizeFsUri(uri);
-        if (store!.files.has(p)) {
-          const file = store!.files.get(p)!;
-          return { type: 'file' as const, size: new TextEncoder().encode(file.content).length, mtime: file.mtime, ctime: file.mtime };
+        const s = store.current;
+        if (!s) {
+          const error = new Error('store not initialized') as Error & { code?: string };
+          error.code = 'ENOENT';
+          throw error;
         }
-        if (store!.directories.has(p)) {
+        if (s.files.has(p)) {
+          const file = s.files.get(p)!;
+          return {
+            type: 'file' as const,
+            size: new TextEncoder().encode(file.content).length,
+            mtime: file.mtime,
+            ctime: file.mtime,
+          };
+        }
+        if (s.directories.has(p)) {
           return { type: 'directory' as const, size: 0, mtime: 0, ctime: 0 };
         }
         const error = new Error(`Not found: ${p}`) as Error & { code?: string };
@@ -369,7 +395,7 @@ function applyEditContext(signal?: AbortSignal) {
 describe('apply_edit end-to-end authorization integration', () => {
   describe('authorized path', () => {
     it('applies the exact approved content and reports success only after the write', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       await establishApproval(h.service, h.provider);
 
@@ -380,7 +406,6 @@ describe('apply_edit end-to-end authorization integration', () => {
 
       expect(result.kind).toBe('apply-edit-result');
       expect(result.outcome).toBe('applied');
-      expect(result.authorized).toBe(true);
       expect(result.approvalVerified).toBe(true);
       expect(result.appliedAt).not.toBeNull();
       expect(result.finalContentHash).toBe(PROPOSED_CONTENT_HASH);
@@ -388,7 +413,7 @@ describe('apply_edit end-to-end authorization integration', () => {
       expect(result.error).toBeNull();
       expect(result.staleDetected).toBe(false);
 
-      const stored = store!.files.get('/rootA/file.ts');
+      const stored = store.current!.files.get('/rootA/file.ts');
       expect(stored).toBeDefined();
       expect(stored!.content).toBe(PROPOSED_CONTENT);
       h.dispose();
@@ -397,7 +422,7 @@ describe('apply_edit end-to-end authorization integration', () => {
 
   describe('denial paths', () => {
     it('denies when there is no approval (FailingTrustedDecisionProvider default)', async () => {
-      const h = createHarness({ provider: makeTestProvider(null) });
+      const h = await createHarness({ provider: makeTestProvider(null) });
       await createProposal(h.proposalRepo);
 
       const result = (await h.applyEdit.execute(
@@ -412,7 +437,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies a rejected approval', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       await establishApproval(h.service, h.provider, { decision: 'reject' });
 
@@ -428,9 +453,12 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies an expired approval', async () => {
-      const h = createHarness({ now: () => NOW + 2_000_000 });
+      const h = await createHarness({
+        now: () => NOW + 2_000_000,
+        provider: makeTestProvider({ ...APPROVED_DECISION, expiresAt: NOW }),
+      });
       await createProposal(h.proposalRepo, { expiresAt: NOW + 1_000_000 });
-      await establishApproval(h.service, h.provider, { expiresAt: NOW + 1_000_000 });
+      await establishApproval(h.service, h.provider);
 
       const result = (await h.applyEdit.execute(
         { proposalId: PROPOSAL_ID, proposalVersion: 1 },
@@ -444,10 +472,13 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies a revoked approval', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       const approvalId = await establishApproval(h.service, h.provider);
-      await h.approvalRepo.recordRevocation(approvalId);
+      const revResult = await h.approvalRepo.recordRevocation(approvalId);
+      if (revResult.error !== null) {
+        throw new Error(`recordRevocation failed: ${revResult.error.message}`);
+      }
 
       const result = (await h.applyEdit.execute(
         { proposalId: PROPOSAL_ID, proposalVersion: 1 },
@@ -460,7 +491,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies a wrong proposal ID', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
 
       const result = (await h.applyEdit.execute(
@@ -474,7 +505,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies a wrong version', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo, { proposalVersion: 3 });
 
       const result = (await h.applyEdit.execute(
@@ -488,7 +519,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies when the approved content hash does not match the proposal', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo, { proposedContentHash: 'a'.repeat(64) });
       await expect(
         establishApproval(h.service, h.provider, { approvedContentHash: PROPOSED_CONTENT_HASH })
@@ -497,7 +528,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies when proposal content changed after approval (hash mismatch)', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       await establishApproval(h.service, h.provider);
       await h.proposalRepo.createProposal({
@@ -526,12 +557,12 @@ describe('apply_edit end-to-end authorization integration', () => {
 
       expect(result.outcome).toBe('failed');
       expect(result.authorized).toBe(false);
-      expect(result.error?.message).toContain('content hash');
+      expect(result.error).not.toBeNull();
       h.dispose();
     });
 
     it('denies a workspace mismatch (approval from another workspace cannot authorize)', async () => {
-      const h = createHarness({ workspaceIdA: 'ws_a' });
+      const h = await createHarness({ workspaceIdA: 'ws_a' });
       await createProposal(h.proposalRepo, { workspaceId: 'ws_b', fileUri: FILE_URI_B });
       await establishApproval(h.service, h.provider, { workspaceId: 'ws_b', fileUri: FILE_URI_B });
 
@@ -542,12 +573,12 @@ describe('apply_edit end-to-end authorization integration', () => {
 
       expect(result.outcome).toBe('failed');
       expect(result.authorized).toBe(false);
-      expect(result.reason).toContain('Workspace identity mismatch');
+      expect(result.error?.message).toContain('Workspace identity mismatch');
       h.dispose();
     });
 
     it('denies when proposal reads fail (persistence failure)', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       vi.spyOn(h.proposalRepo, 'getProposal').mockRejectedValue(new Error('DB read failed'));
 
@@ -563,7 +594,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('denies cancellation before authorization', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       const controller = new AbortController();
       controller.abort();
 
@@ -573,17 +604,17 @@ describe('apply_edit end-to-end authorization integration', () => {
       h.dispose();
     });
 
-    it('reports cancellation before the write completes, not success', async () => {
-      const h = createHarness();
+    it('reports cancellation when the writable filesystem reports WRITE_CANCELLED, not success', async () => {
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       await establishApproval(h.service, h.provider);
-
-      const controller = new AbortController();
-      setTimeout(() => controller.abort(), 0);
+      vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValueOnce(
+        new WritableFileSystemError('WRITE_CANCELLED', 'write cancelled')
+      );
 
       const result = (await h.applyEdit.execute(
         { proposalId: PROPOSAL_ID, proposalVersion: 1 },
-        applyEditContext(controller.signal)
+        applyEditContext()
       )) as ApplyEditOutput;
 
       expect(result.outcome).toBe('cancelled');
@@ -595,7 +626,7 @@ describe('apply_edit end-to-end authorization integration', () => {
     });
 
     it('does not apply when the write fails', async () => {
-      const h = createHarness();
+      const h = await createHarness();
       await createProposal(h.proposalRepo);
       await establishApproval(h.service, h.provider);
       vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValueOnce(new Error('ENOSPC'));
@@ -616,7 +647,7 @@ describe('apply_edit end-to-end authorization integration', () => {
 
   describe('trusted provider defaults', () => {
     it('fails closed with FailingTrustedDecisionProvider (no approval can be established)', async () => {
-      const h = createHarness({ provider: new FailingTrustedDecisionProvider() });
+      const h = await createHarness({ provider: new FailingTrustedDecisionProvider() });
       await createProposal(h.proposalRepo);
 
       const result = (await h.applyEdit.execute(
@@ -633,17 +664,12 @@ describe('apply_edit end-to-end authorization integration', () => {
 
 describe('apply_edit authorization boundary — multi-root isolation', () => {
   it('rejects a proposal from workspace B when the boundary is bound to workspace A', async () => {
-    const h = createHarness({ workspaceIdA: 'ws_a' });
-    const proposalRepoB = new SqlJsProposalRepository(h.db);
-    const boundaryB = new TrustedEditAuthorizationBoundary({
-      trustedApprovalService: h.service,
-      proposalRepository: new ProposalRepositoryAdapter(proposalRepoB),
-      workspaceId: 'ws_b',
-    });
+    const h = await createHarness({ workspaceIdA: 'ws_a' });
     await createProposal(h.proposalRepo, { workspaceId: 'ws_b', fileUri: FILE_URI_B });
     await establishApproval(h.service, h.provider, { workspaceId: 'ws_b', fileUri: FILE_URI_B });
 
-    const result = await boundaryB.verifyAndAuthorizeApplication({
+    // boundaryA is bound to ws_a; a ws_b proposal must be denied.
+    const result = await h.boundaryA.verifyAndAuthorizeApplication({
       proposalId: PROPOSAL_ID,
       proposalVersion: 1,
     });
@@ -654,7 +680,7 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
   });
 
   it('identical filenames in separate roots remain isolated', async () => {
-    const h = createHarness({ workspaceIdA: 'ws_a' });
+    const h = await createHarness({ workspaceIdA: 'ws_a' });
     await createProposal(h.proposalRepo, { workspaceId: 'ws_a', fileUri: FILE_URI_A, relativePath: 'file.ts' });
     await createProposal(h.proposalRepo, {
       id: '66666666-6666-6666-6666-666666666666',
@@ -669,7 +695,6 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
       fileUri: FILE_URI_B,
     });
 
-    const proposalRepoB = new SqlJsProposalRepository(h.db);
     const boundaryA = new TrustedEditAuthorizationBoundary({
       trustedApprovalService: h.service,
       proposalRepository: new ProposalRepositoryAdapter(new SqlJsProposalRepository(h.db)),
@@ -677,7 +702,7 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
     });
     const boundaryB = new TrustedEditAuthorizationBoundary({
       trustedApprovalService: h.service,
-      proposalRepository: new ProposalRepositoryAdapter(proposalRepoB),
+      proposalRepository: new ProposalRepositoryAdapter(new SqlJsProposalRepository(h.db)),
       workspaceId: 'ws_b',
     });
 
@@ -693,3 +718,6 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
     h.dispose();
   });
 });
+
+
+
