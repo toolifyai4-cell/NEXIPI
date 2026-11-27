@@ -96,6 +96,7 @@ const ApplyEditInputSchema = z
   .strict();
 
 export type ApplyEditInput = z.infer<typeof ApplyEditInputSchema>;
+export { ApplyEditInputSchema };
 
 const ApplyEditOutputSchema = z.object({
   kind: z.literal('apply-edit-result'),
@@ -120,6 +121,7 @@ const ApplyEditOutputSchema = z.object({
 });
 
 export type ApplyEditOutput = z.infer<typeof ApplyEditOutputSchema>;
+export { ApplyEditOutputSchema };
 
 function checkCancelled(signal: AbortSignal | undefined): void {
   if (signal?.aborted) {

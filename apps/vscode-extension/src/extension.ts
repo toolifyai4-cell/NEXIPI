@@ -13,11 +13,14 @@ import {
   createPersistenceService,
   SqlJsConversationRepository,
   SqlJsMessageRepository,
+  SqlJsProposalRepository,
+  SqlJsApprovalRepository,
 } from '@nexipi/persistence';
 import { createPersistenceAdapter } from '@nexipi/models';
 import { WorkspaceManager } from './workspace/workspace-manager.js';
 import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
 import { VSCodeFileSystemProvider } from './workspace/vscode-file-system-provider.js';
+import { VSCodeWritableFileSystem } from './workspace/vscode-writable-file-system.js';
 import {
   createToolRegistry,
   type ToolRegistry,
@@ -31,8 +34,20 @@ import {
   createListDirectoryToolDefinition,
   createSearchCodeToolDefinition,
   createFindReferencesToolDefinition,
+  createApplyEditToolDefinition,
+  checkCancelled,
+  type ApplyEditInput,
+  type ApplyEditOutput,
 } from '@nexipi/workspace/tools';
+import {
+  createTrustedApprovalService,
+  FailingTrustedDecisionProvider,
+  type TrustedApprovalService,
+} from '@nexipi/workspace';
 import type {
+  WritableFileSystemProvider,
+  ProposalRepositoryPort,
+  ApprovalRepositoryPort,
   WorkspaceFolder,
   ReadFileResult,
   ListDirectoryResult,
@@ -40,6 +55,12 @@ import type {
   ReferenceDiscoveryResult,
 } from '@nexipi/workspace';
 import { createReadOnlyWorkspacePermissionPolicy } from './tools/permission-policy.js';
+import { createComposedToolPermissionPolicy } from './tools/editing/composed-permission-policy.js';
+import {
+  ProposalRepositoryAdapter,
+  ApprovalRepositoryAdapter,
+} from './tools/editing/persistence-repository-adapters.js';
+import { TrustedEditAuthorizationBoundary } from './tools/editing/edit-authorization-boundary.js';
 import type { ToolDefinition, ToolExecutionContext } from '@nexipi/models/tools';
 
 interface NexiPiContext {
@@ -58,6 +79,19 @@ let gChatService: ChatService | undefined;
 let gPersistenceService: PersistencePortService | undefined;
 let gPersistenceAdapter: { dispose: () => void } | undefined;
 let gLogger: Logger | undefined;
+let gProposalRepositoryPort: ProposalRepositoryPort | undefined;
+let gApprovalRepositoryPort: ApprovalRepositoryPort | undefined;
+let gTrustedApprovalService: TrustedApprovalService | undefined;
+
+/**
+ * Per-workspace editing services, bound to a single workspace identity each.
+ * A disposed workspace's entry is removed so it cannot keep authorizing edits.
+ */
+interface WorkspaceEditingServices {
+  readonly boundary: TrustedEditAuthorizationBoundary;
+  readonly writableFileSystem: VSCodeWritableFileSystem;
+}
+const workspaceEditing = new Map<string, WorkspaceEditingServices>();
 let gWorkspaceManager: WorkspaceManager | undefined;
 let gToolRegistry: ToolRegistry | undefined;
 let gToolExecutionService: ToolExecutionService | undefined;
@@ -639,12 +673,125 @@ export function createRoutedFindReferencesTool(): ToolDefinition {
   };
 }
 
+function applyEditFail(
+  proposalId: string,
+  proposalVersion: number,
+  code: ToolErrorCode,
+  message: string,
+  approvalVerified: boolean,
+  authorized: boolean
+): ApplyEditOutput {
+  return {
+    kind: 'apply-edit-result',
+    proposalId,
+    proposalVersion,
+    outcome: 'failed',
+    approvalVerified,
+    authorized,
+    appliedAt: null,
+    finalContentHash: null,
+    finalSize: null,
+    error: { code, message },
+    staleDetected: false,
+  };
+}
+
+export function createRoutedApplyEditTool(): ToolDefinition {
+  return {
+    name: 'apply_edit',
+    description:
+      'Apply a previously created edit proposal. The model may supply only the proposal identity and version. Execution fails closed until the trusted authorization boundary verifies an approval for the exact proposal version and content hash from persisted state. When authorized, the verified content is written to the verified file path immediately before the write succeeds. A model-generated call is never sufficient to authorize a filesystem write.',
+    inputSchema: ApplyEditInputSchema,
+    outputSchema: ApplyEditOutputSchema,
+    metadata: {
+      capabilities: ['write'] as const,
+      readOnly: false,
+      destructive: true,
+      requiresWorkspace: true,
+      idempotent: false,
+      version: '1.0.0',
+    },
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<ApplyEditOutput> => {
+      const { proposalId, proposalVersion } = input as ApplyEditInput;
+
+      checkCancelled(context.signal);
+
+      if (gProposalRepositoryPort === undefined) {
+        return applyEditFail(
+          proposalId,
+          proposalVersion,
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          'Editing services are not initialized',
+          false,
+          false
+        );
+      }
+
+      // Load the exact persisted proposal to determine its workspace identity
+      // from trusted persisted state, not from untrusted model input.
+      const proposalResult = await gProposalRepositoryPort.getProposal(proposalId, proposalVersion);
+      if (proposalResult.error !== null) {
+        return applyEditFail(
+          proposalId,
+          proposalVersion,
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          `Unable to read proposal: ${proposalResult.error.message}`,
+          false,
+          false
+        );
+      }
+      const proposal = proposalResult.proposal;
+      if (proposal === null) {
+        return applyEditFail(
+          proposalId,
+          proposalVersion,
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `Proposal '${proposalId}' version ${proposalVersion} not found`,
+          false,
+          false
+        );
+      }
+
+      const editing = workspaceEditing.get(proposal.workspaceId);
+      if (editing === undefined) {
+        return applyEditFail(
+          proposalId,
+          proposalVersion,
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${proposal.workspaceId}' is not registered or has been disposed`,
+          false,
+          false
+        );
+      }
+
+      const adapter = getWorkspaceAdapter(proposal.workspaceId);
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: proposal.workspaceId,
+        workspaceFolder: adapter
+          ? { uri: adapter.folder.uri, id: adapter.folder.id }
+          : undefined,
+      };
+
+      // Delegate to the workspace-scoped apply adapter, which re-verifies the
+      // proposal belongs to this boundary's workspace and performs the write
+      // immediately after authorization using exactly the verified content.
+      const tool = createApplyEditToolDefinition({
+        authorization: editing.boundary,
+        writableFileSystem: editing.writableFileSystem,
+      });
+      return tool.execute(input, folderContext) as Promise<ApplyEditOutput>;
+    },
+  };
+}
+
 function registerRoutedTools(toolRegistry: ToolRegistry, logger: Logger): void {
   const tools = [
     createRoutedReadFileTool(),
     createRoutedListDirectoryTool(),
     createRoutedSearchCodeTool(),
     createRoutedFindReferencesTool(),
+    createRoutedApplyEditTool(),
   ];
 
   for (const tool of tools) {
@@ -1190,7 +1337,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     /* ToolRegistry has no dispose */
   });
 
-  const permissionPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
+  const permissionPolicy = createComposedToolPermissionPolicy(logger);
   const toolExecutor = new ToolExecutor(toolRegistry, { permissionPolicy, logger });
 
   const toolExecutionServiceConfig: ToolExecutionServiceConfig = {
