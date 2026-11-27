@@ -230,31 +230,42 @@ export class TerminalExecutionService {
           this.workspaceBoundaryValidator
         );
 
-        // --- Verify approval binding (if present) ---
-        if (request.approvalBinding !== undefined) {
-          try {
-            assertApprovalBindingMatchesCommand(
-              request.approvalBinding,
-              {
-                executable: validated.command.executable,
-                arguments: validated.command.arguments,
-                workingDirectory: validated.command.workingDirectory,
-                workspaceId: validated.command.workspaceId,
-                environmentConfigId: validated.command.environmentConfig?.id,
-              }
-            );
-          } catch (error) {
-            if (isTerminalError(error)) {
-              this.failEntry(entry, error.code, error.message);
-              return;
+        // --- Require approval binding ---
+        // An ApprovalBinding is mandatory for every execution. Stage E owns
+        // trusted user approval UI and persistence; Stage D enforces that
+        // no command reaches spawn without a verified binding.
+        if (request.approvalBinding === undefined) {
+          this.failEntry(
+            entry,
+            TerminalErrorCode.TERMINAL_INVALID_REQUEST,
+            'Execution requires an approval binding',
+          );
+          return;
+        }
+
+        // --- Verify approval binding ---
+        try {
+          assertApprovalBindingMatchesCommand(
+            request.approvalBinding,
+            {
+              executable: validated.command.executable,
+              arguments: validated.command.arguments,
+              workingDirectory: validated.command.workingDirectory,
+              workspaceId: validated.command.workspaceId,
+              environmentConfigId: validated.command.environmentConfig?.id,
             }
-            this.failEntry(
-              entry,
-              TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH,
-              'Approval binding does not match the requested command',
-            );
+          );
+        } catch (error) {
+          if (isTerminalError(error)) {
+            this.failEntry(entry, error.code, error.message);
             return;
           }
+          this.failEntry(
+            entry,
+            TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH,
+            'Approval binding does not match the requested command',
+          );
+          return;
         }
 
         // --- Transition lifecycle: proposed -> validating -> awaiting-approval -> approved ---
@@ -310,7 +321,18 @@ export class TerminalExecutionService {
       return false;
     }
 
-    // Kill the process if running.
+    // Signal abort so the spawn adapter kills the child process. This is
+    // required even when the process handle is not yet stored (e.g. cancel
+    // racing with spawn startup).
+    try {
+      if (!entry.abortController.signal.aborted) {
+        entry.abortController.abort();
+      }
+    } catch {
+      // AbortController may already be aborted; safe to ignore.
+    }
+
+    // Kill the process tree if a handle is available.
     if (entry.processHandle !== null) {
       void terminateProcessTree(entry.processHandle, this.killProcessTreeFn);
     }
@@ -495,7 +517,7 @@ export class TerminalExecutionService {
 
       void (async (): Promise<void> => {
         try {
-          const processResult = await spawnControlledProcess(
+          const { handle, result } = spawnControlledProcess(
             resolvedExecutable.resolvedPath,
             command.arguments,
             {
@@ -508,6 +530,10 @@ export class TerminalExecutionService {
             this.spawnFn
           );
 
+          // Store the real process handle so cancellation can terminate it.
+          entry.processHandle = handle;
+
+          const processResult = await result;
           entry.processHandle = null;
 
           // Map process result to terminal execution result.
@@ -569,13 +595,6 @@ export class TerminalExecutionService {
           this.cancel(entry.terminalId, 'timeout');
         }
       }, timeoutMs);
-
-      // Store a placeholder process handle so cancellation can find it.
-      // The real handle is assigned by spawnControlledProcess via entry.processHandle.
-      entry.processHandle = {
-        pid: 0,
-        kill: () => false,
-      };
     }).catch(error => {
       this.failEntry(
         entry,

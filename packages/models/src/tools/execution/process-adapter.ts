@@ -57,6 +57,11 @@ export interface ProcessExecutionResult {
 export interface ProcessHandle {
   readonly pid: number;
   kill(signal?: string): boolean;
+  /**
+   * Optional wait for process exit. Returns a promise that resolves when
+   * the process has terminated, or rejects if the handle cannot wait.
+   */
+  waitForExit?: () => Promise<void>;
 }
 
 /**
@@ -246,20 +251,29 @@ export function buildSanitizedEnvironment(
 }
 
 /**
+ * Result of spawning a controlled process. Includes both the process handle
+ * (available synchronously for cancellation) and the result promise.
+ */
+export interface SpawnResult {
+  readonly handle: ProcessHandle;
+  readonly result: Promise<ProcessExecutionResult>;
+}
+
+/**
  * Spawns a controlled process and captures its output with bounds.
  *
  * @param executable - The resolved executable path.
  * @param args - Arguments passed separately (never shell-joined).
  * @param options - Spawn options including cwd, env, signal, output limits.
  * @param spawnFn - Injected spawn function (defaults to child_process.spawn).
- * @returns A promise resolving to ProcessExecutionResult.
+ * @returns A SpawnResult with the process handle and result promise.
  */
-export async function spawnControlledProcess(
+export function spawnControlledProcess(
   executable: string,
   args: readonly string[],
   options: ProcessSpawnOptions,
   spawnFn: SpawnFunction = spawn
-): Promise<ProcessExecutionResult> {
+): SpawnResult {
   const { cwd, env, signal, maxOutputBytes, windowsHide = true } = options;
 
   const startedAt = Date.now();
@@ -270,7 +284,7 @@ export async function spawnControlledProcess(
   let stdoutTruncated = false;
   let stderrTruncated = false;
   let killed = false;
-  const timedOut = false;
+  let timedOut = false;
   let completedAt: number | null = null;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
@@ -291,6 +305,7 @@ export async function spawnControlledProcess(
   const abortHandler = (): void => {
     if (!child.killed) {
       killed = true;
+      timedOut = true;
       child.kill('SIGTERM');
     }
   };
@@ -301,7 +316,30 @@ export async function spawnControlledProcess(
 
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
-  return new Promise<ProcessExecutionResult>((resolve, reject) => {
+  // Create a ProcessHandle with waitForExit backed by the child's 'close' event.
+  let exitResolve: (() => void) | null = null;
+  const exitPromise = new Promise<void>(resolve => {
+    exitResolve = resolve;
+  });
+
+  const handle: ProcessHandle = {
+    pid: child.pid ?? 0,
+    kill(sig?: string): boolean {
+      if (child.killed) {
+        return false;
+      }
+      try {
+        child.kill(sig as NodeJS.Signals);
+        killed = true;
+        return true;
+      } catch {
+        return false;
+      }
+    },
+    waitForExit: () => exitPromise,
+  };
+
+  const result = new Promise<ProcessExecutionResult>((resolve, reject) => {
     const cleanup = (): void => {
       if (signal) {
         signal.removeEventListener('abort', abortHandler);
@@ -340,6 +378,10 @@ export async function spawnControlledProcess(
       child.on('error', (error: Error): void => {
         cleanup();
         completedAt = Date.now();
+        if (exitResolve) {
+          exitResolve();
+          exitResolve = null;
+        }
         reject(error);
       });
 
@@ -348,6 +390,12 @@ export async function spawnControlledProcess(
         completedAt = Date.now();
         exitCode = code;
         exitSignal = sig;
+
+        // Signal that the process has exited.
+        if (exitResolve) {
+          exitResolve();
+          exitResolve = null;
+        }
 
         // Truncate captured output safely at UTF-8 boundaries.
         const stdoutRaw = Buffer.concat(stdoutChunks);
@@ -388,11 +436,17 @@ export async function spawnControlledProcess(
     } else {
       // No event emitter: resolve immediately with a spawn failure.
       completedAt = Date.now();
+      if (exitResolve) {
+        exitResolve();
+        exitResolve = null;
+      }
       reject(new Error('Spawned process missing event emitter interface'));
     }
   }).finally(() => {
     // Ensure cleanup runs even on rejection.
   });
+
+  return { handle, result };
 }
 
 /**
@@ -413,10 +467,32 @@ export async function terminateProcessTree(
   killTree: KillProcessTreeFunction = defaultKillProcessTree,
   graceMs: number = 5_000
 ): Promise<void> {
-  if (killTree(handle.pid, 'SIGTERM')) {
-    // Wait for the grace period.
+  if (!killTree(handle.pid, 'SIGTERM')) {
+    return;
+  }
+
+  // Wait for graceful termination, polling if waitForExit is available.
+  if (handle.waitForExit) {
+    try {
+      await handle.waitForExit();
+      return;
+    } catch {
+      // Process did not exit gracefully; fall through to forced termination.
+    }
+  } else {
+    // Fallback: wait the grace period without exit confirmation.
     await new Promise(resolve => setTimeout(resolve, graceMs));
-    // Force kill if still alive.
-    handle.kill('SIGKILL');
+  }
+
+  // Force kill if still alive.
+  handle.kill('SIGKILL');
+
+  // Wait briefly for forced termination if waitForExit is available.
+  if (handle.waitForExit) {
+    try {
+      await handle.waitForExit();
+    } catch {
+      // Process may not have exited; orphan risk remains.
+    }
   }
 }

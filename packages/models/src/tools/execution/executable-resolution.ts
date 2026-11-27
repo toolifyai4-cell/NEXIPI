@@ -83,7 +83,7 @@ function defaultPathextList(pathextEnv?: string): string[] {
       .map(ext => ext.trim())
       .filter(ext => ext.length > 0);
   }
-  return ['.exe', '.cmd', '.bat', '.com'];
+  return ['.exe', '.com'];
 }
 
 /**

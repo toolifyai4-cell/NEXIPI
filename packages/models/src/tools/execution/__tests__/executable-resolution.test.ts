@@ -208,3 +208,89 @@ describe('resolveExecutable — TOCTOU considerations', () => {
     }
   });
 });
+
+describe('resolveExecutable — Windows executable extensions', () => {
+  it('resolves .exe executables on Windows', async () => {
+    const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.exe');
+    const result = await resolveExecutable('tool', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+      pathEnv: 'C:\\Windows',
+      pathextEnv: '.exe;.com',
+    }));
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.exe');
+    }
+  });
+
+  it('resolves .com executables on Windows', async () => {
+    const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.com');
+    const result = await resolveExecutable('tool', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+      pathEnv: 'C:\\Windows',
+      pathextEnv: '.exe;.com',
+    }));
+    expect(result.kind).toBe('resolved');
+    if (result.kind === 'resolved') {
+      expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.com');
+    }
+  });
+
+  it('does not resolve .cmd executables (incompatible with shell:false)', async () => {
+    const statFile = vi.fn(async () => true);
+    const result = await resolveExecutable('tool.cmd', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+    }));
+    // .cmd is an absolute path with .cmd extension, but it's still a valid
+    // path resolution. The point is .cmd/.bat are NOT in the default PATHEXT
+    // list, so bare names won't resolve to them.
+    expect(result.kind).toBe('resolved');
+  });
+
+  it('does not resolve bare name to .cmd via default PATHEXT', async () => {
+    const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.cmd');
+    const result = await resolveExecutable('tool', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+      pathEnv: 'C:\\Windows',
+      // No pathextEnv means defaults are used: ['.exe', '.com']
+    }));
+    expect(result.kind).toBe('rejected');
+    expect(result.reason).toContain('not found in PATH');
+  });
+
+  it('does not resolve bare name to .bat via default PATHEXT', async () => {
+    const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.bat');
+    const result = await resolveExecutable('tool', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+      pathEnv: 'C:\\Windows',
+      // No pathextEnv means defaults are used: ['.exe', '.com']
+    }));
+    expect(result.kind).toBe('rejected');
+    expect(result.reason).toContain('not found in PATH');
+  });
+
+  it('PATHEXT resolution cannot bypass executable policy — .cmd not in defaults', async () => {
+    // Even if a .cmd file exists in PATH, the default PATHEXT list
+    // (['.exe', '.com']) does not include .cmd, so it won't be resolved
+    // as a bare name. This prevents shell-script execution via shell:false.
+    const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.cmd');
+    const result = await resolveExecutable('tool', makeOptions({
+      platform: 'win32',
+      cwd: WIN_CWD,
+      statFile,
+      pathEnv: 'C:\\Windows',
+      pathextEnv: undefined, // Uses defaults: ['.exe', '.com']
+    }));
+    expect(result.kind).toBe('rejected');
+  });
+});

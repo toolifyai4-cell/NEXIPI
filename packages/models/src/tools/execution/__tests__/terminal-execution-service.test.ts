@@ -14,6 +14,7 @@ import {
 } from '../contracts.js';
 import { DefaultExecutableResolver, DefaultExecutablePolicy } from '../executable-policy.js';
 import { resolveExecutable } from '../executable-resolution.js';
+import { createApprovalBinding } from '../approval-binding.js';
 
 // --- Test doubles ---
 
@@ -31,10 +32,19 @@ function makeCommand(overrides: Partial<TerminalCommand> = {}): TerminalCommand 
 }
 
 function makeRequest(overrides: Partial<TerminalExecutionRequest> = {}): TerminalExecutionRequest {
+  const binding = overrides.approvalBinding ?? createApprovalBinding({
+    bindingId: 'bind-1',
+    executable: '/usr/bin/ls',
+    arguments: ['-la'],
+    workingDirectory: '/workspace',
+    workspaceId: 'ws_1',
+    createdAt: 1700000000000,
+  });
   return {
     kind: 'terminal-execution-request',
     requestId: 'req-1',
     command: makeCommand(),
+    approvalBinding: binding,
     ...overrides,
   };
 }
@@ -456,3 +466,164 @@ describe('DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS', () => {
     expect(DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS.maxOutputSizeBytes).toBeGreaterThan(0);
   });
 });
+
+describe('TerminalExecutionService — execution authorization boundary', () => {
+  it('rejects submission without an approval binding', async () => {
+    const service = new TerminalExecutionService(makeOptions());
+
+    await expect(
+      service.submit({
+        kind: 'terminal-execution-request',
+        requestId: 'req-no-binding',
+        command: makeCommand(),
+      } as TerminalExecutionRequest).promise
+    ).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('rejects submission with explicit undefined approval binding', async () => {
+    const service = new TerminalExecutionService(makeOptions());
+
+    await expect(
+      service.submit(makeRequest({ approvalBinding: undefined })).promise
+    ).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('accepts submission with a valid approval binding', async () => {
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+
+    const submission = service.submit(makeRequest());
+    const result = await submission.promise;
+
+    expect(result.state).toBe('completed');
+
+    service.dispose();
+  });
+});
+
+describe('TerminalExecutionService — cancellation/timeout accuracy', () => {
+  it('rejects with cancellation error when cancelled during execution', async () => {
+    let releaseSpawn: (() => void) | null = null;
+    const spawnFn = vi.fn(async () => {
+      await new Promise<void>(resolve => {
+        releaseSpawn = resolve;
+      });
+      return {
+        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
+        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
+        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
+        killed: false, timedOut: false,
+      };
+    });
+
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-1' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const cancelled = service.cancel(submission.terminalId, 'user');
+    expect(cancelled).toBe(true);
+
+    releaseSpawn!();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('rejects with cancellation error when cancelled during timeout', async () => {
+    let releaseSpawn: (() => void) | null = null;
+    const spawnFn = vi.fn(async () => {
+      await new Promise<void>(resolve => {
+        releaseSpawn = resolve;
+      });
+      return {
+        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
+        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
+        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
+        killed: false, timedOut: false,
+      };
+    });
+
+    const service = new TerminalExecutionService(makeOptions({
+      spawnFn,
+      limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxExecutionMs: 50 },
+    }));
+    const submission = service.submit(makeRequest({ requestId: 'req-timeout' }));
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    await expect(submission.promise).rejects.toThrow();
+
+    releaseSpawn!();
+    service.dispose();
+  });
+});
+
+describe('TerminalExecutionService — late event handling', () => {
+  it('does not overwrite terminal state with late completion after cancellation', async () => {
+    let releaseSpawn: (() => void) | null = null;
+    const spawnFn = vi.fn(async () => {
+      await new Promise<void>(resolve => {
+        releaseSpawn = resolve;
+      });
+      return {
+        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
+        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
+        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
+        killed: false, timedOut: false,
+      };
+    });
+
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-1' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    service.cancel(submission.terminalId, 'user');
+
+    releaseSpawn!();
+
+    const result = await submission.promise;
+    // Should be cancelled, not completed, even though the process later exits
+    expect(result.state).toBe('cancelled');
+    expect(result.cancelled).toBe(true);
+
+    service.dispose();
+  });
+
+  it('does not overwrite cancelled state with late failure', async () => {
+    let releaseSpawn: (() => void) | null = null;
+    const spawnFn = vi.fn(async () => {
+      await new Promise<void>(resolve => {
+        releaseSpawn = resolve;
+      });
+      return {
+        exitCode: 1, exitSignal: null, stdout: '', stderr: 'error',
+        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
+        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
+        killed: false, timedOut: false,
+      };
+    });
+
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-1' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    service.cancel(submission.terminalId, 'user');
+
+    releaseSpawn!();
+
+    const result = await submission.promise;
+    expect(result.state).toBe('cancelled');
+    expect(result.cancelled).toBe(true);
+
+    service.dispose();
+  });
+});
+
