@@ -21,11 +21,7 @@ import type {
   EditAuthorizationResult,
 } from '@nexipi/workspace/tools';
 import type { ProposalRepositoryPort } from '@nexipi/workspace';
-import {
-  TrustedApprovalService,
-  defaultNow,
-  type Approval,
-} from '@nexipi/workspace';
+import { defaultNow, type Approval, type TrustedApprovalService } from '@nexipi/workspace';
 
 /**
  * Trusted edit authorization boundary bound to a single workspace.

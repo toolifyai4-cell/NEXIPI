@@ -22,11 +22,11 @@ import type {
   ProposalRepositoryPort,
   ProposalView,
 } from '@nexipi/workspace';
-import {
+import type {
   SqlJsApprovalRepository,
-  type ApprovalRecord,
   SqlJsProposalRepository,
-  type ProposalRecord,
+  ApprovalRecord,
+  ProposalRecord,
 } from '@nexipi/persistence';
 
 /**
@@ -118,7 +118,9 @@ export class ApprovalRepositoryAdapter implements ApprovalRepositoryPort {
   }
 }
 
-function toCreateApprovalInput(input: CreateApprovalView): Parameters<SqlJsApprovalRepository['createApproval']>[0] {
+function toCreateApprovalInput(
+  input: CreateApprovalView
+): Parameters<SqlJsApprovalRepository['createApproval']>[0] {
   return {
     id: input.id,
     proposalId: input.proposalId,

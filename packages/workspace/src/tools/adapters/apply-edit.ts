@@ -29,10 +29,9 @@ import {
 } from '@nexipi/models/tools';
 import type { Approval, AuthorizationToApply } from '../../editing/index.js';
 import {
-  ProposalVersionSchema,
-  ContentHashSchema,
-} from '../../editing/index.js';
-import { WritableFileSystemError, type WritableFileSystemProvider } from '../../editing/writable-file-system.js';
+  WritableFileSystemError,
+  type WritableFileSystemProvider,
+} from '../../editing/writable-file-system.js';
 import { safeValidateFileReadConfig, type FileReadConfig } from '../config.js';
 
 /**
@@ -189,11 +188,7 @@ export function createApplyEditToolDefinition(deps: ApplyEditAdapterDependencies
       // rejected at the schema boundary; the boundary's approval (if any) is the
       // sole authorization evidence. The boundary must also return the exact
       // content and file identity to apply.
-      if (
-        !authorization.authorized ||
-        !authorization.approval ||
-        !authorization.apply
-      ) {
+      if (!authorization.authorized || !authorization.approval || !authorization.apply) {
         return failResult(
           proposalId,
           proposalVersion,

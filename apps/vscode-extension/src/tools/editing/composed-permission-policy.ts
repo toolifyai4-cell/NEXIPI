@@ -25,18 +25,11 @@ import type {
 import { createReadOnlyWorkspacePermissionPolicy } from '../permission-policy.js';
 import { createEditingPermissionPolicy } from '../editing-permission-policy.js';
 
-const READ_ONLY_TOOLS = new Set([
-  'read_file',
-  'list_directory',
-  'search_code',
-  'find_references',
-]);
+const READ_ONLY_TOOLS = new Set(['read_file', 'list_directory', 'search_code', 'find_references']);
 
 const EDITING_TOOLS = new Set(['propose_edit', 'apply_edit']);
 
-export function createComposedToolPermissionPolicy(
-  logger: import('@nexipi/core').Logger
-): ToolPermissionPolicy {
+export function createComposedToolPermissionPolicy(logger: Logger): ToolPermissionPolicy {
   const readOnlyPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
   const editingPolicy = createEditingPermissionPolicy(logger);
 

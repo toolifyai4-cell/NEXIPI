@@ -27,7 +27,12 @@ import type {
   MessageListResult as RepoMessageListResult,
   DeleteResult as RepoDeleteResult,
 } from './repositories.js';
-import { PersistenceError, PersistenceService as FoundationPersistenceService, type PersistenceServiceOptions, type SQLDatabase } from './PersistenceService.js';
+import {
+  PersistenceError,
+  PersistenceService as FoundationPersistenceService,
+  type PersistenceServiceOptions,
+  type SQLDatabase,
+} from './PersistenceService.js';
 import type { ConversationId, MessageId } from '@nexipi/shared';
 
 function toRepoConversationInput(input: CreateConversationInput): RepoCreateConversationInput {
@@ -41,7 +46,9 @@ function toRepoConversationInput(input: CreateConversationInput): RepoCreateConv
   };
 }
 
-function toRepoUpdateConversationInput(input: UpdateConversationInput): RepoUpdateConversationInput {
+function toRepoUpdateConversationInput(
+  input: UpdateConversationInput
+): RepoUpdateConversationInput {
   return {
     title: input.title,
     metadata: input.metadata,
@@ -100,7 +107,9 @@ function fromRepoConversationResult(result: RepoConversationResult): Conversatio
   };
 }
 
-function fromRepoConversationListResult(result: RepoConversationListResult): ConversationListResult {
+function fromRepoConversationListResult(
+  result: RepoConversationListResult
+): ConversationListResult {
   return {
     conversations: result.conversations.map(fromConversationRecord),
     error: result.error,
@@ -210,9 +219,15 @@ export class PersistenceService implements IPersistencePort {
     return fromRepoConversationListResult(result);
   }
 
-  async updateConversation(id: ConversationId, input: UpdateConversationInput): Promise<ConversationResult> {
+  async updateConversation(
+    id: ConversationId,
+    input: UpdateConversationInput
+  ): Promise<ConversationResult> {
     this.assertAvailable();
-    const result = await this.conversationRepository.update(id, toRepoUpdateConversationInput(input));
+    const result = await this.conversationRepository.update(
+      id,
+      toRepoUpdateConversationInput(input)
+    );
     return fromRepoConversationResult(result);
   }
 
@@ -274,5 +289,10 @@ export function createPersistenceService(
   foundationService?: FoundationPersistenceService,
   options?: PersistenceServiceOptions
 ): PersistenceService {
-  return new PersistenceService(conversationRepository, messageRepository, foundationService, options);
+  return new PersistenceService(
+    conversationRepository,
+    messageRepository,
+    foundationService,
+    options
+  );
 }

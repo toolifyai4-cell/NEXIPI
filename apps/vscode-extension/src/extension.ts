@@ -46,7 +46,6 @@ import {
   type TrustedApprovalService,
 } from '@nexipi/workspace';
 import type {
-  WritableFileSystemProvider,
   ProposalRepositoryPort,
   ApprovalRepositoryPort,
   WorkspaceFolder,
@@ -55,7 +54,6 @@ import type {
   CodeSearchResult,
   ReferenceDiscoveryResult,
 } from '@nexipi/workspace';
-import { createReadOnlyWorkspacePermissionPolicy } from './tools/permission-policy.js';
 import { createComposedToolPermissionPolicy } from './tools/editing/composed-permission-policy.js';
 import {
   ProposalRepositoryAdapter,
@@ -220,10 +218,13 @@ export function registerWorkspaceAdapters(
     });
     workspaceEditing.set(workspaceId, { boundary, writableFileSystem });
   } else {
-    logger.warn('Editing services not initialized; workspace edits will be denied until persistence is ready', {
-      workspaceId,
-      folderUri: folder.uri,
-    });
+    logger.warn(
+      'Editing services not initialized; workspace edits will be denied until persistence is ready',
+      {
+        workspaceId,
+        folderUri: folder.uri,
+      }
+    );
   }
 
   logger.info('Registered workspace adapters', {
@@ -743,11 +744,9 @@ export function createRoutedApplyEditTool(): ToolDefinition {
       const { proposalId, proposalVersion } = input as ApplyEditInput;
 
       if (context.signal?.aborted) {
-        throw createToolError(
-          ToolErrorCode.TOOL_CANCELLED,
-          'Operation cancelled',
-          { toolName: 'apply_edit' }
-        );
+        throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Operation cancelled', {
+          toolName: 'apply_edit',
+        });
       }
 
       if (gProposalRepositoryPort === undefined) {
@@ -802,9 +801,7 @@ export function createRoutedApplyEditTool(): ToolDefinition {
       const folderContext: ToolExecutionContext = {
         ...context,
         workspaceId: proposal.workspaceId,
-        workspaceFolder: adapter
-          ? { uri: adapter.folder.uri, id: adapter.folder.id }
-          : undefined,
+        workspaceFolder: adapter ? { uri: adapter.folder.uri, id: adapter.folder.id } : undefined,
       };
 
       // Delegate to the workspace-scoped apply adapter, which re-verifies the

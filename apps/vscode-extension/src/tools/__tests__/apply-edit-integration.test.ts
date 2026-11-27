@@ -62,7 +62,12 @@ function makeStore(): InMemoryStore {
 
 function normalizeFsUri(uri: string | { fsPath: string }): string {
   const p = typeof uri === 'string' ? uri : uri.fsPath;
-  return p.replace(/^file:\/\//i, '').replace(/\\/g, '/').replace(/\/+$/, '') || '/';
+  return (
+    p
+      .replace(/^file:\/\//i, '')
+      .replace(/\\/g, '/')
+      .replace(/\/+$/, '') || '/'
+  );
 }
 
 function storeStat(uri: string | { fsPath: string }) {
@@ -124,26 +129,30 @@ vi.mock('vscode', () => {
           }
           return file.content;
         }),
-        writeFile: vi.fn(async (_uri: string | { fsPath: string }, content: string | Uint8Array) => {
-          const p = normalizeFsUri(_uri);
-          ensureDir(p.substring(0, p.lastIndexOf('/')) || '/');
-          s.files.set(p, {
-            content: typeof content === 'string' ? content : new TextDecoder().decode(content),
-            mtime: Date.now(),
-          });
-        }),
-        rename: vi.fn(async (oldUri: string | { fsPath: string }, newUri: string | { fsPath: string }) => {
-          const oldP = normalizeFsUri(oldUri);
-          const newP = normalizeFsUri(newUri);
-          const file = s.files.get(oldP);
-          if (!file) {
-            const error = new Error(`Not found: ${oldP}`) as Error & { code?: string };
-            error.code = 'ENOENT';
-            throw error;
+        writeFile: vi.fn(
+          async (_uri: string | { fsPath: string }, content: string | Uint8Array) => {
+            const p = normalizeFsUri(_uri);
+            ensureDir(p.substring(0, p.lastIndexOf('/')) || '/');
+            s.files.set(p, {
+              content: typeof content === 'string' ? content : new TextDecoder().decode(content),
+              mtime: Date.now(),
+            });
           }
-          s.files.delete(oldP);
-          s.files.set(newP, file);
-        }),
+        ),
+        rename: vi.fn(
+          async (oldUri: string | { fsPath: string }, newUri: string | { fsPath: string }) => {
+            const oldP = normalizeFsUri(oldUri);
+            const newP = normalizeFsUri(newUri);
+            const file = s.files.get(oldP);
+            if (!file) {
+              const error = new Error(`Not found: ${oldP}`) as Error & { code?: string };
+              error.code = 'ENOENT';
+              throw error;
+            }
+            s.files.delete(oldP);
+            s.files.set(newP, file);
+          }
+        ),
         delete: vi.fn(async (uri: string | { fsPath: string }) => {
           s.files.delete(normalizeFsUri(uri));
         }),
@@ -157,7 +166,13 @@ vi.mock('vscode', () => {
     },
     window: {
       createOutputChannel: vi.fn(() => ({ appendLine: vi.fn(), show: vi.fn(), dispose: vi.fn() })),
-      createStatusBarItem: vi.fn(() => ({ text: '', tooltip: '', command: '', show: vi.fn(), dispose: vi.fn() })),
+      createStatusBarItem: vi.fn(() => ({
+        text: '',
+        tooltip: '',
+        command: '',
+        show: vi.fn(),
+        dispose: vi.fn(),
+      })),
     },
     commands: { executeCommand: vi.fn(), registerCommand: vi.fn(() => ({ dispose: vi.fn() })) },
   };
@@ -179,7 +194,7 @@ afterEach(() => {
 
 function makeTestProvider(decision: TrustedUserDecision | null): TrustedDecisionProvider {
   return {
-    establishUserDecision: vi.fn(async (request) => {
+    establishUserDecision: vi.fn(async request => {
       if (decision === null) {
         return null;
       }
@@ -206,8 +221,7 @@ const FILE_URI_A = 'file:///rootA/file.ts';
 const FILE_URI_B = 'file:///rootB/file.ts';
 const PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
 const PROPOSED_CONTENT = 'const x = 1;';
-const PROPOSED_CONTENT_HASH =
-  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const PROPOSED_CONTENT_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 
 function makeWorkspaceFolder(uri: string, name: string): WorkspaceFolder {
   return {
@@ -304,11 +318,13 @@ function createLogger() {
   return { debug: () => {}, info: () => {}, warn: () => {}, error: () => {} };
 }
 
-async function createHarness(overrides: {
-  provider?: TrustedDecisionProvider;
-  now?: () => number;
-  workspaceIdA?: string;
-} = {}): Promise<Harness> {
+async function createHarness(
+  overrides: {
+    provider?: TrustedDecisionProvider;
+    now?: () => number;
+    workspaceIdA?: string;
+  } = {}
+): Promise<Harness> {
   const foundation = new PersistenceFoundation(); // in-memory sql.js
   await foundation.init();
   const db = foundation.getRawDatabase() as SQLDatabase;
@@ -599,7 +615,10 @@ describe('apply_edit end-to-end authorization integration', () => {
       controller.abort();
 
       await expect(
-        h.applyEdit.execute({ proposalId: PROPOSAL_ID, proposalVersion: 1 }, applyEditContext(controller.signal))
+        h.applyEdit.execute(
+          { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+          applyEditContext(controller.signal)
+        )
       ).rejects.toMatchObject({ code: 'TOOL_CANCELLED' });
       h.dispose();
     });
@@ -681,14 +700,22 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
 
   it('identical filenames in separate roots remain isolated', async () => {
     const h = await createHarness({ workspaceIdA: 'ws_a' });
-    await createProposal(h.proposalRepo, { workspaceId: 'ws_a', fileUri: FILE_URI_A, relativePath: 'file.ts' });
+    await createProposal(h.proposalRepo, {
+      workspaceId: 'ws_a',
+      fileUri: FILE_URI_A,
+      relativePath: 'file.ts',
+    });
     await createProposal(h.proposalRepo, {
       id: '66666666-6666-6666-6666-666666666666',
       workspaceId: 'ws_b',
       fileUri: FILE_URI_B,
       relativePath: 'file.ts',
     });
-    await establishApproval(h.service, h.provider, { proposalId: PROPOSAL_ID, workspaceId: 'ws_a', fileUri: FILE_URI_A });
+    await establishApproval(h.service, h.provider, {
+      proposalId: PROPOSAL_ID,
+      workspaceId: 'ws_a',
+      fileUri: FILE_URI_A,
+    });
     await establishApproval(h.service, h.provider, {
       proposalId: '66666666-6666-6666-6666-666666666666',
       workspaceId: 'ws_b',
@@ -706,10 +733,22 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
       workspaceId: 'ws_b',
     });
 
-    const resultA = await boundaryA.verifyAndAuthorizeApplication({ proposalId: PROPOSAL_ID, proposalVersion: 1 });
-    const resultB = await boundaryB.verifyAndAuthorizeApplication({ proposalId: '66666666-6666-6666-6666-666666666666', proposalVersion: 1 });
-    const crossA = await boundaryA.verifyAndAuthorizeApplication({ proposalId: '66666666-6666-6666-6666-666666666666', proposalVersion: 1 });
-    const crossB = await boundaryB.verifyAndAuthorizeApplication({ proposalId: PROPOSAL_ID, proposalVersion: 1 });
+    const resultA = await boundaryA.verifyAndAuthorizeApplication({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+    });
+    const resultB = await boundaryB.verifyAndAuthorizeApplication({
+      proposalId: '66666666-6666-6666-6666-666666666666',
+      proposalVersion: 1,
+    });
+    const crossA = await boundaryA.verifyAndAuthorizeApplication({
+      proposalId: '66666666-6666-6666-6666-666666666666',
+      proposalVersion: 1,
+    });
+    const crossB = await boundaryB.verifyAndAuthorizeApplication({
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+    });
 
     expect(resultA.authorized).toBe(true);
     expect(resultB.authorized).toBe(true);
@@ -718,6 +757,3 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
     h.dispose();
   });
 });
-
-
-

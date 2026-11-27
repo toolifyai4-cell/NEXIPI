@@ -38,10 +38,7 @@ const TEST_WORKSPACE_ID = computeTestWorkspaceId('file:///root');
 const ROOT_URI = 'file:///root';
 
 interface EditAuthorizationBoundary {
-  verifyAndAuthorizeApplication(request: {
-    proposalId: string;
-    proposalVersion: number;
-  }): Promise<{
+  verifyAndAuthorizeApplication(request: { proposalId: string; proposalVersion: number }): Promise<{
     authorized: boolean;
     approval?: Approval;
     authorizationToApply?: unknown;
@@ -116,8 +113,7 @@ function createContext(
 
 const VALID_PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
 const APPROVED_CONTENT = 'const x = 1;';
-const APPROVED_CONTENT_HASH =
-  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const APPROVED_CONTENT_HASH = 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
 const APPROVAL: Approval = {
   kind: 'edit-approval',
   approvalId: 'a1' as never,
@@ -254,7 +250,10 @@ describe('apply_edit tool definition', () => {
       });
       const writeFile = vi.fn();
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+      const tool = createApplyEditToolDefinition({
+        authorization: boundary,
+        writableFileSystem: fs,
+      });
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -297,7 +296,10 @@ describe('apply_edit tool definition', () => {
         apply: APPLY_PAYLOAD,
       });
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+      const tool = createApplyEditToolDefinition({
+        authorization: boundary,
+        writableFileSystem: fs,
+      });
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -315,9 +317,7 @@ describe('apply_edit tool definition', () => {
       expect(writeFile).toHaveBeenCalledTimes(1);
       const [uri, content, signal] = writeFile.mock.calls[0];
       expect(uri).toBe(APPLY_PAYLOAD.fileUri);
-      expect(new TextDecoder().decode(content as Uint8Array)).toBe(
-        APPLY_PAYLOAD.proposedContent
-      );
+      expect(new TextDecoder().decode(content as Uint8Array)).toBe(APPLY_PAYLOAD.proposedContent);
       expect(signal).toBeDefined();
     });
 
@@ -331,7 +331,10 @@ describe('apply_edit tool definition', () => {
         apply: APPLY_PAYLOAD,
       });
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+      const tool = createApplyEditToolDefinition({
+        authorization: boundary,
+        writableFileSystem: fs,
+      });
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -354,7 +357,10 @@ describe('apply_edit tool definition', () => {
         },
       };
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+      const tool = createApplyEditToolDefinition({
+        authorization: boundary,
+        writableFileSystem: fs,
+      });
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -376,7 +382,10 @@ describe('apply_edit tool definition', () => {
       });
       const writeFile = vi.fn();
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+      const tool = createApplyEditToolDefinition({
+        authorization: boundary,
+        writableFileSystem: fs,
+      });
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
