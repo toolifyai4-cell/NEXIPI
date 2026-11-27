@@ -15,4 +15,13 @@ export {
   createProposeEditToolDefinition,
   type ProposeEditAdapterDependencies,
 } from './propose-edit.js';
-export { createApplyEditToolDefinition, type ApplyEditAdapterDependencies } from './apply-edit.js';
+export {
+  createApplyEditToolDefinition,
+  type ApplyEditAdapterDependencies,
+  type ApplyEditInput,
+  type ApplyEditOutput,
+  type EditAuthorizationBoundary,
+  type EditAuthorizationRequest,
+  type EditAuthorizationResult,
+} from './apply-edit.js';
+export { ApplyEditInputSchema, ApplyEditOutputSchema } from './apply-edit.js';

@@ -127,9 +127,12 @@ vi.mock('@nexipi/persistence', async importOriginal => {
     })),
     SqlJsConversationRepository: vi.fn(),
     SqlJsMessageRepository: vi.fn(),
+    SqlJsProposalRepository: vi.fn(),
+    SqlJsApprovalRepository: vi.fn(),
     createPersistenceService: vi.fn(() => ({
       initialize: vi.fn().mockResolvedValue(undefined),
       save: vi.fn(),
+      getRawDatabase: vi.fn(() => ({})),
     })),
   };
 });

@@ -15,14 +15,15 @@
  *   `apply_edit` by name.
  */
 
+import type { Logger } from '@nexipi/core';
 import type {
   ToolDefinition,
   ToolPermissionDecision,
   ToolPermissionPolicy,
+  ToolExecutionContext,
 } from '@nexipi/models/tools';
-import type { Logger } from '@nexipi/core';
 import { createReadOnlyWorkspacePermissionPolicy } from '../permission-policy.js';
-import { createEditingPermissionPolicy } from './editing-permission-policy.js';
+import { createEditingPermissionPolicy } from '../editing-permission-policy.js';
 
 const READ_ONLY_TOOLS = new Set([
   'read_file',
@@ -34,14 +35,17 @@ const READ_ONLY_TOOLS = new Set([
 const EDITING_TOOLS = new Set(['propose_edit', 'apply_edit']);
 
 export function createComposedToolPermissionPolicy(
-  logger: Logger
+  logger: import('@nexipi/core').Logger
 ): ToolPermissionPolicy {
   const readOnlyPolicy = createReadOnlyWorkspacePermissionPolicy(logger);
   const editingPolicy = createEditingPermissionPolicy(logger);
 
   return {
     name: 'composed-workspace-permission-policy',
-    evaluate(definition: ToolDefinition, context: unknown): ToolPermissionDecision {
+    evaluate(
+      definition: Readonly<ToolDefinition>,
+      context: ToolExecutionContext
+    ): ToolPermissionDecision | Promise<ToolPermissionDecision> {
       const name = definition.name;
       if (EDITING_TOOLS.has(name)) {
         return editingPolicy.evaluate(definition, context);

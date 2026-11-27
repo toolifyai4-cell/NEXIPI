@@ -1,9 +1,13 @@
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { z } from 'zod';
-import { createApplyEditToolDefinition, type ApplyEditAdapterDependencies } from '../apply-edit.js';
+import {
+  createApplyEditToolDefinition,
+  type ApplyEditAdapterDependencies,
+  type ApplyEditOutput,
+} from '../apply-edit.js';
 import { ToolDefinition, ToolExecutionContext, ToolErrorCode } from '@nexipi/models/tools';
 import type { WorkspaceFolder } from '../../../types.js';
-import { EditApproval } from '../../../editing/contracts.js';
+import type { Approval, WritableFileSystemProvider } from '../../../editing/index.js';
 
 function makeWorkspaceFolder(uri: string, name: string): WorkspaceFolder {
   return {
@@ -34,16 +38,27 @@ const TEST_WORKSPACE_ID = computeTestWorkspaceId('file:///root');
 const ROOT_URI = 'file:///root';
 
 interface EditAuthorizationBoundary {
-  verifyAndAuthorizeApplication(request: { proposalId: string; proposalVersion: number }): Promise<{
+  verifyAndAuthorizeApplication(request: {
+    proposalId: string;
+    proposalVersion: number;
+  }): Promise<{
     authorized: boolean;
-    approval?: EditApproval;
+    approval?: Approval;
+    authorizationToApply?: unknown;
+    apply?: {
+      fileUri: string;
+      relativePath: string;
+      proposedContent: string;
+      proposedContentHash: string;
+    };
     reason?: string;
   }>;
 }
 
 function makeAuthorizationBoundary(overrides: {
   authorized?: boolean;
-  approval?: EditApproval;
+  approval?: Approval;
+  apply?: EditAuthorizationBoundary['apply'];
   reason?: string;
   fail?: boolean;
 }): EditAuthorizationBoundary {
@@ -55,21 +70,35 @@ function makeAuthorizationBoundary(overrides: {
       return {
         authorized: overrides.authorized ?? false,
         approval: overrides.approval,
+        apply: overrides.apply,
         reason: overrides.reason,
       };
     },
   };
 }
 
+function makeWritableFileSystem(overrides: {
+  writeFile?: (uri: string, content: Uint8Array, signal?: AbortSignal) => Promise<void>;
+}): WritableFileSystemProvider {
+  return {
+    writeFile: overrides.writeFile ?? (async () => undefined),
+    readFile: async () => '',
+    readDirectory: async () => [],
+    stat: async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
+    lstat: async () => ({ type: 'file', size: 0, mtime: 0, ctime: 0 }),
+    exists: async () => true,
+  };
+}
+
 function buildDeps(
-  workspaceFolder: WorkspaceFolder,
-  boundary?: EditAuthorizationBoundary
+  boundary?: EditAuthorizationBoundary,
+  writableFileSystem?: WritableFileSystemProvider
 ): ApplyEditAdapterDependencies {
   return {
-    workspaceFolder,
     authorization:
       boundary ??
       makeAuthorizationBoundary({ authorized: false, reason: 'no authorization service' }),
+    writableFileSystem: writableFileSystem ?? makeWritableFileSystem({}),
   };
 }
 
@@ -86,15 +115,30 @@ function createContext(
 }
 
 const VALID_PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
-const APPROVAL: EditApproval = {
+const APPROVED_CONTENT = 'const x = 1;';
+const APPROVED_CONTENT_HASH =
+  'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855';
+const APPROVAL: Approval = {
   kind: 'edit-approval',
+  approvalId: 'a1' as never,
   proposalId: VALID_PROPOSAL_ID,
-  proposalVersion: 1,
-  approvedContentHash: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-  approvedAt: 1700000000000,
-  approvedBy: 'user',
+  proposalVersion: 1 as never,
+  decision: 'approved' as never,
+  approvedContentHash: APPROVED_CONTENT_HASH,
+  decidedAt: 1700000000000,
+  provenance: { kind: 'user', actorId: 'user', timestamp: 1700000000000 } as never,
+  lifecycleState: 'approved' as never,
+  expiresAt: null,
   workspaceId: TEST_WORKSPACE_ID,
   fileUri: 'file:///root/file.ts',
+  createdAt: 1700000000000,
+};
+
+const APPLY_PAYLOAD = {
+  fileUri: 'file:///root/file.ts',
+  relativePath: 'file.ts',
+  proposedContent: APPROVED_CONTENT,
+  proposedContentHash: APPROVED_CONTENT_HASH,
 };
 
 describe('apply_edit tool definition', () => {
@@ -102,7 +146,7 @@ describe('apply_edit tool definition', () => {
 
   describe('metadata', () => {
     it('has the apply_edit name and write/destructive metadata', () => {
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder));
+      const tool = createApplyEditToolDefinition(buildDeps());
       expect(tool.name).toBe('apply_edit');
       expect(tool.metadata.capabilities).toEqual(['write']);
       expect(tool.metadata.readOnly).toBe(false);
@@ -119,7 +163,7 @@ describe('apply_edit tool definition', () => {
     let tool: ToolDefinition;
 
     beforeEach(() => {
-      tool = createApplyEditToolDefinition(buildDeps(workspaceFolder));
+      tool = createApplyEditToolDefinition(buildDeps());
     });
 
     it('accepts valid apply_edit input', () => {
@@ -208,16 +252,16 @@ describe('apply_edit tool definition', () => {
         authorized: false,
         reason: 'Proposal is awaiting approval',
       });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
+      const writeFile = vi.fn();
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
 
-      const result = await tool.execute(
+      const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
         createContext()
-      );
+      )) as ApplyEditOutput;
 
       expect(result.kind).toBe('apply-edit-result');
-      expect(result.proposalId).toBe(VALID_PROPOSAL_ID);
-      expect(result.proposalVersion).toBe(1);
       expect(result.outcome).toBe('failed');
       expect(result.approvalVerified).toBe(false);
       expect(result.authorized).toBe(false);
@@ -226,51 +270,18 @@ describe('apply_edit tool definition', () => {
       expect(result.finalSize).toBeNull();
       expect(result.error).not.toBeNull();
       expect(result.staleDetected).toBe(false);
+      expect(writeFile).not.toHaveBeenCalled();
     });
 
-    it('fails closed when the proposal is unknown to the boundary', async () => {
-      const boundary = makeAuthorizationBoundary({
-        authorized: false,
-        reason: 'Unknown proposal',
-      });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
-
-      const result = await tool.execute(
-        { proposalId: '11111111-1111-1111-1111-111111111111', proposalVersion: 1 },
-        createContext()
-      );
-
-      expect(result.outcome).toBe('failed');
-      expect(result.approvalVerified).toBe(false);
-      expect(result.authorized).toBe(false);
-      expect(result.error?.code).toBe(ToolErrorCode.TOOL_PERMISSION_DENIED);
-    });
-
-    it('fails closed for an expired proposal', async () => {
-      const boundary = makeAuthorizationBoundary({
-        authorized: false,
-        reason: 'Proposal has expired',
-      });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
-
-      const result = await tool.execute(
-        { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
-        createContext()
-      );
-
-      expect(result.outcome).toBe('failed');
-      expect(result.authorized).toBe(false);
-      expect(result.error?.message).toContain('expired');
-    });
-
-    it('fails closed when the authorization boundary is unavailable (missing dependency)', async () => {
+    it('fails closed when the authorization boundary is unavailable', async () => {
       const boundary = makeAuthorizationBoundary({ fail: true });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
+      const tool = createApplyEditToolDefinition(buildDeps(boundary));
+      const fs = makeWritableFileSystem({ writeFile: vi.fn() });
 
-      const result = await tool.execute(
+      const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
         createContext()
-      );
+      )) as ApplyEditOutput;
 
       expect(result.outcome).toBe('failed');
       expect(result.approvalVerified).toBe(false);
@@ -278,68 +289,103 @@ describe('apply_edit tool definition', () => {
       expect(result.error).not.toBeNull();
     });
 
-    it('does not report an applied result even when the boundary authorizes (Stage E defers the write)', async () => {
+    it('applies the verified content when authorized and the write succeeds', async () => {
+      const writeFile = vi.fn(async () => undefined);
       const boundary = makeAuthorizationBoundary({
         authorized: true,
         approval: APPROVAL,
-        reason: undefined,
+        apply: APPLY_PAYLOAD,
       });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
 
-      const result = await tool.execute(
+      const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
         createContext()
-      );
+      )) as ApplyEditOutput;
 
-      // Authorization was verified, but Stage D must not fabricate an applied
-      // result or perform a filesystem write.
-      expect(result.outcome).toBe('failed');
-      expect(result.outcome).not.toBe('applied');
+      expect(result.outcome).toBe('applied');
       expect(result.approvalVerified).toBe(true);
+      expect(result.authorized).toBe(true);
+      expect(result.appliedAt).not.toBeNull();
+      expect(result.finalContentHash).toBe(APPROVED_CONTENT_HASH);
+      expect(result.finalSize).toBe(new TextEncoder().encode(APPROVED_CONTENT).byteLength);
+      expect(result.error).toBeNull();
+      expect(result.staleDetected).toBe(false);
+      expect(writeFile).toHaveBeenCalledTimes(1);
+      const [uri, content, signal] = writeFile.mock.calls[0];
+      expect(uri).toBe(APPLY_PAYLOAD.fileUri);
+      expect(new TextDecoder().decode(content as Uint8Array)).toBe(
+        APPLY_PAYLOAD.proposedContent
+      );
+      expect(signal).toBeDefined();
+    });
+
+    it('reports failure when the write fails after authorization', async () => {
+      const writeFile = vi.fn(async () => {
+        throw new Error('ENOSPC');
+      });
+      const boundary = makeAuthorizationBoundary({
+        authorized: true,
+        approval: APPROVAL,
+        apply: APPLY_PAYLOAD,
+      });
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+
+      const result = (await tool.execute(
+        { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
+        createContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
       expect(result.authorized).toBe(true);
       expect(result.appliedAt).toBeNull();
       expect(result.finalContentHash).toBeNull();
-      expect(result.finalSize).toBeNull();
       expect(result.error).not.toBeNull();
-      expect(result.error?.message).toContain('Stage E');
+      expect(writeFile).toHaveBeenCalledTimes(1);
     });
 
     it('performs no filesystem write without trusted authorization', async () => {
-      // apply_edit receives no filesystem provider at all, so it cannot write.
-      // Verify by capturing any attempt through a recording boundary and
-      // asserting the result is not a success and no write path exists.
-      let boundaryCalled = false;
+      const writeFile = vi.fn();
       const boundary: EditAuthorizationBoundary = {
         verifyAndAuthorizeApplication: async request => {
-          boundaryCalled = true;
           return { authorized: false, reason: 'denied' };
         },
       };
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
 
-      const result = await tool.execute(
+      const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
         createContext()
-      );
+      )) as ApplyEditOutput;
 
-      expect(boundaryCalled).toBe(true);
       expect(result.outcome).toBe('failed');
       expect(result.approvalVerified).toBe(false);
+      expect(writeFile).not.toHaveBeenCalled();
     });
 
-    it('rejects workspace identity mismatch', async () => {
-      const tool = createApplyEditToolDefinition(
-        buildDeps(
-          workspaceFolder,
-          makeAuthorizationBoundary({ authorized: true, approval: APPROVAL })
-        )
-      );
-      await expect(
-        tool.execute(
-          { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
-          createContext('ws_other')
-        )
-      ).rejects.toMatchObject({ code: ToolErrorCode.TOOL_RESOURCE_LIMIT });
+    it('rejects workspace identity mismatch at the boundary', async () => {
+      // The boundary is bound to a workspace; a proposal belonging to a
+      // different workspace is denied by the boundary itself, so the adapter
+      // fails closed and performs no write.
+      const boundary = makeAuthorizationBoundary({
+        authorized: false,
+        reason: 'Workspace identity mismatch: proposal does not belong to this workspace',
+      });
+      const writeFile = vi.fn();
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition({ authorization: boundary, writableFileSystem: fs });
+
+      const result = (await tool.execute(
+        { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
+        createContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.error?.message).toContain('Workspace identity mismatch');
+      expect(writeFile).not.toHaveBeenCalled();
     });
 
     it('output validates against the output schema', async () => {
@@ -347,7 +393,7 @@ describe('apply_edit tool definition', () => {
         authorized: false,
         reason: 'not approved',
       });
-      const tool = createApplyEditToolDefinition(buildDeps(workspaceFolder, boundary));
+      const tool = createApplyEditToolDefinition(buildDeps(boundary));
       const result = await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
         createContext()

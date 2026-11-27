@@ -27,7 +27,11 @@ import {
   ToolErrorCode,
   createToolError,
 } from '@nexipi/models/tools';
-import type { EditApproval, AuthorizationToApply } from '../../editing/index.js';
+import type { Approval, AuthorizationToApply } from '../../editing/index.js';
+import {
+  ProposalVersionSchema,
+  ContentHashSchema,
+} from '../../editing/index.js';
 import { WritableFileSystemError, type WritableFileSystemProvider } from '../../editing/writable-file-system.js';
 import { safeValidateFileReadConfig, type FileReadConfig } from '../config.js';
 
@@ -50,7 +54,7 @@ export interface EditAuthorizationRequest {
  */
 export interface EditAuthorizationResult {
   readonly authorized: boolean;
-  readonly approval?: EditApproval;
+  readonly approval?: Approval;
   readonly authorizationToApply?: AuthorizationToApply;
   readonly reason?: string;
   /**

@@ -19,8 +19,8 @@ import type {
   EditAuthorizationBoundary,
   EditAuthorizationRequest,
   EditAuthorizationResult,
-  ProposalRepositoryPort,
-} from '@nexipi/workspace';
+} from '@nexipi/workspace/tools';
+import type { ProposalRepositoryPort } from '@nexipi/workspace';
 import {
   TrustedApprovalService,
   defaultNow,

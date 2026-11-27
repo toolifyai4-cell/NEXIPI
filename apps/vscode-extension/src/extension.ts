@@ -35,7 +35,8 @@ import {
   createSearchCodeToolDefinition,
   createFindReferencesToolDefinition,
   createApplyEditToolDefinition,
-  checkCancelled,
+  ApplyEditInputSchema,
+  ApplyEditOutputSchema,
   type ApplyEditInput,
   type ApplyEditOutput,
 } from '@nexipi/workspace/tools';
@@ -200,6 +201,31 @@ export function registerWorkspaceAdapters(
   }
   workspaceAdapters.set(workspaceId, adapterSet);
   workspaceAdaptersVersion++;
+
+  // Create per-workspace editing services bound to this workspace identity.
+  // The trusted approval service shares the extension's single database, and
+  // the boundary is bound to this workspace so cross-workspace authorization
+  // is impossible. When the workspace is unregistered, its entry is removed
+  // (see unregisterWorkspaceAdapters) so a disposed workspace cannot keep
+  // authorizing edits.
+  if (gTrustedApprovalService !== undefined && gProposalRepositoryPort !== undefined) {
+    const boundary = new TrustedEditAuthorizationBoundary({
+      trustedApprovalService: gTrustedApprovalService,
+      proposalRepository: gProposalRepositoryPort,
+      workspaceId,
+    });
+    const writableFileSystem = new VSCodeWritableFileSystem({
+      workspaceFolder: folder,
+      fileSystem,
+    });
+    workspaceEditing.set(workspaceId, { boundary, writableFileSystem });
+  } else {
+    logger.warn('Editing services not initialized; workspace edits will be denied until persistence is ready', {
+      workspaceId,
+      folderUri: folder.uri,
+    });
+  }
+
   logger.info('Registered workspace adapters', {
     workspaceId,
     folderUri: folder.uri,
@@ -226,6 +252,7 @@ export async function unregisterWorkspaceAdapters(
 
         // All leases released - safe to remove immediately
         workspaceAdapters.delete(workspaceId);
+        workspaceEditing.delete(workspaceId);
         workspaceAdaptersVersion++;
         logger.info('Unregistered workspace adapters', {
           workspaceId,
@@ -367,6 +394,7 @@ function scheduleDeferredWorkspaceCleanup(workspaceId: string, logger: Logger): 
       if (entry && !entry.executed) {
         entry.executed = true;
         workspaceAdapters.delete(workspaceId);
+        workspaceEditing.delete(workspaceId);
         workspaceAdaptersVersion++;
         entry.logger.info('Deferred workspace cleanup executed', {
           workspaceId,
@@ -714,7 +742,13 @@ export function createRoutedApplyEditTool(): ToolDefinition {
     execute: async (input: unknown, context: ToolExecutionContext): Promise<ApplyEditOutput> => {
       const { proposalId, proposalVersion } = input as ApplyEditInput;
 
-      checkCancelled(context.signal);
+      if (context.signal?.aborted) {
+        throw createToolError(
+          ToolErrorCode.TOOL_CANCELLED,
+          'Operation cancelled',
+          { toolName: 'apply_edit' }
+        );
+      }
 
       if (gProposalRepositoryPort === undefined) {
         return applyEditFail(
@@ -1408,6 +1442,20 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     throw err;
   }
   trackResource('persistenceService', () => persistenceService.save());
+
+  // Create editing repository adapters and the trusted approval service,
+  // reusing the existing persistence database instance. No second database or
+  // persistence service is created. Stage F will replace the failing provider.
+  const rawDatabase = persistenceService.getRawDatabase();
+  const proposalRepository = new SqlJsProposalRepository(rawDatabase);
+  const approvalRepository = new SqlJsApprovalRepository(rawDatabase);
+  gProposalRepositoryPort = new ProposalRepositoryAdapter(proposalRepository);
+  gApprovalRepositoryPort = new ApprovalRepositoryAdapter(approvalRepository);
+  gTrustedApprovalService = createTrustedApprovalService({
+    proposals: gProposalRepositoryPort,
+    approvals: gApprovalRepositoryPort,
+    trustedDecisionProvider: new FailingTrustedDecisionProvider(),
+  });
 
   // Create persistence adapter
   const persistenceAdapter = createPersistenceAdapter({

@@ -121,4 +121,10 @@ export {
   type ProposeEditAdapterDependencies,
   createApplyEditToolDefinition,
   type ApplyEditAdapterDependencies,
+  type ApplyEditInput,
+  type ApplyEditOutput,
+  type EditAuthorizationBoundary,
+  type EditAuthorizationRequest,
+  type EditAuthorizationResult,
 } from './adapters/index.js';
+export { ApplyEditInputSchema, ApplyEditOutputSchema } from './adapters/index.js';
