@@ -12,3 +12,6 @@ export * from './errors.js';
 export * from './approval-binding.js';
 export * from './command-validation.js';
 export * from './executable-policy.js';
+export * from './executable-resolution.js';
+export * from './process-adapter.js';
+export * from './terminal-execution-service.js';
