@@ -77,7 +77,14 @@ describe('ApprovalPanel', () => {
     const onApprovalAction = vi.fn();
     render(
       <ApprovalPanel
-        proposals={[makeProposal(), makeProposal({ proposalId: 'prop-2', relativePath: 'other.txt', fileUri: 'file:///ws-1/other.txt' })]}
+        proposals={[
+          makeProposal(),
+          makeProposal({
+            proposalId: 'prop-2',
+            relativePath: 'other.txt',
+            fileUri: 'file:///ws-1/other.txt',
+          }),
+        ]}
         onApprovalAction={onApprovalAction}
       />
     );

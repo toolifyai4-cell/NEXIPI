@@ -40,15 +40,31 @@ export class VSCodeTrustedDecisionProvider implements TrustedDecisionProvider {
   async establishUserDecision(
     request: TrustedUserDecisionRequest
   ): Promise<TrustedUserDecision | null> {
-    const { decision: requestedDecision, proposalId, proposalVersion, workspaceId, fileUri } = request;
+    const {
+      decision: requestedDecision,
+      proposalId,
+      proposalVersion,
+      workspaceId,
+      fileUri,
+    } = request;
 
-    const fileName = fileUri.replace(/^file:\/\//, '').split('/').pop() ?? fileUri;
+    const fileName =
+      fileUri
+        .replace(/^file:\/\//, '')
+        .split('/')
+        .pop() ?? fileUri;
 
     const message = `Approve edit to '${fileName}'?\nWorkspace: ${workspaceId}\nProposal: ${proposalId} v${proposalVersion}\nRequested: ${requestedDecision}`;
 
-    const result = await vscode.window.showWarningMessage(message, {
-      modal: true,
-    }, 'Approve', 'Reject', 'Cancel');
+    const result = await vscode.window.showWarningMessage(
+      message,
+      {
+        modal: true,
+      },
+      'Approve',
+      'Reject',
+      'Cancel'
+    );
 
     let decision: 'approve' | 'reject' | null;
     switch (result) {

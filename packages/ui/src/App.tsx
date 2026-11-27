@@ -52,10 +52,7 @@ export function App() {
             <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
           ) : (
             <>
-              <ApprovalPanel
-                proposals={pendingProposals}
-                onApprovalAction={handleApprovalAction}
-              />
+              <ApprovalPanel proposals={pendingProposals} onApprovalAction={handleApprovalAction} />
               <ChatArea
                 messages={messages}
                 isLoading={isLoading}

@@ -1,11 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PersistenceFoundation } from '@nexipi/persistence';
 import { SqlJsProposalRepository, SqlJsApprovalRepository } from '@nexipi/persistence';
-import {
-  TrustedApprovalService,
-  defaultNow,
-  TrustedDecisionProvider,
-} from '@nexipi/workspace';
+import { TrustedApprovalService, defaultNow, TrustedDecisionProvider } from '@nexipi/workspace';
 import { TrustedEditAuthorizationBoundary } from '../editing/edit-authorization-boundary';
 import {
   ProposalRepositoryAdapter,

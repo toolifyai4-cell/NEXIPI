@@ -43,10 +43,7 @@ import {
   isChildOf,
   normalizePath,
 } from '@nexipi/workspace/tools';
-import {
-  createTrustedApprovalService,
-  type TrustedApprovalService,
-} from '@nexipi/workspace';
+import { createTrustedApprovalService, type TrustedApprovalService } from '@nexipi/workspace';
 import type {
   ProposalRepositoryPort,
   ApprovalRepositoryPort,
@@ -873,7 +870,10 @@ export function createRoutedProposeEditTool(): ToolDefinition {
       idempotent: false,
       version: '1.0.0',
     },
-    execute: async (input: unknown, context: ToolExecutionContext): Promise<ProposeEditOutputLike> => {
+    execute: async (
+      input: unknown,
+      context: ToolExecutionContext
+    ): Promise<ProposeEditOutputLike> => {
       const { uri } = input as ProposeEditInputLike;
 
       if (context.signal?.aborted) {
@@ -1312,13 +1312,15 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
           break;
         }
         case 'approvalAction': {
-          const payload = msg.payload as {
-            proposalId?: string;
-            proposalVersion?: number;
-            decision?: string;
-            workspaceId?: string;
-            fileUri?: string;
-          } | undefined;
+          const payload = msg.payload as
+            | {
+                proposalId?: string;
+                proposalVersion?: number;
+                decision?: string;
+                workspaceId?: string;
+                fileUri?: string;
+              }
+            | undefined;
           if (
             !payload?.proposalId ||
             payload.proposalVersion === undefined ||

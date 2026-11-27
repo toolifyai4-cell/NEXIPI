@@ -571,13 +571,7 @@ describe('useChat hook', () => {
     const { result } = renderHook(() => useChat());
 
     act(() => {
-      result.current.handleApprovalAction(
-        'prop-1',
-        1,
-        'approve',
-        'ws-1',
-        'file:///ws-1/file.txt'
-      );
+      result.current.handleApprovalAction('prop-1', 1, 'approve', 'ws-1', 'file:///ws-1/file.txt');
     });
 
     expect(postMessage).toHaveBeenCalledWith({
@@ -601,14 +595,20 @@ describe('useChat hook', () => {
       result.current.handleApprovalAction('prop-1', 1, 'reject', 'ws-1', 'file:///ws-1/file.txt');
     });
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalAction', payload: expect.objectContaining({ decision: 'reject' }) })
+      expect.objectContaining({
+        type: 'approvalAction',
+        payload: expect.objectContaining({ decision: 'reject' }),
+      })
     );
 
     act(() => {
       result.current.handleApprovalAction('prop-1', 1, 'dismiss', 'ws-1', 'file:///ws-1/file.txt');
     });
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalAction', payload: expect.objectContaining({ decision: 'dismiss' }) })
+      expect.objectContaining({
+        type: 'approvalAction',
+        payload: expect.objectContaining({ decision: 'dismiss' }),
+      })
     );
   });
 });

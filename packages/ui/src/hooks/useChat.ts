@@ -433,8 +433,20 @@ export function useChat(options: UseChatOptions = {}) {
   );
 
   const handleApprovalAction = useCallback(
-    (proposalId: string, proposalVersion: number, decision: ApprovalDecision, workspaceId: string, fileUri: string) => {
-      const payload: ApprovalActionPayload = { proposalId, proposalVersion, decision, workspaceId, fileUri };
+    (
+      proposalId: string,
+      proposalVersion: number,
+      decision: ApprovalDecision,
+      workspaceId: string,
+      fileUri: string
+    ) => {
+      const payload: ApprovalActionPayload = {
+        proposalId,
+        proposalVersion,
+        decision,
+        workspaceId,
+        fileUri,
+      };
       postMessage({ type: 'approvalAction', payload });
     },
     [postMessage]

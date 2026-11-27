@@ -1,23 +1,16 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PersistenceFoundation } from '@nexipi/persistence';
 import { SqlJsProposalRepository, SqlJsApprovalRepository } from '@nexipi/persistence';
-import {
-  TrustedApprovalService,
-  defaultNow,
-  ApprovalErrorCode,
-} from '@nexipi/workspace';
+import { TrustedApprovalService, defaultNow, ApprovalErrorCode } from '@nexipi/workspace';
 import { ApprovalController } from '../approval-controller';
 import {
   ProposalRepositoryAdapter,
   ApprovalRepositoryAdapter,
 } from '../persistence-repository-adapters';
 
-const ORIGINAL_HASH =
-  '1111111111111111111111111111111111111111111111111111111111111111';
-const PROPOSED_HASH =
-  '2222222222222222222222222222222222222222222222222222222222222222';
-const OTHER_HASH =
-  '3333333333333333333333333333333333333333333333333333333333333333';
+const ORIGINAL_HASH = '1111111111111111111111111111111111111111111111111111111111111111';
+const PROPOSED_HASH = '2222222222222222222222222222222222222222222222222222222222222222';
+const OTHER_HASH = '3333333333333333333333333333333333333333333333333333333333333333';
 
 function makeProposalInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -107,9 +100,7 @@ describe('ApprovalController', () => {
     controller.onProposalCreated(pendingProposal());
 
     expect(controller.getPendingProposals()).toHaveLength(1);
-    expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'proposalCreated' })
-    );
+    expect(postMessage).toHaveBeenCalledWith(expect.objectContaining({ type: 'proposalCreated' }));
   });
 
   it('records an explicit approval through the trusted service', async () => {
@@ -131,7 +122,10 @@ describe('ApprovalController', () => {
 
     expect(controller.getPendingProposals()).toHaveLength(0);
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'approved', decision: 'approve' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'approved', decision: 'approve' }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -161,7 +155,10 @@ describe('ApprovalController', () => {
 
     expect(controller.getPendingProposals()).toHaveLength(0);
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'rejected', decision: 'reject' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'rejected', decision: 'reject' }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -184,7 +181,10 @@ describe('ApprovalController', () => {
     expect(provider.establishUserDecision).not.toHaveBeenCalled();
     expect(controller.getPendingProposals()).toHaveLength(0);
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'dismissed', decision: null }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'dismissed', decision: null }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -207,7 +207,10 @@ describe('ApprovalController', () => {
 
     expect(controller.getPendingProposals()).toHaveLength(0);
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'failed', decision: null }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'failed', decision: null }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -234,7 +237,10 @@ describe('ApprovalController', () => {
     });
 
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'failed' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'failed' }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -256,7 +262,13 @@ describe('ApprovalController', () => {
 
     expect(provider.establishUserDecision).not.toHaveBeenCalled();
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'failed', reason: 'Workspace or file identity mismatch' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({
+          status: 'failed',
+          reason: 'Workspace or file identity mismatch',
+        }),
+      })
     );
   });
 
@@ -287,7 +299,10 @@ describe('ApprovalController', () => {
     });
 
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'failed' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'failed' }),
+      })
     );
     const approval = await approvalPort.getApprovalForVersion(
       '11111111-1111-1111-1111-111111111111',
@@ -297,7 +312,9 @@ describe('ApprovalController', () => {
   });
 
   it('rejects an unknown proposal', async () => {
-    controller.onProposalCreated(pendingProposal({ proposalId: '00000000-0000-0000-0000-000000000000' }));
+    controller.onProposalCreated(
+      pendingProposal({ proposalId: '00000000-0000-0000-0000-000000000000' })
+    );
 
     await controller.handleApprovalAction({
       proposalId: '00000000-0000-0000-0000-000000000000',
@@ -308,7 +325,10 @@ describe('ApprovalController', () => {
     });
 
     expect(postMessage).toHaveBeenCalledWith(
-      expect.objectContaining({ type: 'approvalDecision', payload: expect.objectContaining({ status: 'failed' }) })
+      expect.objectContaining({
+        type: 'approvalDecision',
+        payload: expect.objectContaining({ status: 'failed' }),
+      })
     );
   });
 });

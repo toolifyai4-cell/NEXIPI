@@ -4,10 +4,8 @@ import { ProposalCreationRepositoryAdapter } from '../proposal-creation-boundary
 import type { FileSystemProvider } from '@nexipi/workspace';
 import { sha256 } from '@nexipi/workspace';
 
-const ORIGINAL_HASH =
-  '1111111111111111111111111111111111111111111111111111111111111111';
-const PROPOSED_HASH =
-  '2222222222222222222222222222222222222222222222222222222222222222';
+const ORIGINAL_HASH = '1111111111111111111111111111111111111111111111111111111111111111';
+const PROPOSED_HASH = '2222222222222222222222222222222222222222222222222222222222222222';
 
 function makeFileSystem(overrides: Partial<FileSystemProvider> = {}): FileSystemProvider {
   return {

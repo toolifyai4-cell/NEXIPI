@@ -36,7 +36,9 @@ describe('VSCodeTrustedDecisionProvider', () => {
     expect(result!.expiresAt).toBe(2_000_000_000_000);
     expect(vi.mocked(vscode.window.showWarningMessage).mock.calls[0][0]).toContain('file.txt');
     expect(vi.mocked(vscode.window.showWarningMessage).mock.calls[0][0]).toContain('ws-1');
-    expect(vi.mocked(vscode.window.showWarningMessage).mock.calls[0][1]).toMatchObject({ modal: true });
+    expect(vi.mocked(vscode.window.showWarningMessage).mock.calls[0][1]).toMatchObject({
+      modal: true,
+    });
   });
 
   it('establishes a reject decision', async () => {
