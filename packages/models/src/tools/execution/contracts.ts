@@ -15,22 +15,22 @@
  * by the execution adapter at a later stage.
  */
 
-export type TerminalId = string & { readonly __brand: unique symbol };
+export type TerminalId = string;
 
 export function createTerminalId(id: string): TerminalId {
-  return id as TerminalId;
+  return id;
 }
 
-export type EnvironmentConfigId = string & { readonly __brand: unique symbol };
+export type EnvironmentConfigId = string;
 
 export function createEnvironmentConfigId(id: string): EnvironmentConfigId {
-  return id as EnvironmentConfigId;
+  return id;
 }
 
-export type EnvironmentVariableName = string & { readonly __brand: unique symbol };
+export type EnvironmentVariableName = string;
 
 export function createEnvironmentVariableName(name: string): EnvironmentVariableName {
-  return name as EnvironmentVariableName;
+  return name;
 }
 
 /**
@@ -154,7 +154,7 @@ export interface ApprovalBinding {
   readonly arguments: readonly string[];
   readonly workingDirectory: string;
   readonly workspaceId: string;
-  readonly environmentConfigId: EnvironmentConfigId | undefined;
+  readonly environmentConfigId?: EnvironmentConfigId | undefined;
   readonly contentHash: string;
   readonly createdAt: number;
 }

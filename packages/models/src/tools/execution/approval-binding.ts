@@ -14,7 +14,7 @@
 
 import { createHash } from 'node:crypto';
 import type { ApprovalBinding, EnvironmentConfigId } from './contracts.js';
-import { TerminalDomainError, TerminalErrorCode, createTerminalError } from './errors.js';
+import { TerminalErrorCode, createTerminalError } from './errors.js';
 
 /**
  * Fields that contribute to the approval binding content hash. All are
@@ -122,7 +122,13 @@ export function computeContentHash(fields: ApprovalBindingFields): string {
  */
 export function approvalBindingMatchesCommand(
   binding: ApprovalBinding,
-  command: { readonly executable: string; readonly arguments: readonly string[]; readonly workingDirectory: string; readonly workspaceId: string; readonly environmentConfigId?: EnvironmentConfigId | undefined },
+  command: {
+    readonly executable: string;
+    readonly arguments: readonly string[];
+    readonly workingDirectory: string;
+    readonly workspaceId: string;
+    readonly environmentConfigId?: EnvironmentConfigId | undefined;
+  },
   contentHashFunction: ContentHashFunction = defaultContentHash
 ): boolean {
   const fields: ApprovalBindingFields = {
@@ -136,16 +142,22 @@ export function approvalBindingMatchesCommand(
 }
 
 /**
- * Throws TerminalDomainError when a command does not match an approval
+ * Throws TerminalError when a command does not match an approval
  * binding. Use this at the authorization boundary to fail closed on any
  * execution-context modification.
  *
- * @throws TerminalDomainError with code TERMINAL_APPROVAL_BINDING_MISMATCH
+ * @throws TerminalError with code TERMINAL_APPROVAL_BINDING_MISMATCH
  *         when the command does not match the binding.
  */
 export function assertApprovalBindingMatchesCommand(
   binding: ApprovalBinding,
-  command: { readonly executable: string; readonly arguments: readonly string[]; readonly workingDirectory: string; readonly workspaceId: string; readonly environmentConfigId?: EnvironmentConfigId | undefined },
+  command: {
+    readonly executable: string;
+    readonly arguments: readonly string[];
+    readonly workingDirectory: string;
+    readonly workspaceId: string;
+    readonly environmentConfigId?: EnvironmentConfigId | undefined;
+  },
   contentHashFunction: ContentHashFunction = defaultContentHash
 ): void {
   if (!approvalBindingMatchesCommand(binding, command, contentHashFunction)) {

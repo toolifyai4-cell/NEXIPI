@@ -221,5 +221,3 @@ describe('all states are covered by helpers', () => {
     });
   }
 });
-
-

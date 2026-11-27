@@ -39,14 +39,27 @@ describe('Terminal identifier factories', () => {
 
 describe('Terminal lifecycle state helpers', () => {
   it('classifies active states', () => {
-    for (const state of ['proposed', 'validating', 'awaiting-approval', 'approved', 'running'] as const) {
+    for (const state of [
+      'proposed',
+      'validating',
+      'awaiting-approval',
+      'approved',
+      'running',
+    ] as const) {
       expect(isActiveTerminalLifecycleState(state)).toBe(true);
       expect(isTerminalLifecycleState(state)).toBe(false);
     }
   });
 
   it('classifies terminal states', () => {
-    for (const state of ['completed', 'failed', 'rejected', 'cancelled', 'timed-out', 'disposed'] as const) {
+    for (const state of [
+      'completed',
+      'failed',
+      'rejected',
+      'cancelled',
+      'timed-out',
+      'disposed',
+    ] as const) {
       expect(isTerminalLifecycleState(state)).toBe(true);
       expect(isActiveTerminalLifecycleState(state)).toBe(false);
     }
@@ -179,4 +192,3 @@ describe('Default terminal execution limits', () => {
     expect(DEFAULT_TERMINAL_EXECUTION_LIMITS.maxExecutionMs).toBe(30_000);
   });
 });
-

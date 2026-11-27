@@ -27,13 +27,13 @@
  *   any active state -> disposed (extension shutdown)
  *   same-state transitions are idempotent (no-op)
  *
- * Every other cross-state transition is forbidden and throws TerminalDomainError,
+ * Every other cross-state transition is forbidden and throws TerminalError,
  * which guarantees rejection/expiration/cancellation can never be reinterpreted
  * as approval or completion.
  */
 
 import type { TerminalLifecycleState } from './contracts.js';
-import { TerminalDomainError, TerminalErrorCode, createTerminalError } from './errors.js';
+import { TerminalErrorCode, createTerminalError } from './errors.js';
 
 const VALID_TRANSITIONS: Record<TerminalLifecycleState, readonly TerminalLifecycleState[]> = {
   proposed: ['validating', 'disposed'],
@@ -71,9 +71,9 @@ const TERMINAL_STATES: ReadonlySet<TerminalLifecycleState> = new Set([
  *
  * Same-state (duplicate) transitions are idempotent and return the current
  * state without error. Any other transition not in the valid set is forbidden
- * and throws TerminalDomainError.
+ * and throws TerminalError.
  *
- * @throws TerminalDomainError with code TERMINAL_INVALID_TRANSITION for
+ * @throws TerminalError with code TERMINAL_INVALID_TRANSITION for
  *         forbidden or conflicting transitions.
  */
 export function applyTransition(
@@ -87,7 +87,7 @@ export function applyTransition(
   if (!allowed || !allowed.includes(nextState)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_TRANSITION,
-      `Invalid terminal lifecycle transition from '${currentState}' to '${nextState}'`,
+      `Invalid terminal lifecycle transition from '${currentState}' to '${nextState}'`
     );
   }
   return nextState;
@@ -100,13 +100,13 @@ export function applyTransition(
  * from an already-terminal state to `disposed` is forbidden (throws), which
  * prevents late asynchronous events from overwriting a settled result.
  *
- * @throws TerminalDomainError when the current state is already terminal.
+ * @throws TerminalError when the current state is already terminal.
  */
 export function transitionToDisposed(currentState: TerminalLifecycleState): TerminalLifecycleState {
   if (!ACTIVE_STATES.has(currentState)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_TRANSITION,
-      `Cannot dispose terminal state '${currentState}'`,
+      `Cannot dispose terminal state '${currentState}'`
     );
   }
   return applyTransition(currentState, 'disposed');
@@ -148,7 +148,9 @@ export function isRunnableState(state: TerminalLifecycleState): boolean {
  * (completed, failed, cancelled, timed-out) but not disposed/rejected.
  */
 export function isOutcomeTerminalState(state: TerminalLifecycleState): boolean {
-  return state === 'completed' || state === 'failed' || state === 'cancelled' || state === 'timed-out';
+  return (
+    state === 'completed' || state === 'failed' || state === 'cancelled' || state === 'timed-out'
+  );
 }
 
 /**

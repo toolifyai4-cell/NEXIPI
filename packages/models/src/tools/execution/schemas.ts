@@ -19,16 +19,11 @@
 import { z } from 'zod';
 import type {
   ApprovalBinding,
-  CancellationRequest,
-  EnvironmentConfigId,
-  EnvironmentConfigReference,
   TerminalCommand,
   TerminalExecutionLimits,
   TerminalExecutionRequest,
   TerminalExecutionResult,
-  TerminalId,
   TerminalLifecycleState,
-  TimeoutInfo,
 } from './contracts.js';
 import { DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
 
@@ -41,7 +36,6 @@ const MAX_ARGUMENTS_COUNT = 128;
 const MAX_WORKING_DIRECTORY_LENGTH = 4096;
 const MAX_COMMAND_LINE_LENGTH = 8192;
 const MAX_OUTPUT_SIZE_BYTES = 1024 * 1024;
-const MAX_EXECUTION_MS = 30_000;
 
 // Static, hardcoded pattern for environment variable names. Not derived from
 // model input. Permits POSIX-style names: alpha/underscore start, then
@@ -64,7 +58,7 @@ export const EnvironmentVariableNameSchema = z
   .max(256, 'environment variable name must not exceed 256 characters')
   .regex(
     ENV_VARIABLE_NAME_PATTERN,
-    'environment variable name must start with a letter or underscore and contain only letters, digits, and underscores',
+    'environment variable name must start with a letter or underscore and contain only letters, digits, and underscores'
   );
 
 export const EnvironmentConfigReferenceSchema = z.object({
@@ -96,44 +90,54 @@ export const TerminalCommandSchema = z
       .min(1, 'executable is required')
       .max(MAX_EXECUTABLE_LENGTH, `executable must not exceed ${MAX_EXECUTABLE_LENGTH} characters`),
     arguments: z
-      .array(z.string().max(MAX_ARGUMENT_LENGTH, `argument must not exceed ${MAX_ARGUMENT_LENGTH} characters`))
+      .array(
+        z
+          .string()
+          .max(MAX_ARGUMENT_LENGTH, `argument must not exceed ${MAX_ARGUMENT_LENGTH} characters`)
+      )
       .max(MAX_ARGUMENTS_COUNT, `too many arguments (maximum ${MAX_ARGUMENTS_COUNT})`),
     workingDirectory: z
       .string()
       .min(1, 'workingDirectory is required')
       .max(
         MAX_WORKING_DIRECTORY_LENGTH,
-        `workingDirectory must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} characters`,
+        `workingDirectory must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} characters`
       ),
     workspaceId: z
       .string()
       .min(1, 'workspaceId is required')
       .max(256, 'workspaceId must not exceed 256 characters'),
     environmentConfig: EnvironmentConfigReferenceSchema.optional(),
-    proposedAt: z.number().int().nonnegative('proposedAt must be a non-negative millisecond timestamp'),
+    proposedAt: z
+      .number()
+      .int()
+      .nonnegative('proposedAt must be a non-negative millisecond timestamp'),
   })
-  .refine(
-    data => {
-      const total =
-        data.executable.length +
-        data.arguments.reduce((sum, arg) => sum + arg.length, 0) +
-        data.arguments.length;
-      return total <= MAX_COMMAND_LINE_LENGTH;
-    },
-    `command line length must not exceed ${MAX_COMMAND_LINE_LENGTH} characters`,
-  );
+  .refine(data => {
+    const total =
+      data.executable.length +
+      data.arguments.reduce((sum, arg) => sum + arg.length, 0) +
+      data.arguments.length;
+    return total <= MAX_COMMAND_LINE_LENGTH;
+  }, `command line length must not exceed ${MAX_COMMAND_LINE_LENGTH} characters`);
 
 export const CancellationRequestSchema = z.object({
   kind: z.literal('cancellation-request'),
   requestId: z.string().min(1, 'requestId is required').max(256, 'requestId too long'),
   reason: z.enum(['user', 'shutdown', 'timeout']),
-  requestedAt: z.number().int().nonnegative('requestedAt must be a non-negative millisecond timestamp'),
+  requestedAt: z
+    .number()
+    .int()
+    .nonnegative('requestedAt must be a non-negative millisecond timestamp'),
 });
 
 export const TimeoutInfoSchema = z.object({
   kind: z.literal('timeout-info'),
   maxExecutionMs: z.number().int().positive('maxExecutionMs must be a positive millisecond value'),
-  deadlineAt: z.number().int().nonnegative('deadlineAt must be a non-negative millisecond timestamp'),
+  deadlineAt: z
+    .number()
+    .int()
+    .nonnegative('deadlineAt must be a non-negative millisecond timestamp'),
   expired: z.boolean(),
 });
 
@@ -146,7 +150,9 @@ export const ApprovalBindingSchema = z.object({
     .max(MAX_EXECUTABLE_LENGTH, `executable must not exceed ${MAX_EXECUTABLE_LENGTH} characters`),
   arguments: z
     .array(
-      z.string().max(MAX_ARGUMENT_LENGTH, `argument must not exceed ${MAX_ARGUMENT_LENGTH} characters`),
+      z
+        .string()
+        .max(MAX_ARGUMENT_LENGTH, `argument must not exceed ${MAX_ARGUMENT_LENGTH} characters`)
     )
     .max(MAX_ARGUMENTS_COUNT, `too many arguments (maximum ${MAX_ARGUMENTS_COUNT})`),
   workingDirectory: z
@@ -154,10 +160,13 @@ export const ApprovalBindingSchema = z.object({
     .min(1, 'workingDirectory is required')
     .max(
       MAX_WORKING_DIRECTORY_LENGTH,
-      `workingDirectory must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} characters`,
+      `workingDirectory must not exceed ${MAX_WORKING_DIRECTORY_LENGTH} characters`
     ),
-  workspaceId: z.string().min(1, 'workspaceId is required').max(256, 'workspaceId must not exceed 256 characters'),
-  environmentConfigId: EnvironmentConfigIdSchema.nullable().optional(),
+  workspaceId: z
+    .string()
+    .min(1, 'workspaceId is required')
+    .max(256, 'workspaceId must not exceed 256 characters'),
+  environmentConfigId: EnvironmentConfigIdSchema.optional(),
   contentHash: z
     .string()
     .regex(/^[a-f0-9]{64}$/, 'contentHash must be a lowercase SHA-256 hex string (64 hex chars)'),
@@ -178,8 +187,12 @@ export const TerminalExecutionResultSchema = z.object({
   state: TerminalLifecycleStateSchema,
   exitCode: z.number().int().nonnegative().nullable(),
   exitSignal: z.string().max(64).nullable(),
-  stdout: z.string().max(MAX_OUTPUT_SIZE_BYTES, `stdout must not exceed ${MAX_OUTPUT_SIZE_BYTES} bytes`),
-  stderr: z.string().max(MAX_OUTPUT_SIZE_BYTES, `stderr must not exceed ${MAX_OUTPUT_SIZE_BYTES} bytes`),
+  stdout: z
+    .string()
+    .max(MAX_OUTPUT_SIZE_BYTES, `stdout must not exceed ${MAX_OUTPUT_SIZE_BYTES} bytes`),
+  stderr: z
+    .string()
+    .max(MAX_OUTPUT_SIZE_BYTES, `stderr must not exceed ${MAX_OUTPUT_SIZE_BYTES} bytes`),
   stdoutTruncated: z.boolean(),
   stderrTruncated: z.boolean(),
   outputSizeBytes: z.number().int().nonnegative(),
@@ -188,9 +201,7 @@ export const TerminalExecutionResultSchema = z.object({
   executionMs: z.number().int().nonnegative().nullable(),
   cancelled: z.boolean(),
   timedOut: z.boolean(),
-  error: z
-    .object({ code: z.string().min(1), message: z.string() })
-    .nullable(),
+  error: z.object({ code: z.string().min(1), message: z.string() }).nullable(),
 });
 
 export const TerminalExecutionLimitsSchema = z.object({

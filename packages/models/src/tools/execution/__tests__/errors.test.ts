@@ -14,9 +14,15 @@ describe('TerminalErrorCode', () => {
     expect(TerminalErrorCode.TERMINAL_INVALID_TRANSITION).toBe('TERMINAL_INVALID_TRANSITION');
     expect(TerminalErrorCode.TERMINAL_INVALID_RESULT).toBe('TERMINAL_INVALID_RESULT');
     expect(TerminalErrorCode.TERMINAL_INVALID_IDENTITY).toBe('TERMINAL_INVALID_IDENTITY');
-    expect(TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH).toBe('TERMINAL_APPROVAL_BINDING_MISMATCH');
-    expect(TerminalErrorCode.TERMINAL_UNSUPPORTED_CONFIGURATION).toBe('TERMINAL_UNSUPPORTED_CONFIGURATION');
-    expect(TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION).toBe('TERMINAL_OUTPUT_LIMIT_VIOLATION');
+    expect(TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH).toBe(
+      'TERMINAL_APPROVAL_BINDING_MISMATCH'
+    );
+    expect(TerminalErrorCode.TERMINAL_UNSUPPORTED_CONFIGURATION).toBe(
+      'TERMINAL_UNSUPPORTED_CONFIGURATION'
+    );
+    expect(TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION).toBe(
+      'TERMINAL_OUTPUT_LIMIT_VIOLATION'
+    );
   });
 });
 
@@ -53,7 +59,10 @@ describe('TerminalError', () => {
 
 describe('createTerminalError', () => {
   it('creates a TerminalError instance', () => {
-    const error = createTerminalError(TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION, 'Output too large');
+    const error = createTerminalError(
+      TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION,
+      'Output too large'
+    );
     expect(error).toBeInstanceOf(TerminalError);
     expect(error.code).toBe(TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION);
   });
@@ -68,7 +77,9 @@ describe('isTerminalError', () => {
 
   it('returns false for EngineError', () => {
     const { createEngineError, EngineErrorCode } = require('@nexipi/core');
-    expect(isTerminalError(createEngineError(EngineErrorCode.INTERNAL_ERROR, 'Internal'))).toBe(false);
+    expect(isTerminalError(createEngineError(EngineErrorCode.INTERNAL_ERROR, 'Internal'))).toBe(
+      false
+    );
   });
 
   it('returns false for non-Error values', () => {
@@ -88,11 +99,15 @@ describe('isTerminalErrorCode', () => {
 
   it('returns false when code does not match', () => {
     const error = new TerminalError(TerminalErrorCode.TERMINAL_INVALID_REQUEST, 'Timed out');
-    expect(isTerminalErrorCode(error, TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION)).toBe(false);
+    expect(isTerminalErrorCode(error, TerminalErrorCode.TERMINAL_OUTPUT_LIMIT_VIOLATION)).toBe(
+      false
+    );
   });
 
   it('returns false for non-TerminalError', () => {
-    expect(isTerminalErrorCode(new Error('x'), TerminalErrorCode.TERMINAL_INVALID_REQUEST)).toBe(false);
+    expect(isTerminalErrorCode(new Error('x'), TerminalErrorCode.TERMINAL_INVALID_REQUEST)).toBe(
+      false
+    );
   });
 });
 
@@ -130,7 +145,9 @@ describe('TerminalError toJSON', () => {
       accessToken: 'at-abc',
       normalField: 'visible',
     };
-    const error = new TerminalError(TerminalErrorCode.TERMINAL_INVALID_REQUEST, 'Invalid request', { context });
+    const error = new TerminalError(TerminalErrorCode.TERMINAL_INVALID_REQUEST, 'Invalid request', {
+      context,
+    });
 
     const json = error.toJSON();
     expect(json.context).toBeUndefined();
@@ -168,11 +185,13 @@ describe('TerminalError toJSON', () => {
   it('keeps safe diagnostic info accessible on the instance but not serialized', () => {
     const cause = new Error('Original failure');
     const context = { requestId: 'req-123' };
-    const error = new TerminalError(
-      TerminalErrorCode.TERMINAL_TIMEOUT,
-      'Timed out',
-      { terminalId: 'term-1', requestId: 'req-1', cause, context, retryable: true }
-    );
+    const error = new TerminalError(TerminalErrorCode.TERMINAL_TIMEOUT, 'Timed out', {
+      terminalId: 'term-1',
+      requestId: 'req-1',
+      cause,
+      context,
+      retryable: true,
+    });
 
     // Instance retains full diagnostic info internally
     expect(error.message).toBe('Timed out');
@@ -201,4 +220,3 @@ describe('TerminalError context is sanitized', () => {
     expect(error.context?.requestId).toBe('req-1');
   });
 });
-

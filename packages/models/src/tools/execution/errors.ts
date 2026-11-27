@@ -70,6 +70,9 @@ export function isTerminalError(error: unknown): error is TerminalError {
   return error instanceof TerminalError;
 }
 
-export function isTerminalErrorCode(error: unknown, code: TerminalErrorCode): error is TerminalError {
+export function isTerminalErrorCode(
+  error: unknown,
+  code: TerminalErrorCode
+): error is TerminalError {
   return isTerminalError(error) && error.code === code;
 }

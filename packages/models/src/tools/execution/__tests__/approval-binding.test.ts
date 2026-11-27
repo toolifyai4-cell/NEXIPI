@@ -177,7 +177,11 @@ describe('createApprovalBinding', () => {
 });
 
 describe('approvalBindingMatchesCommand', () => {
-  const binding = createApprovalBinding({ bindingId: 'bind-1', ...BASE_FIELDS, createdAt: 1700000000000 });
+  const binding = createApprovalBinding({
+    bindingId: 'bind-1',
+    ...BASE_FIELDS,
+    createdAt: 1700000000000,
+  });
 
   it('returns true for a matching command', () => {
     const command = baseFieldsCommand();
@@ -232,13 +236,22 @@ describe('approvalBindingMatchesCommand', () => {
       ...BASE_FIELDS,
       contentHashFunction: custom,
     });
-    const command = { executable: 'anything', arguments: [], workingDirectory: 'x', workspaceId: 'y' };
+    const command = {
+      executable: 'anything',
+      arguments: [],
+      workingDirectory: 'x',
+      workspaceId: 'y',
+    };
     expect(approvalBindingMatchesCommand(binding2, command, custom)).toBe(true);
   });
 });
 
 describe('assertApprovalBindingMatchesCommand', () => {
-  const binding = createApprovalBinding({ bindingId: 'bind-1', ...BASE_FIELDS, createdAt: 1700000000000 });
+  const binding = createApprovalBinding({
+    bindingId: 'bind-1',
+    ...BASE_FIELDS,
+    createdAt: 1700000000000,
+  });
 
   it('does not throw for a matching command', () => {
     const command = baseFieldsCommand();
@@ -252,7 +265,9 @@ describe('assertApprovalBindingMatchesCommand', () => {
       assertApprovalBindingMatchesCommand(binding, command);
     } catch (error) {
       throwIfNotTerminalError(error);
-      expect((error as TerminalError).code).toBe(TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH);
+      expect((error as TerminalError).code).toBe(
+        TerminalErrorCode.TERMINAL_APPROVAL_BINDING_MISMATCH
+      );
       expect((error as TerminalError).message).toContain('bind-1');
       expect((error as TerminalError).message).toContain('node');
     }
@@ -285,7 +300,11 @@ describe('binding invalidation on any execution-relevant field change', () => {
     it(`invalidates the binding when ${field} changes`, () => {
       expect(defaultContentHash(changed)).not.toBe(baseHash);
       const binding = createApprovalBinding({ bindingId: 'bind-1', ...BASE_FIELDS, createdAt: 1 });
-      const changedBinding = createApprovalBinding({ bindingId: 'bind-2', ...changed, createdAt: 1 });
+      const changedBinding = createApprovalBinding({
+        bindingId: 'bind-2',
+        ...changed,
+        createdAt: 1,
+      });
       expect(binding.contentHash).not.toBe(changedBinding.contentHash);
     });
   }

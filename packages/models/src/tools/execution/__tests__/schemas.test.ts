@@ -40,14 +40,16 @@ describe('TerminalCommandSchema', () => {
   });
 
   it('requires executable', () => {
-    expect(
-      TerminalCommandSchema.safeParse({ ...BASE_COMMAND, executable: '' }).success
-    ).toBe(false);
+    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, executable: '' }).success).toBe(
+      false
+    );
   });
 
   it('rejects executable over the length limit', () => {
     const over = 'x'.repeat(257);
-    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, executable: over }).success).toBe(false);
+    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, executable: over }).success).toBe(
+      false
+    );
   });
 
   it('accepts arguments within bounds', () => {
@@ -66,11 +68,15 @@ describe('TerminalCommandSchema', () => {
   });
 
   it('requires workingDirectory', () => {
-    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, workingDirectory: '' }).success).toBe(false);
+    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, workingDirectory: '' }).success).toBe(
+      false
+    );
   });
 
   it('requires workspaceId', () => {
-    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, workspaceId: '' }).success).toBe(false);
+    expect(TerminalCommandSchema.safeParse({ ...BASE_COMMAND, workspaceId: '' }).success).toBe(
+      false
+    );
   });
 
   it('rejects an over-long command line', () => {
@@ -145,7 +151,9 @@ describe('TerminalExecutionRequestSchema', () => {
   });
 
   it('requires requestId', () => {
-    expect(TerminalExecutionRequestSchema.safeParse({ ...BASE_REQUEST, requestId: '' }).success).toBe(false);
+    expect(
+      TerminalExecutionRequestSchema.safeParse({ ...BASE_REQUEST, requestId: '' }).success
+    ).toBe(false);
   });
 });
 
@@ -196,7 +204,9 @@ describe('TerminalExecutionResultSchema', () => {
   });
 
   it('rejects a non-integer exitCode', () => {
-    expect(TerminalExecutionResultSchema.safeParse({ ...BASE_RESULT, exitCode: 1.5 }).success).toBe(false);
+    expect(TerminalExecutionResultSchema.safeParse({ ...BASE_RESULT, exitCode: 1.5 }).success).toBe(
+      false
+    );
   });
 
   it('accepts null exitCode for running state', () => {
@@ -238,9 +248,15 @@ describe('ApprovalBindingSchema', () => {
   });
 
   it('requires contentHash to be a 64-char lowercase hex string', () => {
-    expect(ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'not-a-hash' }).success).toBe(false);
-    expect(ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'g'.repeat(64) }).success).toBe(false);
-    expect(ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'A'.repeat(64) }).success).toBe(false);
+    expect(
+      ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'not-a-hash' }).success
+    ).toBe(false);
+    expect(
+      ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'g'.repeat(64) }).success
+    ).toBe(false);
+    expect(
+      ApprovalBindingSchema.safeParse({ ...BASE_BINDING, contentHash: 'A'.repeat(64) }).success
+    ).toBe(false);
   });
 
   it('requires createdAt to be positive', () => {
@@ -272,12 +288,17 @@ describe('validateApprovalBinding / safeValidateApprovalBinding', () => {
 
 describe('TerminalExecutionLimitsSchema', () => {
   it('accepts valid limits', () => {
-    expect(validateTerminalExecutionLimits(DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED)).toBeDefined();
+    expect(
+      validateTerminalExecutionLimits(DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED)
+    ).toBeDefined();
   });
 
   it('rejects non-positive limits', () => {
     expect(() =>
-      validateTerminalExecutionLimits({ ...DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED, maxExecutionMs: 0 })
+      validateTerminalExecutionLimits({
+        ...DEFAULT_TERMINAL_EXECUTION_LIMITS_VALIDATED,
+        maxExecutionMs: 0,
+      })
     ).toThrow();
   });
 });
@@ -308,14 +329,17 @@ describe('EnvironmentConfigReferenceSchema', () => {
   });
 
   it('requires kind', () => {
-    expect(
-      EnvironmentConfigReferenceSchema.safeParse({ kind: 'other', id: 'env-1' }).success
-    ).toBe(false);
+    expect(EnvironmentConfigReferenceSchema.safeParse({ kind: 'other', id: 'env-1' }).success).toBe(
+      false
+    );
   });
 
   it('accepts a reference without a name', () => {
     expect(
-      EnvironmentConfigReferenceSchema.safeParse({ kind: 'environment-config-reference', id: 'env-1' }).success
+      EnvironmentConfigReferenceSchema.safeParse({
+        kind: 'environment-config-reference',
+        id: 'env-1',
+      }).success
     ).toBe(true);
   });
 });
@@ -358,4 +382,3 @@ describe('isTerminalStateSchema / isActiveStateSchema', () => {
     expect(isActiveStateSchema('completed')).toBe(false);
   });
 });
-
