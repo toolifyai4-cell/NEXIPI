@@ -21,14 +21,14 @@
  * treat resolved identity as a point-in-time check, not a guarantee.
  */
 
-import { access, constants } from 'node:fs';
+import { access } from 'node:fs/promises';
+import { constants } from 'node:fs';
 import * as nodePath from 'node:path';
 
 const posixJoin = nodePath.posix.join.bind(nodePath.posix);
 import type {
   ExecutablePlatform,
   ExecutableResolutionResult,
-  ResolvedExecutable,
 } from './executable-policy.js';
 
 /**
@@ -119,7 +119,7 @@ export async function resolveExecutable(
     return { kind: 'rejected', reason: 'Executable must not be empty' };
   }
 
-  const pathEnv = pathEnvInput ?? process.env.PATH ?? '';
+  const pathEnv = pathEnvInput ?? process.env['PATH'] ?? '';
   const pathextList = defaultPathextList(pathextEnvInput);
 
   // --- Case 1: Absolute path ---

@@ -21,21 +21,18 @@ import {
   applyTransition,
   isActiveState,
   isTerminalState,
-  type TerminalLifecycleState,
 } from './lifecycle.js';
 import {
-  TerminalError,
   TerminalErrorCode,
   createTerminalError,
   isTerminalError,
 } from './errors.js';
 import type {
-  ApprovalBinding,
-  TerminalCommand,
   TerminalExecutionLimits,
   TerminalExecutionRequest,
   TerminalExecutionResult,
   TerminalId,
+  TerminalLifecycleState,
 } from './contracts.js';
 import { createTerminalId, DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
 import { validateTerminalCommandSecurity } from './command-validation.js';
@@ -49,47 +46,12 @@ import {
   spawnControlledProcess,
   buildSanitizedEnvironment,
   terminateProcessTree,
-  type ProcessExecutionResult,
+  defaultKillProcessTree,
   type ProcessHandle,
   type KillProcessTreeFunction,
   type SpawnFunction,
 } from './process-adapter.js';
 import { assertApprovalBindingMatchesCommand } from './approval-binding.js';
-
-/**
- * Default kill-process-tree function.
- *
- * POSIX: Sends the signal to the process group (negative PID) so that
- * child processes in the same group are also terminated.
- *
- * Windows: Spawns `taskkill /T /F /PID <pid>` to terminate the process
- * and its descendants.
- */
-export function defaultKillProcessTree(pid: number, signal?: string): boolean {
-  const termSignal = signal ?? 'SIGTERM';
-  if (process.platform === 'win32') {
-    try {
-      require('node:child_process').execSync(
-        `taskkill /T /F /PID ${pid}`,
-        { stdio: 'ignore', windowsHide: true }
-      );
-      return true;
-    } catch {
-      return false;
-    }
-  }
-  try {
-    process.kill(-pid, termSignal as NodeJS.Signals);
-    return true;
-  } catch {
-    try {
-      process.kill(pid, termSignal as NodeJS.Signals);
-      return true;
-    } catch {
-      return false;
-    }
-  }
-}
 
 /**
  * Internal entry for tracking an in-flight or queued execution.
@@ -203,7 +165,7 @@ export class TerminalExecutionService {
     this.limits = createTerminalExecutionServiceLimits(options.limits);
     this.logger = options.logger ?? createNoopLogger();
     this.workspaceBoundaryValidator = options.workspaceBoundaryValidator;
-    this.spawnFn = options.spawnFn ?? spawnControlledProcess;
+    this.spawnFn = options.spawnFn ?? (spawnControlledProcess as unknown as SpawnFunction);
     this.killProcessTreeFn = options.killProcessTreeFn ?? defaultKillProcessTree;
     this.platform = options.platform ?? (process.platform === 'win32' ? 'win32' : 'posix');
   }
@@ -363,14 +325,11 @@ export class TerminalExecutionService {
     // for pre-execution states (approved, awaiting-approval, validating,
     // proposed) fall back to `disposed` which is reachable from any active
     // state.
-    let transitioned = false;
     try {
       entry.state = applyTransition(entry.state, 'cancelled');
-      transitioned = true;
     } catch {
       try {
         entry.state = applyTransition(entry.state, 'disposed');
-        transitioned = true;
       } catch {
         // Leave state as-is if all transitions fail.
       }
@@ -534,7 +493,7 @@ export class TerminalExecutionService {
       // --- Set up timeout ---
       const timeoutMs = this.limits.maxExecutionMs;
 
-      const executePromise = (async (): Promise<void> => {
+      void (async (): Promise<void> => {
         try {
           const processResult = await spawnControlledProcess(
             resolvedExecutable.resolvedPath,
@@ -546,7 +505,7 @@ export class TerminalExecutionService {
               maxOutputBytes: this.limits.maxOutputSizeBytes,
               windowsHide: true,
             },
-            this.spawnFn as SpawnFunction
+            this.spawnFn
           );
 
           entry.processHandle = null;
@@ -562,47 +521,6 @@ export class TerminalExecutionService {
                   : 'failed';
 
           const executionResult: TerminalExecutionResult = {
-            kind: 'terminal-execution-result',
-            requestId: request.requestId,
-            terminalId: entry.terminalId,
-            state,
-            exitCode: processResult.exitCode,
-            exitSignal: processResult.exitSignal,
-            stdout: processResult.stdout,
-            stderr: processResult.stderr,
-            stdoutTruncated: processResult.stdoutTruncated,
-            stderrTruncated: processResult.stderrTruncated,
-            outputSizeBytes: processResult.outputSizeBytes,
-            startedAt: processResult.startedAt,
-            completedAt: processResult.completedAt,
-            executionMs: processResult.executionMs,
-            cancelled: processResult.killed,
-            timedOut: processResult.timedOut,
-            error: processResult.exitCode !== 0 && !processResult.killed && !processResult.timedOut
-              ? {
-                  code: TerminalErrorCode.TERMINAL_INVALID_RESULT,
-                  message: `Process exited with code ${processResult.exitCode}`,
-                }
-              : null,
-          };
-
-          this.completeEntry(entry, executionResult);
-        } catch (error) {
-          entry.processHandle = null;
-          if (isTerminalError(error)) {
-            this.failEntry(entry, error.code, error.message);
-          } else {
-            this.failEntry(
-              entry,
-              TerminalErrorCode.TERMINAL_SPAWN_FAILED,
-              `Process execution failed: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-        } finally {
-          this.activeCount--;
-          this.processQueue();
-        }
-      })();
             kind: 'terminal-execution-result',
             requestId: request.requestId,
             terminalId: entry.terminalId,

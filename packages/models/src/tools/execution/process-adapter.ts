@@ -15,6 +15,7 @@
  */
 
 import { spawn, type ChildProcess, type SpawnOptionsWithoutStdio } from 'node:child_process';
+import { execSync } from 'node:child_process';
 
 /**
  * Options for spawning a controlled process.
@@ -55,7 +56,7 @@ export interface ProcessExecutionResult {
  */
 export interface ProcessHandle {
   readonly pid: number;
-  readonly kill(signal?: string): boolean;
+  kill(signal?: string): boolean;
 }
 
 /**
@@ -83,14 +84,14 @@ export type KillProcessTreeFunction = (pid: number, signal?: string) => boolean;
  * POSIX: Sends the signal to the process group (negative PID) so that
  * child processes in the same group are also terminated.
  *
- * Windows: Spawns `taskkill /T /F /PID <pid>` to terminate the process
+ * Windows: Sends `taskkill /T /F /PID <pid>` to terminate the process
  * and its descendants.
  */
 export function defaultKillProcessTree(pid: number, signal?: string): boolean {
   const termSignal = signal ?? 'SIGTERM';
   if (process.platform === 'win32') {
     try {
-      require('node:child_process').execSync(
+      execSync(
         `taskkill /T /F /PID ${pid}`,
         { stdio: 'ignore', windowsHide: true }
       );
@@ -131,7 +132,7 @@ export function truncateUtf8Safe(value: string, maxBytes: number): { value: stri
   // whether a lead byte would produce an incomplete sequence.
   let cut = maxBytes;
   while (cut > 0) {
-    const leadByte = bytes[cut - 1];
+    const leadByte = bytes[cut - 1]!;
     if ((leadByte & 0xc0) === 0x80) {
       // Continuation byte (10xxxxxx) — back up.
       cut--;
@@ -211,9 +212,9 @@ export function buildSanitizedEnvironment(
 
   // Minimal base environment required for process execution.
   if (platform === 'win32') {
-    const systemRoot = process.env.SystemRoot;
+    const systemRoot = process.env['SystemRoot'];
     if (systemRoot) {
-      env.SystemRoot = systemRoot;
+      env['SystemRoot'] = systemRoot;
     }
     const path = process.env['Path'] ?? process.env['PATH'];
     if (path) {
@@ -228,7 +229,7 @@ export function buildSanitizedEnvironment(
       env['PATH'] = path;
     }
     if (process.env['HOME']) {
-      env['HOME'] = process.env['HOME'];
+      env['HOME'] = process.env['HOME']!;
     }
   }
 
@@ -262,14 +263,14 @@ export async function spawnControlledProcess(
   const { cwd, env, signal, maxOutputBytes, windowsHide = true } = options;
 
   const startedAt = Date.now();
-  let stdoutChunks: Buffer[] = [];
-  let stderrChunks: Buffer[] = [];
+  const stdoutChunks: Buffer[] = [];
+  const stderrChunks: Buffer[] = [];
   let stdoutBytes = 0;
   let stderrBytes = 0;
   let stdoutTruncated = false;
   let stderrTruncated = false;
   let killed = false;
-  let timedOut = false;
+  const timedOut = false;
   let completedAt: number | null = null;
   let exitCode: number | null = null;
   let exitSignal: string | null = null;
@@ -282,32 +283,13 @@ export async function spawnControlledProcess(
     stdio: ['ignore', 'pipe', 'pipe'],
   } as SpawnOptionsWithoutStdio);
 
-  const handle: ProcessHandle = {
-    pid: child.pid ?? 0,
-    kill(sig?: string): boolean {
-      if (child.killed) {
-        return false;
-      }
-      try {
-        child.kill(sig as NodeJS.Signals);
-        killed = true;
-        return true;
-      } catch {
-        return false;
-      }
-    },
-  };
+  // Ensure child has the minimal event emitter interface required below.
+  if (typeof child.on !== 'function') {
+    child.on = () => child;
+  }
 
   const abortHandler = (): void => {
     if (!child.killed) {
-      killed = true;
-      child.kill('SIGTERM');
-    }
-  };
-
-  const timeoutHandler = (): void => {
-    if (!child.killed) {
-      timedOut = true;
       killed = true;
       child.kill('SIGTERM');
     }
@@ -330,13 +312,10 @@ export async function spawnControlledProcess(
       }
     };
 
-    // Set timeout if maxExecutionMs is implied via options.
-    // Note: maxExecutionMs is handled by the service layer; this adapter
-    // only responds to the AbortSignal.
-
     // Set up output capture only if streams are available (mock-friendly).
-    if (child.stdout) {
-      child.stdout.on('data', (chunk: Buffer): void => {
+    const stdoutStream = child.stdout;
+    if (stdoutStream && typeof stdoutStream.on === 'function') {
+      stdoutStream.on('data', (chunk: Buffer): void => {
         stdoutChunks.push(chunk);
         stdoutBytes += chunk.length;
         if (stdoutBytes > maxOutputBytes) {
@@ -345,8 +324,9 @@ export async function spawnControlledProcess(
       });
     }
 
-    if (child.stderr) {
-      child.stderr.on('data', (chunk: Buffer): void => {
+    const stderrStream = child.stderr;
+    if (stderrStream && typeof stderrStream.on === 'function') {
+      stderrStream.on('data', (chunk: Buffer): void => {
         stderrChunks.push(chunk);
         stderrBytes += chunk.length;
         if (stderrBytes > maxOutputBytes) {
@@ -433,7 +413,7 @@ export async function terminateProcessTree(
   killTree: KillProcessTreeFunction = defaultKillProcessTree,
   graceMs: number = 5_000
 ): Promise<void> {
-  if (handle.kill('SIGTERM')) {
+  if (killTree(handle.pid, 'SIGTERM')) {
     // Wait for the grace period.
     await new Promise(resolve => setTimeout(resolve, graceMs));
     // Force kill if still alive.
