@@ -178,17 +178,17 @@ function normalizeSeparators(value: string, platform: ExecutablePlatform): strin
  * Default executable resolver.
  *
  * Resolution rules:
- *   - Absolute paths are used as-is (normalized separators).
- *   - Relative names are treated as executable names to be resolved against
- *   PATH. Since this module does not read the host PATH, relative names
- *   resolve to `<cwd>/<name>` for identity purposes only; the actual
- *   adapter (Stage D) is responsible for real PATH lookup at execution
- *   time and must re-verify identity against this policy.
+ *   - Absolute paths are used as-is (separators normalized).
+ *   - Relative executable names are resolved against cwd for identity
+ *     purposes only; the actual Stage D adapter must perform real PATH
+ *     lookup and re-verify the resolved identity against this policy.
  *   - Windows executable extensions are stripped for comparison purposes but
- *   preserved in the resolved path.
+ *     preserved in the resolved path.
  *
- * This resolver never touches the filesystem. It produces a deterministic
- * identity suitable for allowlist comparison.
+ * Executable identity is verified by exact resolved path, which prevents
+ * path-spoofing and alias attacks: a same-named executable at a different
+ * path is a different identity and is not permitted unless separately
+ * allowlisted. This resolver never touches the host filesystem.
  */
 export class DefaultExecutableResolver implements ExecutableResolver {
   private readonly platform: ExecutablePlatform;
@@ -257,9 +257,19 @@ export function hashExecutableIdentity(identity: ResolvedExecutable): string {
 /**
  * Default executable policy.
  *
- * Ships with a minimal allowlist of read-oriented executables that are
- * generally safe when invoked with controlled arguments. Shell interpreters
- * and package managers are intentionally excluded.
+ * Ships with a minimal allowlist of executables matched only by exact
+ * resolved path. Shell interpreters (cmd, powershell, bash, sh, zsh),
+ * package managers (npm, yarn, pip, cargo), and executables capable of
+ * repository modification or arbitrary script execution (git, find) are
+ * intentionally excluded from the default allowlist.
+ *
+ * IMPORTANT: Executable allowlisting does NOT imply that arbitrary arguments
+ * are safe. An allowlisted executable can still read sensitive files
+ * (e.g. `cat /etc/passwd`), traverse outside the workspace, or perform other
+ * unsafe operations through its arguments. Argument-level risk assessment
+ * (Stage C validation + Stage D adapter) and trusted user approval (Stage E)
+ * remain required before any command executes. The allowlist is a single gate
+ * in a defense-in-depth chain, not a complete security boundary.
  *
  * The allowlist is deliberately conservative. Adding entries is a security
  * decision that must be reviewed case by case.
@@ -282,37 +292,37 @@ export class DefaultExecutablePolicy implements ExecutablePolicy {
 
   private seedDefaults(): void {
     const defaults: PermittedExecutableEntry[] = [
-      // Read-oriented, commonly safe executables. None of these spawn a
-      // general shell or execute arbitrary scripts from arguments alone.
+      // Minimal default allowlist. Every entry is deliberately narrow and
+      // matched only by exact resolved path. Executable allowlisting does NOT
+      // imply that arbitrary arguments are safe: argument-level risk
+      // assessment (Stage C validation + Stage D adapter) and trusted user
+      // approval (Stage E) remain required before any command executes.
+      //
+      // `ls` lists directory contents. It reads filesystem metadata but does
+      // not modify files. Arguments can still reference sensitive paths.
       {
         resolvedPath: '/usr/bin/ls',
         displayName: 'ls',
         platform: 'posix',
-        notes: 'List directory contents (read-only).',
+        notes:
+          'List directory contents. Can read sensitive paths via arguments; not harmless by itself.',
       },
+      // `cat` displays file contents. It is read-only in the sense that it
+      // does not modify files, but it can read any file the process can
+      // access, including secrets and sensitive files. Do NOT treat `cat` as
+      // universally safe merely because it is read-only.
       {
         resolvedPath: '/usr/bin/cat',
         displayName: 'cat',
         platform: 'posix',
-        notes: 'Display file contents (read-only).',
-      },
-      {
-        resolvedPath: '/usr/bin/find',
-        displayName: 'find',
-        platform: 'posix',
-        notes: 'Search for files (read-only).',
-      },
-      {
-        resolvedPath: '/usr/bin/git',
-        displayName: 'git',
-        platform: 'posix',
-        notes: 'Version control; read-only subcommands preferred.',
+        notes:
+          'Display file contents. Can read secrets and sensitive files via arguments; not harmless by itself.',
       },
       {
         resolvedPath: 'C:\\Windows\\System32\\where.exe',
         displayName: 'where',
         platform: 'win32',
-        notes: 'Locate files (read-only).',
+        notes: 'Locate files in PATH. Can reveal executable locations; not harmless by itself.',
       },
     ];
 

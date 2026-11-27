@@ -120,6 +120,22 @@ describe('createDefaultExecutableResolver', () => {
     const result = resolver.resolve('C:\\tool.exe', 'C:\\workspace');
     expect(result.kind).toBe('resolved');
   });
+
+  it('alias or relative name cannot bypass exact identity check', () => {
+    const resolver = new DefaultExecutableResolver('posix');
+    const policy = new DefaultExecutablePolicy('posix');
+    const direct = resolver.resolve('/usr/bin/ls', POSIX_CWD);
+    const viaRelative = resolver.resolve('ls', POSIX_CWD);
+    expect(direct.kind).toBe('resolved');
+    expect(viaRelative.kind).toBe('resolved');
+    if (direct.kind === 'resolved' && viaRelative.kind === 'resolved') {
+      // '/usr/bin/ls' and '/workspace/ls' are different resolved identities.
+      expect(direct.executable!.resolvedPath).not.toBe(viaRelative.executable!.resolvedPath);
+      // Only the exact allowlisted path is permitted.
+      expect(policy.isExecutablePermitted(direct.executable!)).toBe(true);
+      expect(policy.isExecutablePermitted(viaRelative.executable!)).toBe(false);
+    }
+  });
 });
 
 describe('DefaultExecutablePolicy — default allowlist', () => {
@@ -140,16 +156,39 @@ describe('DefaultExecutablePolicy — default allowlist', () => {
         platform: 'posix',
       })
     ).toBe(true);
+    // git and find are NOT in the default allowlist: they can modify
+    // repositories and execute arbitrary commands via -exec / hooks.
     expect(
       policy.isExecutablePermitted({
         resolvedPath: '/usr/bin/git',
         displayName: 'git',
         platform: 'posix',
       })
-    ).toBe(true);
+    ).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/find',
+        displayName: 'find',
+        platform: 'posix',
+      })
+    ).toBe(false);
+  });
+
+  it('denies git and find by default (regression)', () => {
+    const policy = new DefaultExecutablePolicy('posix');
+    for (const exe of ['/usr/bin/git', '/usr/bin/find']) {
+      expect(
+        policy.isExecutablePermitted({
+          resolvedPath: exe,
+          displayName: exe.split('/').pop()!,
+          platform: 'posix',
+        })
+      ).toBe(false);
+    }
   });
 
   it('denies executables not in the allowlist', () => {
+    const policy = new DefaultExecutablePolicy('posix');
     expect(
       policy.isExecutablePermitted({
         resolvedPath: '/usr/bin/rm',
@@ -173,7 +212,8 @@ describe('DefaultExecutablePolicy — default allowlist', () => {
     ).toBe(false);
   });
 
-  it('denies a same-named executable at a different path', () => {
+  it('denies a same-named executable at a different path (path spoofing protection)', () => {
+    const policy = new DefaultExecutablePolicy('posix');
     expect(
       policy.isExecutablePermitted({
         resolvedPath: '/tmp/ls',
