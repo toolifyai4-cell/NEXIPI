@@ -505,8 +505,8 @@ describe('ApprovalController', () => {
   });
 
   it('disposal while dialog is unresolved prevents any approval record', async () => {
-    let resolveDecision: ((value: { approvalId: string; approval: { decision: string } }) => void) |
-      undefined;
+    let resolveDecision:
+      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
     const decisionPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
       resolve => {
         resolveDecision = resolve;
@@ -551,8 +551,8 @@ describe('ApprovalController', () => {
   });
 
   it('late dialog response after disposal cannot resurrect the request', async () => {
-    let resolveDecision: ((value: { approvalId: string; approval: { decision: string } }) => void) |
-      undefined;
+    let resolveDecision:
+      ((value: { approvalId: string; approval: { decision: string } }) => void) | undefined;
     const decisionPromise = new Promise<{ approvalId: string; approval: { decision: string } }>(
       resolve => {
         resolveDecision = resolve;
@@ -573,6 +573,7 @@ describe('ApprovalController', () => {
     controller.dispose();
 
     // Resolve after disposal: must be ignored (controller returns normally).
+    resolveDecision!({ approvalId: 'approval-1', approval: { decision: 'approve' } });
     await decision;
 
     // Proposal is not in pending state.

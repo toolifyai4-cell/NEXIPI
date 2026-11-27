@@ -659,7 +659,7 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     expect(result.statePermitsApplication).toBe(false);
   });
 
-  it('expired approval is denied', async () => {
+  it('expired approval is denied at decision time', async () => {
     const proposals = new InMemoryProposalRepository();
     proposals.insert(makeProposal());
     const approvals = new InMemoryApprovalRepository();
@@ -671,15 +671,16 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
     });
     const service = buildService({ proposals, approvals, provider, now: () => NOW + 5000 });
 
-    await service.createApprovalDecision(makeRequest({ expiresAt: NOW - 1000 }));
-
-    const result = await service.verifyApplicationAuthorization(
-      PROPOSAL_ID,
-      PROPOSAL_VERSION,
-      NOW + 5000
+    // An expired proposal is rejected before the dialog is shown; no approval
+    // record is created and the provider is never invoked.
+    await expectApprovalError(
+      service.createApprovalDecision(makeRequest({ expiresAt: NOW - 1000 })),
+      ApprovalErrorCode.NOT_AUTHORIZED
     );
-    expect(result.authorized).toBe(false);
-    expect(result.notExpired).toBe(false);
+    expect(provider.establishUserDecision).not.toHaveBeenCalled();
+
+    const stored = await approvals.getApprovalForVersion(PROPOSAL_ID, PROPOSAL_VERSION);
+    expect(stored.approval).toBeNull();
   });
 
   it('revoked approval is denied', async () => {
@@ -827,9 +828,7 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
         now: () => NOW, // now === expiresAt, still valid
       });
 
-      const result = await service.createApprovalDecision(
-        makeRequest({ expiresAt: NOW })
-      );
+      const result = await service.createApprovalDecision(makeRequest({ expiresAt: NOW }));
       expect(result.approval.decision).toBe('approve');
 
       const stored = await approvals.getApprovalForVersion(PROPOSAL_ID, PROPOSAL_VERSION);
@@ -849,38 +848,30 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
       const provider = makeProvider(null as unknown as TrustedUserDecision);
       vi.mocked(provider.establishUserDecision).mockImplementation(() => providerPromise);
 
+      // Clock starts before expiry (dialog opens before expiry).
+      let currentTime = NOW;
       const service = buildService({
         proposals,
         approvals,
         provider,
-        now: () => NOW, // not expired when dialog opens
+        now: () => currentTime,
       });
 
       const decision = service.createApprovalDecision(makeRequest({ expiresAt: NOW + 1000 }));
 
-      // Advance time past expiry while the dialog is open.
-      vi.restoreAllMocks();
-      const expiredService = buildService({
-        proposals,
-        approvals,
-        provider,
-        now: () => NOW + 5000, // now past expiresAt
+      // Advance the clock past expiry while the dialog is still open.
+      currentTime = NOW + 5000;
+
+      // Resolve the dialog with Approve (user clicked after expiry).
+      resolveProvider!({
+        decision: 'approve',
+        boundary: 'b',
+        decidedAt: currentTime,
+        expiresAt: null,
       });
 
-      // Use the expired service to check expiry after provider resolves.
-      // Instead, directly test that createApprovalDecision with a past expiresAt
-      // rejects before calling the provider.
-      await expiredService
-        .createApprovalDecision(makeRequest({ expiresAt: NOW }))
-        .then(() => {
-          throw new Error('should have thrown');
-        })
-        .catch(error => {
-          expect((error as ApprovalDomainError).code).toBe(ApprovalErrorCode.NOT_AUTHORIZED);
-        });
-
-      // Resolve the suspended provider (should not matter, request already rejected).
-      resolveProvider!({ decision: 'approve', boundary: 'b', decidedAt: NOW, expiresAt: null });
+      // The service should reject because now > expiresAt at persist time.
+      await expectApprovalError(decision, ApprovalErrorCode.NOT_AUTHORIZED);
 
       // No approval record was persisted.
       const stored = await approvals.getApprovalForVersion(PROPOSAL_ID, PROPOSAL_VERSION);
@@ -943,10 +934,7 @@ describe('TrustedApprovalService — lifecycle and authorization', () => {
       // Now abort (simulate disposal after dialog resolved but before persist).
       controller.abort();
 
-      await expectApprovalError(
-        decision,
-        ApprovalErrorCode.TRUSTED_DECISION_NOT_ESTABLISHED
-      );
+      await expectApprovalError(decision, ApprovalErrorCode.TRUSTED_DECISION_NOT_ESTABLISHED);
 
       // No approval record was persisted.
       const stored = await approvals.getApprovalForVersion(PROPOSAL_ID, PROPOSAL_VERSION);
