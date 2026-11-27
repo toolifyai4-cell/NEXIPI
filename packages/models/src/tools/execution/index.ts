@@ -10,3 +10,5 @@ export * from './schemas.js';
 export * from './lifecycle.js';
 export * from './errors.js';
 export * from './approval-binding.js';
+export * from './command-validation.js';
+export * from './executable-policy.js';

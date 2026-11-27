@@ -180,12 +180,12 @@ function normalizeSeparators(value: string, platform: ExecutablePlatform): strin
  * Resolution rules:
  *   - Absolute paths are used as-is (normalized separators).
  *   - Relative names are treated as executable names to be resolved against
-   *   PATH. Since this module does not read the host PATH, relative names
-   *   resolve to `<cwd>/<name>` for identity purposes only; the actual
-   *   adapter (Stage D) is responsible for real PATH lookup at execution
-   *   time and must re-verify identity against this policy.
+ *   PATH. Since this module does not read the host PATH, relative names
+ *   resolve to `<cwd>/<name>` for identity purposes only; the actual
+ *   adapter (Stage D) is responsible for real PATH lookup at execution
+ *   time and must re-verify identity against this policy.
  *   - Windows executable extensions are stripped for comparison purposes but
-   *   preserved in the resolved path.
+ *   preserved in the resolved path.
  *
  * This resolver never touches the filesystem. It produces a deterministic
  * identity suitable for allowlist comparison.
@@ -197,10 +197,7 @@ export class DefaultExecutableResolver implements ExecutableResolver {
     this.platform = platform;
   }
 
-  resolve(
-    executable: string,
-    cwd: string
-  ): ExecutableResolutionResult {
+  resolve(executable: string, cwd: string): ExecutableResolutionResult {
     if (typeof executable !== 'string' || executable.length === 0) {
       return { kind: 'rejected', reason: 'Executable must be a non-empty string' };
     }

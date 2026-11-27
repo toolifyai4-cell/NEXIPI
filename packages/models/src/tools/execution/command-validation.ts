@@ -26,10 +26,7 @@
  * utilities; when omitted, only structural checks run.
  */
 
-import type {
-  TerminalCommand,
-  TerminalExecutionLimits,
-} from './contracts.js';
+import type { TerminalCommand, TerminalExecutionLimits } from './contracts.js';
 import { DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
 import { TerminalErrorCode, createTerminalError, isTerminalError } from './errors.js';
 
@@ -46,10 +43,7 @@ export interface WorkspaceBoundaryValidator {
    * @throws when the directory is outside the workspace, is a symlink, or
    *         cannot be safely inspected. Fail closed.
    */
-  validate(
-    workingDirectory: string,
-    workspaceId: string
-  ): void | Promise<void>;
+  validate(workingDirectory: string, workspaceId: string): void | Promise<void>;
 }
 
 /**
@@ -135,40 +129,37 @@ export async function validateTerminalCommandSecurity(
   // --- Executable ---
   const executable = command.executable;
   if (typeof executable !== 'string' || executable.length === 0) {
-    throw createTerminalError(
-      TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Executable is required',
-    );
+    throw createTerminalError(TerminalErrorCode.TERMINAL_INVALID_REQUEST, 'Executable is required');
   }
   if (executable.trim().length === 0) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Executable must not be whitespace only',
+      'Executable must not be whitespace only'
     );
   }
   if (executable.length > limits.maxExecutableLength) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      `Executable exceeds ${limits.maxExecutableLength} characters`,
+      `Executable exceeds ${limits.maxExecutableLength} characters`
     );
   }
   if (containsNullByte(executable)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Executable must not contain null bytes',
+      'Executable must not contain null bytes'
     );
   }
   if (containsForbiddenChars(executable)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Executable contains forbidden characters',
+      'Executable contains forbidden characters'
     );
   }
   // Reject path traversal in the executable itself.
   if (hasTraversalComponent(executable)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Executable must not contain path traversal components',
+      'Executable must not contain path traversal components'
     );
   }
 
@@ -177,38 +168,38 @@ export async function validateTerminalCommandSecurity(
   if (!Array.isArray(argumentsList)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Arguments must be an array',
+      'Arguments must be an array'
     );
   }
   if (argumentsList.length > limits.maxArgumentsCount) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      `Too many arguments (maximum ${limits.maxArgumentsCount})`,
+      `Too many arguments (maximum ${limits.maxArgumentsCount})`
     );
   }
   for (const arg of argumentsList) {
     if (typeof arg !== 'string') {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Each argument must be a string',
+        'Each argument must be a string'
       );
     }
     if (arg.length > limits.maxArgumentLength) {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        `Argument exceeds ${limits.maxArgumentLength} characters`,
+        `Argument exceeds ${limits.maxArgumentLength} characters`
       );
     }
     if (containsNullByte(arg)) {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Arguments must not contain null bytes',
+        'Arguments must not contain null bytes'
       );
     }
     if (containsForbiddenChars(arg)) {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Arguments contain forbidden characters',
+        'Arguments contain forbidden characters'
       );
     }
   }
@@ -218,37 +209,37 @@ export async function validateTerminalCommandSecurity(
   if (typeof workingDirectory !== 'string' || workingDirectory.length === 0) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Working directory is required',
+      'Working directory is required'
     );
   }
   if (workingDirectory.length > limits.maxWorkingDirectoryLength) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      `Working directory exceeds ${limits.maxWorkingDirectoryLength} characters`,
+      `Working directory exceeds ${limits.maxWorkingDirectoryLength} characters`
     );
   }
   if (!isAbsolutePath(workingDirectory)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Working directory must be an absolute path',
+      'Working directory must be an absolute path'
     );
   }
   if (containsNullByte(workingDirectory)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Working directory must not contain null bytes',
+      'Working directory must not contain null bytes'
     );
   }
   if (containsForbiddenChars(workingDirectory)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Working directory contains forbidden characters',
+      'Working directory contains forbidden characters'
     );
   }
   if (hasTraversalComponent(workingDirectory)) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Working directory must not contain path traversal components',
+      'Working directory must not contain path traversal components'
     );
   }
 
@@ -257,7 +248,7 @@ export async function validateTerminalCommandSecurity(
   if (typeof workspaceId !== 'string' || workspaceId.length === 0) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      'Workspace identity is required',
+      'Workspace identity is required'
     );
   }
 
@@ -267,30 +258,31 @@ export async function validateTerminalCommandSecurity(
     if (typeof envConfig.id !== 'string' || envConfig.id.length === 0) {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Environment configuration id is required when a reference is provided',
+        'Environment configuration id is required when a reference is provided'
       );
     }
     if (envConfig.name !== undefined && typeof envConfig.name !== 'string') {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Environment configuration name must be a string when provided',
+        'Environment configuration name must be a string when provided'
       );
     }
     if (envConfig.name !== undefined && envConfig.name.length > 256) {
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        'Environment configuration name exceeds 256 characters',
+        'Environment configuration name exceeds 256 characters'
       );
     }
   }
 
   // --- Total command line length ---
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
   const commandLine = [executable, ...argumentsList].join(' ');
   const totalLength = commandLine.length;
   if (totalLength > limits.maxCommandLineLength) {
     throw createTerminalError(
       TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-      `Command line length exceeds ${limits.maxCommandLineLength} characters`,
+      `Command line length exceeds ${limits.maxCommandLineLength} characters`
     );
   }
 
@@ -304,7 +296,7 @@ export async function validateTerminalCommandSecurity(
       }
       throw createTerminalError(
         TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-        `Working directory is not authorized: ${error instanceof Error ? error.message : String(error)}`,
+        `Working directory is not authorized: ${error instanceof Error ? error.message : String(error)}`
       );
     }
   }
@@ -329,9 +321,7 @@ export function validateTerminalCommandSecuritySync(
 /**
  * Type guard for a validated terminal command result.
  */
-export function isValidatedTerminalCommand(
-  value: unknown
-): value is ValidatedTerminalCommand {
+export function isValidatedTerminalCommand(value: unknown): value is ValidatedTerminalCommand {
   return (
     typeof value === 'object' &&
     value !== null &&

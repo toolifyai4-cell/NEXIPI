@@ -31,9 +31,7 @@ describe('validateTerminalCommandSecurity — valid command', () => {
   });
 
   it('accepts a command with no arguments', async () => {
-    const result = await validateTerminalCommandSecurity(
-      makeCommand({ arguments: [] })
-    );
+    const result = await validateTerminalCommandSecurity(makeCommand({ arguments: [] }));
     expect(result.kind).toBe('validated-terminal-command');
   });
 
@@ -112,7 +110,15 @@ describe('validateTerminalCommandSecurity — argument validation', () => {
   });
 
   it('rejects an argument with shell metacharacters', async () => {
-    for (const arg of ['arg;rm', 'arg&rm', 'arg|rm', 'arg`id`', 'arg$(id)', 'arg<file', 'arg>file']) {
+    for (const arg of [
+      'arg;rm',
+      'arg&rm',
+      'arg|rm',
+      'arg`id`',
+      'arg$(id)',
+      'arg<file',
+      'arg>file',
+    ]) {
       await expect(
         validateTerminalCommandSecurity(makeCommand({ arguments: [arg] }))
       ).rejects.toThrow();
@@ -238,7 +244,11 @@ describe('validateTerminalCommandSecurity — workspace boundary validator', () 
         validated = true;
       },
     };
-    await validateTerminalCommandSecurity(makeCommand(), DEFAULT_TERMINAL_EXECUTION_LIMITS, validator);
+    await validateTerminalCommandSecurity(
+      makeCommand(),
+      DEFAULT_TERMINAL_EXECUTION_LIMITS,
+      validator
+    );
     expect(validated).toBe(true);
   });
 

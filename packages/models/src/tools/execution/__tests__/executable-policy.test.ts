@@ -126,19 +126,61 @@ describe('DefaultExecutablePolicy — default allowlist', () => {
   const policy = new DefaultExecutablePolicy('posix');
 
   it('permits seeded posix executables', () => {
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/ls', displayName: 'ls', platform: 'posix' })).toBe(true);
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/cat', displayName: 'cat', platform: 'posix' })).toBe(true);
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/git', displayName: 'git', platform: 'posix' })).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/ls',
+        displayName: 'ls',
+        platform: 'posix',
+      })
+    ).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/cat',
+        displayName: 'cat',
+        platform: 'posix',
+      })
+    ).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/git',
+        displayName: 'git',
+        platform: 'posix',
+      })
+    ).toBe(true);
   });
 
   it('denies executables not in the allowlist', () => {
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/rm', displayName: 'rm', platform: 'posix' })).toBe(false);
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/bash', displayName: 'bash', platform: 'posix' })).toBe(false);
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/npm', displayName: 'npm', platform: 'posix' })).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/rm',
+        displayName: 'rm',
+        platform: 'posix',
+      })
+    ).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/bash',
+        displayName: 'bash',
+        platform: 'posix',
+      })
+    ).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/npm',
+        displayName: 'npm',
+        platform: 'posix',
+      })
+    ).toBe(false);
   });
 
   it('denies a same-named executable at a different path', () => {
-    expect(policy.isExecutablePermitted({ resolvedPath: '/tmp/ls', displayName: 'ls', platform: 'posix' })).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/tmp/ls',
+        displayName: 'ls',
+        platform: 'posix',
+      })
+    ).toBe(false);
   });
 
   it('lists permitted executables', () => {
@@ -165,13 +207,25 @@ describe('DefaultExecutablePolicy — add/remove entries', () => {
       platform: 'posix',
       notes: 'custom tool',
     });
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/custom', displayName: 'custom', platform: 'posix' })).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/custom',
+        displayName: 'custom',
+        platform: 'posix',
+      })
+    ).toBe(true);
   });
 
   it('removes an entry', () => {
     const policy = new DefaultExecutablePolicy('posix');
     expect(policy.removeEntry('/usr/bin/ls')).toBe(true);
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/ls', displayName: 'ls', platform: 'posix' })).toBe(false);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/ls',
+        displayName: 'ls',
+        platform: 'posix',
+      })
+    ).toBe(false);
     expect(policy.removeEntry('/nonexistent')).toBe(false);
   });
 });
@@ -179,13 +233,25 @@ describe('DefaultExecutablePolicy — add/remove entries', () => {
 describe('createDefaultExecutablePolicy', () => {
   it('creates a policy with seed defaults', () => {
     const policy = createDefaultExecutablePolicy('posix');
-    expect(policy.isExecutablePermitted({ resolvedPath: '/usr/bin/ls', displayName: 'ls', platform: 'posix' })).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: '/usr/bin/ls',
+        displayName: 'ls',
+        platform: 'posix',
+      })
+    ).toBe(true);
   });
 
   it('creates a win32 policy', () => {
     const policy = createDefaultExecutablePolicy('win32');
     expect(policy.platform).toBe('win32');
-    expect(policy.isExecutablePermitted({ resolvedPath: 'C:\\Windows\\System32\\where.exe', displayName: 'where', platform: 'win32' })).toBe(true);
+    expect(
+      policy.isExecutablePermitted({
+        resolvedPath: 'C:\\Windows\\System32\\where.exe',
+        displayName: 'where',
+        platform: 'win32',
+      })
+    ).toBe(true);
   });
 });
 
@@ -233,7 +299,11 @@ describe('checkExecutablePermission', () => {
 
 describe('hashExecutableIdentity', () => {
   it('produces a stable 64-char hex hash', () => {
-    const identity: ResolvedExecutable = { resolvedPath: '/usr/bin/ls', displayName: 'ls', platform: 'posix' };
+    const identity: ResolvedExecutable = {
+      resolvedPath: '/usr/bin/ls',
+      displayName: 'ls',
+      platform: 'posix',
+    };
     const hash1 = hashExecutableIdentity(identity);
     const hash2 = hashExecutableIdentity(identity);
     expect(hash1).toBe(hash2);
