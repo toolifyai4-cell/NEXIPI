@@ -1,4 +1,11 @@
-import { Header, WelcomeScreen, ChatArea, Composer, StatusIndicator } from './components';
+import {
+  Header,
+  WelcomeScreen,
+  ChatArea,
+  Composer,
+  StatusIndicator,
+  ApprovalPanel,
+} from './components';
 import { useChat } from './hooks/useChat';
 
 export function App() {
@@ -18,6 +25,8 @@ export function App() {
     handleRetryMessage,
     messagesEndRef,
     welcomePrompts,
+    pendingProposals,
+    handleApprovalAction,
   } = useChat();
 
   const handleCancel = () => {
@@ -42,13 +51,19 @@ export function App() {
           {viewMode === 'welcome' ? (
             <WelcomeScreen prompts={welcomePrompts} onPromptSelect={handlePromptSelect} />
           ) : (
-            <ChatArea
-              messages={messages}
-              isLoading={isLoading}
-              messagesEndRef={messagesEndRef}
-              onCancelMessage={handleCancelMessage}
-              onRetryMessage={handleRetryMessage}
-            />
+            <>
+              <ApprovalPanel
+                proposals={pendingProposals}
+                onApprovalAction={handleApprovalAction}
+              />
+              <ChatArea
+                messages={messages}
+                isLoading={isLoading}
+                messagesEndRef={messagesEndRef}
+                onCancelMessage={handleCancelMessage}
+                onRetryMessage={handleRetryMessage}
+              />
+            </>
           )}
         </div>
         <Composer

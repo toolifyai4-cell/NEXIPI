@@ -3,3 +3,4 @@ export { WelcomeScreen } from './WelcomeScreen';
 export { ChatArea } from './ChatArea';
 export { Composer } from './Composer';
 export { StatusIndicator } from './StatusIndicator';
+export { ApprovalPanel } from './ApprovalPanel';

@@ -22,6 +22,9 @@ export interface ChatState {
 
 export type ViewMode = 'welcome' | 'chat';
 
+export type ApprovalDecision = 'approve' | 'reject' | 'dismiss';
+export type ApprovalStatus = 'pending' | 'approved' | 'rejected' | 'dismissed' | 'failed';
+
 export interface WelcomePrompt {
   label: string;
   prompt: string;
@@ -35,7 +38,8 @@ export interface WebviewMessage {
     | 'ready'
     | 'openSettings'
     | 'cancelMessage'
-    | 'retryMessage';
+    | 'retryMessage'
+    | 'approvalAction';
   payload?: unknown;
 }
 
@@ -48,8 +52,41 @@ export interface ExtensionMessage {
     | 'chatCleared'
     | 'streamEvent'
     | 'messageCreated'
-    | 'messageUpdated';
+    | 'messageUpdated'
+    | 'proposalCreated'
+    | 'approvalDecision';
   payload: unknown;
+}
+
+export interface ApprovalActionPayload {
+  proposalId: string;
+  proposalVersion: number;
+  decision: ApprovalDecision;
+  workspaceId: string;
+  fileUri: string;
+}
+
+export interface ProposalCreatedPayload {
+  proposalId: string;
+  proposalVersion: number;
+  fileUri: string;
+  relativePath: string;
+  workspaceId: string;
+  workspaceName: string;
+  proposedContentHash: string;
+  proposedSize: number;
+  createdAt: number;
+  expiresAt: number;
+  preview: unknown;
+  status?: ApprovalStatus;
+}
+
+export interface ApprovalDecisionPayload {
+  proposalId: string;
+  proposalVersion: number;
+  decision: 'approve' | 'reject' | null;
+  status: ApprovalStatus;
+  reason?: string;
 }
 
 export interface SendMessagePayload {

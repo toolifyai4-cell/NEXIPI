@@ -881,3 +881,236 @@ a:hover {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ==========================================================================
+   Approval Panel
+   ========================================================================== */
+
+.nexipi-approval-panel {
+  border: 1px solid var(--vscode-border);
+  border-radius: 6px;
+  padding: 12px;
+  margin: 12px;
+  background-color: var(--vscode-sideBar-bg);
+}
+
+.nexipi-approval-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.nexipi-approval-panel-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--vscode-fg);
+  margin: 0;
+}
+
+.nexipi-approval-panel-count {
+  font-size: 11px;
+  color: var(--vscode-muted);
+}
+
+.nexipi-approval-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.nexipi-approval-card {
+  border: 1px solid var(--vscode-border);
+  border-radius: 6px;
+  padding: 12px;
+  background-color: var(--vscode-input-bg);
+}
+
+.nexipi-approval-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  margin-bottom: 10px;
+  flex-wrap: wrap;
+}
+
+.nexipi-approval-card-identity {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex: 1;
+  min-width: 0;
+}
+
+.nexipi-approval-card-label {
+  font-size: 11px;
+  color: var(--vscode-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+}
+
+.nexipi-approval-card-value {
+  font-size: 12px;
+  color: var(--vscode-fg);
+  word-break: break-all;
+  min-width: 0;
+}
+
+.nexipi-approval-status {
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.nexipi-approval-status--pending {
+  background-color: var(--vscode-warning);
+  color: var(--vscode-bg);
+}
+
+.nexipi-approval-status--approved {
+  background-color: var(--vscode-success);
+  color: var(--vscode-bg);
+}
+
+.nexipi-approval-status--rejected {
+  background-color: var(--vscode-error);
+  color: var(--vscode-bg);
+}
+
+.nexipi-approval-status--dismissed,
+.nexipi-approval-status--failed {
+  background-color: var(--vscode-muted);
+  color: var(--vscode-bg);
+}
+
+.nexipi-approval-card-body {
+  margin-bottom: 10px;
+}
+
+.nexipi-approval-card-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--vscode-fg);
+  margin: 0 0 8px 0;
+}
+
+.nexipi-approval-diff-summary {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+
+.nexipi-approval-diff-label {
+  font-size: 11px;
+  color: var(--vscode-muted);
+}
+
+.nexipi-approval-diff-value {
+  font-size: 12px;
+  color: var(--vscode-fg);
+  word-break: break-all;
+}
+
+.nexipi-approval-hash {
+  font-family: var(--vscode-editor-font-family, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
+  font-size: 11px;
+}
+
+.nexipi-approval-preview {
+  border: 1px solid var(--vscode-input-border);
+  border-radius: 4px;
+  overflow: auto;
+  max-height: 240px;
+  background-color: var(--vscode-textCodeBlock-background, #1e1e1e);
+}
+
+.nexipi-approval-code {
+  margin: 0;
+  padding: 10px 12px;
+  overflow: auto;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--vscode-fg);
+  font-family: var(--vscode-editor-font-family, 'Monaco', 'Menlo', 'Ubuntu Mono', monospace);
+}
+
+.nexipi-approval-code code {
+  padding: 0;
+  background: none;
+  font-size: inherit;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+}
+
+.nexipi-approval-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.nexipi-approval-actions--terminal {
+  align-items: center;
+  gap: 8px;
+}
+
+.nexipi-approval-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  border: 1px solid;
+  transition: background-color 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+}
+
+.nexipi-approval-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.nexipi-approval-btn--approve {
+  background-color: var(--vscode-button-bg);
+  color: var(--vscode-button-fg);
+  border-color: var(--vscode-button-bg);
+}
+
+.nexipi-approval-btn--approve:hover:not(:disabled) {
+  background-color: var(--vscode-button-hover);
+}
+
+.nexipi-approval-btn--reject {
+  background-color: transparent;
+  color: var(--vscode-error);
+  border-color: var(--vscode-error);
+}
+
+.nexipi-approval-btn--reject:hover:not(:disabled) {
+  background-color: rgba(241, 76, 76, 0.1);
+}
+
+.nexipi-approval-btn--dismiss {
+  background-color: transparent;
+  color: var(--vscode-muted);
+  border-color: var(--vscode-border);
+}
+
+.nexipi-approval-btn--dismiss:hover:not(:disabled) {
+  background-color: var(--vscode-input-bg);
+}
+
+.nexipi-approval-terminal-note {
+  font-size: 12px;
+  color: var(--vscode-muted);
+}

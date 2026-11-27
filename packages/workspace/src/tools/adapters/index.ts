@@ -15,6 +15,11 @@ export {
   createProposeEditToolDefinition,
   type ProposeEditAdapterDependencies,
 } from './propose-edit.js';
+export type {
+  ProposalCreationBoundary,
+  ProposalCreationRequest,
+  ProposalCreationResult,
+} from './propose-edit.js';
 export {
   createApplyEditToolDefinition,
   type ApplyEditAdapterDependencies,

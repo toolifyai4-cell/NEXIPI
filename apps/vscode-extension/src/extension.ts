@@ -35,14 +35,16 @@ import {
   createSearchCodeToolDefinition,
   createFindReferencesToolDefinition,
   createApplyEditToolDefinition,
+  createProposeEditToolDefinition,
   ApplyEditInputSchema,
   ApplyEditOutputSchema,
   type ApplyEditInput,
   type ApplyEditOutput,
+  isChildOf,
+  normalizePath,
 } from '@nexipi/workspace/tools';
 import {
   createTrustedApprovalService,
-  FailingTrustedDecisionProvider,
   type TrustedApprovalService,
 } from '@nexipi/workspace';
 import type {
@@ -60,6 +62,9 @@ import {
   ApprovalRepositoryAdapter,
 } from './tools/editing/persistence-repository-adapters.js';
 import { TrustedEditAuthorizationBoundary } from './tools/editing/edit-authorization-boundary.js';
+import { ProposalCreationRepositoryAdapter } from './tools/editing/proposal-creation-boundary.js';
+import { VSCodeTrustedDecisionProvider } from './tools/editing/vscode-trusted-decision-provider.js';
+import { ApprovalController } from './tools/editing/approval-controller.js';
 import type { ToolDefinition, ToolExecutionContext } from '@nexipi/models/tools';
 
 interface NexiPiContext {
@@ -81,6 +86,9 @@ let gLogger: Logger | undefined;
 let gProposalRepositoryPort: ProposalRepositoryPort | undefined;
 let gApprovalRepositoryPort: ApprovalRepositoryPort | undefined;
 let gTrustedApprovalService: TrustedApprovalService | undefined;
+let gFileSystem: VSCodeFileSystemProvider | undefined;
+let gProposalRepository: SqlJsProposalRepository | undefined;
+let gApprovalController: ApprovalController | undefined;
 
 /**
  * Per-workspace editing services, bound to a single workspace identity each.
@@ -256,6 +264,9 @@ export async function unregisterWorkspaceAdapters(
         workspaceAdapters.delete(workspaceId);
         workspaceEditing.delete(workspaceId);
         workspaceAdaptersVersion++;
+        if (gApprovalController) {
+          gApprovalController.clearPendingForWorkspace(workspaceId);
+        }
         logger.info('Unregistered workspace adapters', {
           workspaceId,
           folderUri,
@@ -398,6 +409,9 @@ function scheduleDeferredWorkspaceCleanup(workspaceId: string, logger: Logger): 
         workspaceAdapters.delete(workspaceId);
         workspaceEditing.delete(workspaceId);
         workspaceAdaptersVersion++;
+        if (gApprovalController) {
+          gApprovalController.clearPendingForWorkspace(workspaceId);
+        }
         entry.logger.info('Deferred workspace cleanup executed', {
           workspaceId,
           version: workspaceAdaptersVersion,
@@ -817,6 +831,140 @@ export function createRoutedApplyEditTool(): ToolDefinition {
   };
 }
 
+export function createRoutedProposeEditTool(): ToolDefinition {
+  // Local structural mirrors of Stage D types (ProposeEditInput / ProposeEditOutput
+  // are not re-exported from @nexipi/workspace/tools).
+  interface ProposeEditInputLike {
+    readonly uri: string;
+    readonly operations: unknown[];
+  }
+  interface ProposeEditOutputLike {
+    readonly proposalId: string;
+    readonly proposalVersion: number;
+    readonly status: string;
+    readonly relativePath: string;
+    readonly fileUri: string;
+    readonly workspaceId: string;
+    readonly originalContentHash: string;
+    readonly originalSize: number;
+    readonly originalMtime: number;
+    readonly proposedContentHash: string;
+    readonly proposedSize: number;
+    readonly preview: unknown;
+    readonly approvalRequired: boolean;
+    readonly createdAt: number;
+    readonly expiresAt: number;
+  }
+
+  return {
+    name: 'propose_edit',
+    description:
+      'Create a persisted edit proposal awaiting trusted user approval. The model supplies only the target file URI and edit operations. The proposal identity, content hash, workspace, and lifecycle are derived from trusted persisted state; the model cannot fabricate approval. The proposal is not applied: explicit user approval through the trusted approval UI is required before apply_edit can succeed.',
+    inputSchema: z.object({
+      uri: z.string().min(1, 'uri is required'),
+      operations: z.array(z.any()).min(1, 'at least one operation is required'),
+    }),
+    outputSchema: z.any(),
+    metadata: {
+      capabilities: ['read'] as const,
+      readOnly: true,
+      destructive: false,
+      requiresWorkspace: true,
+      idempotent: false,
+      version: '1.0.0',
+    },
+    execute: async (input: unknown, context: ToolExecutionContext): Promise<ProposeEditOutputLike> => {
+      const { uri, operations } = input as ProposeEditInputLike;
+
+      if (context.signal?.aborted) {
+        throw createToolError(ToolErrorCode.TOOL_CANCELLED, 'Operation cancelled', {
+          toolName: 'propose_edit',
+        });
+      }
+
+      if (!gFileSystem || !gProposalRepository || !gApprovalController) {
+        throw createToolError(
+          ToolErrorCode.TOOL_EXECUTION_FAILED,
+          'Editing services are not initialized',
+          { toolName: 'propose_edit' }
+        );
+      }
+
+      // Resolve the workspace folder that contains the target file from the
+      // trusted adapter registry. The model supplies only a URI; workspace
+      // identity is derived here, never from untrusted input.
+      const workspaceFolder = findWorkspaceFolderForUri(uri);
+      if (workspaceFolder === undefined) {
+        throw createToolError(
+          ToolErrorCode.TOOL_NOT_FOUND,
+          `No workspace folder contains '${uri}'`,
+          { toolName: 'propose_edit' }
+        );
+      }
+
+      if (isWorkspaceClosing(workspaceFolder.computedWorkspaceId)) {
+        throw createToolError(
+          ToolErrorCode.TOOL_RESOURCE_LIMIT,
+          `Workspace '${workspaceFolder.computedWorkspaceId}' is being disposed`,
+          { toolName: 'propose_edit' }
+        );
+      }
+
+      const folderContext: ToolExecutionContext = {
+        ...context,
+        workspaceId: workspaceFolder.computedWorkspaceId,
+        workspaceFolder: {
+          uri: workspaceFolder.folder.uri,
+          id: workspaceFolder.folder.id,
+        },
+      };
+
+      const proposalCreation = new ProposalCreationRepositoryAdapter({
+        repository: gProposalRepository,
+        fileSystem: gFileSystem,
+      });
+
+      const tool = createProposeEditToolDefinition({
+        fileSystem: gFileSystem,
+        workspaceFolder: workspaceFolder.folder,
+        proposalCreation,
+      });
+
+      const output = (await tool.execute(input, folderContext)) as ProposeEditOutputLike;
+
+      // Present the persisted proposal to the webview for review. The preview
+      // and proposal identity come from the tool output (persisted state), not
+      // from model-supplied data.
+      void gApprovalController.onProposalCreated({
+        proposalId: output.proposalId,
+        proposalVersion: output.proposalVersion,
+        fileUri: output.fileUri,
+        relativePath: output.relativePath,
+        workspaceId: output.workspaceId,
+        workspaceName: workspaceFolder.folder.name,
+        proposedContentHash: output.proposedContentHash,
+        proposedSize: output.proposedSize,
+        createdAt: output.createdAt,
+        expiresAt: output.expiresAt,
+        preview: output.preview,
+      });
+
+      return output;
+    },
+  };
+}
+
+function findWorkspaceFolderForUri(uri: string): WorkspaceAdapterSet | undefined {
+  const target = normalizePath(uri);
+  for (const adapterSet of workspaceAdapters.values()) {
+    const root = normalizePath(adapterSet.folder.uri);
+    if (isChildOf(root, target)) {
+      return adapterSet;
+    }
+  }
+  return undefined;
+}
+
 function registerRoutedTools(toolRegistry: ToolRegistry, logger: Logger): void {
   const tools = [
     createRoutedReadFileTool(),
@@ -824,6 +972,7 @@ function registerRoutedTools(toolRegistry: ToolRegistry, logger: Logger): void {
     createRoutedSearchCodeTool(),
     createRoutedFindReferencesTool(),
     createRoutedApplyEditTool(),
+    createRoutedProposeEditTool(),
   ];
 
   for (const tool of tools) {
@@ -1060,6 +1209,16 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
         case 'ready':
           this._logger.debug('Webview ready');
           this._sendInitialState();
+          // (Re)send any pending proposals so a reloaded webview can resume
+          // review of proposals created while the webview was hidden.
+          if (gApprovalController) {
+            for (const proposal of gApprovalController.getPendingProposals()) {
+              void this._view?.webview.postMessage({
+                type: 'proposalCreated',
+                payload: proposal,
+              });
+            }
+          }
           break;
         case 'sendMessage': {
           this._logger.info('Message from webview', { payload: msg.payload });
@@ -1150,6 +1309,50 @@ class NexiPiSidebarProvider implements vscode.WebviewViewProvider {
             payload.conversationId as ConversationId,
             payload.messageId as MessageId
           );
+          break;
+        }
+        case 'approvalAction': {
+          const payload = msg.payload as {
+            proposalId?: string;
+            proposalVersion?: number;
+            decision?: string;
+            workspaceId?: string;
+            fileUri?: string;
+          } | undefined;
+          if (
+            !payload?.proposalId ||
+            payload.proposalVersion === undefined ||
+            !payload.decision ||
+            !payload.workspaceId ||
+            !payload.fileUri
+          ) {
+            this._logger.warn('approvalAction: missing required fields');
+            return;
+          }
+          this._logger.info('Approval action requested from webview', {
+            proposalId: payload.proposalId,
+            decision: payload.decision,
+          });
+          if (gApprovalController) {
+            await gApprovalController.handleApprovalAction({
+              proposalId: payload.proposalId,
+              proposalVersion: payload.proposalVersion,
+              decision: payload.decision as 'approve' | 'reject' | 'dismiss',
+              workspaceId: payload.workspaceId,
+              fileUri: payload.fileUri,
+            });
+          } else {
+            void this._view?.webview.postMessage({
+              type: 'approvalDecision',
+              payload: {
+                proposalId: payload.proposalId,
+                proposalVersion: payload.proposalVersion,
+                decision: null,
+                status: 'failed',
+                reason: 'Approval controller unavailable',
+              },
+            });
+          }
           break;
         }
         default:
@@ -1332,6 +1535,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   // --- Workspace intelligence (Phase 08 Stage F) ---
   const workspaceProvider = new VSCodeWorkspaceProvider();
   const fileSystem = new VSCodeFileSystemProvider();
+  gFileSystem = fileSystem;
   const workspaceManager = new WorkspaceManager(workspaceProvider, fileSystem, { logger });
   gWorkspaceManager = workspaceManager;
   trackResource('workspaceManager', () => workspaceManager.dispose());
@@ -1447,12 +1651,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   const rawDatabase = persistenceService.getRawDatabase();
   const proposalRepository = new SqlJsProposalRepository(rawDatabase);
   const approvalRepository = new SqlJsApprovalRepository(rawDatabase);
+  gProposalRepository = proposalRepository;
   gProposalRepositoryPort = new ProposalRepositoryAdapter(proposalRepository);
   gApprovalRepositoryPort = new ApprovalRepositoryAdapter(approvalRepository);
   gTrustedApprovalService = createTrustedApprovalService({
     proposals: gProposalRepositoryPort,
     approvals: gApprovalRepositoryPort,
-    trustedDecisionProvider: new FailingTrustedDecisionProvider(),
+    trustedDecisionProvider: new VSCodeTrustedDecisionProvider(),
   });
 
   // Create persistence adapter
@@ -1485,6 +1690,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   gLogger = logger;
 
   const sidebarProvider = new NexiPiSidebarProvider(context.extensionUri, logger, chatService);
+
+  // Stage F: bind the approval controller to the sidebar webview so pending
+  // proposals and decisions can be posted to the UI.
+  gApprovalController = new ApprovalController({
+    trustedApprovalService: gTrustedApprovalService,
+    trustedDecisionProvider: new VSCodeTrustedDecisionProvider(),
+    proposals: gProposalRepositoryPort,
+    approvals: gApprovalRepositoryPort,
+    postMessage: sidebarProvider.postMessage.bind(sidebarProvider),
+    logger,
+  });
 
   const nexipiContext: NexiPiContext = {
     outputChannel,
@@ -1552,6 +1768,7 @@ export async function deactivate(): Promise<void> {
   const chatService = gChatService;
   const persistenceService = gPersistenceService;
   const toolExecutionService = gToolExecutionService;
+  const approvalController = gApprovalController;
 
   if (!logger || !chatService || !persistenceService) {
     logger?.warn('deactivate() called but services not initialized');
@@ -1595,6 +1812,10 @@ export async function deactivate(): Promise<void> {
     const err = error instanceof Error ? error : new Error(String(error));
     logger.error('Failed to drain/dispose ToolExecutionService', { error: err.message });
   }
+
+  // Stage F: dispose the approval controller so pending proposals are cleared
+  // and no approval action can be acted on after deactivation.
+  approvalController?.dispose();
 
   // 3. Wait for any remaining underlying execution promises to settle.
   //    This provides a safety net for uncooperative tools that ignore cancellation.

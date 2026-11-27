@@ -16,6 +16,10 @@ import type {
   MessageUpdatedPayload,
   CancelMessagePayload,
   RetryMessagePayload,
+  ProposalCreatedPayload,
+  ApprovalDecisionPayload,
+  ApprovalActionPayload,
+  ApprovalDecision,
   MessageId,
   ConversationId,
 } from '../types';
@@ -52,6 +56,7 @@ export function useChat(options: UseChatOptions = {}) {
   const [viewMode, setViewMode] = useState<ViewMode>('welcome');
   const [modelConfigured, setModelConfigured] = useState(false);
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [pendingProposals, setPendingProposals] = useState<ProposalCreatedPayload[]>([]);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const vscodeApiRef = useRef<ReturnType<NonNullable<Window['acquireVsCodeApi']>> | null>(null);
   const pendingUserMessageRef = useRef<string | null>(null);
@@ -261,6 +266,46 @@ export function useChat(options: UseChatOptions = {}) {
           console.debug('[NexiPi] Settings opened confirmation received');
           break;
         }
+        case 'proposalCreated': {
+          const payload = message.payload as ProposalCreatedPayload;
+          if (payload?.proposalId && payload.proposalVersion !== undefined) {
+            setPendingProposals(prev => {
+              const next = [...prev];
+              const index = next.findIndex(p => p.proposalId === payload.proposalId);
+              const entry: ProposalCreatedPayload = { ...payload, status: 'pending' };
+              if (index >= 0) {
+                next[index] = entry;
+              } else {
+                next.push(entry);
+              }
+              return next;
+            });
+            console.debug('[NexiPi] Proposal pending review', {
+              proposalId: payload.proposalId,
+              fileUri: payload.fileUri,
+              workspaceId: payload.workspaceId,
+            });
+          }
+          break;
+        }
+        case 'approvalDecision': {
+          const payload = message.payload as ApprovalDecisionPayload;
+          if (payload?.proposalId && payload.proposalVersion !== undefined) {
+            setPendingProposals(prev =>
+              prev.map(p =>
+                p.proposalId === payload.proposalId && p.proposalVersion === payload.proposalVersion
+                  ? { ...p, status: payload.status }
+                  : p
+              )
+            );
+            console.debug('[NexiPi] Approval decision recorded', {
+              proposalId: payload.proposalId,
+              status: payload.status,
+              reason: payload.reason,
+            });
+          }
+          break;
+        }
         default:
           console.warn('[NexiPi] Unknown extension message type:', message.type);
           break;
@@ -387,6 +432,14 @@ export function useChat(options: UseChatOptions = {}) {
     [conversationId, postMessage]
   );
 
+  const handleApprovalAction = useCallback(
+    (proposalId: string, proposalVersion: number, decision: ApprovalDecision, workspaceId: string, fileUri: string) => {
+      const payload: ApprovalActionPayload = { proposalId, proposalVersion, decision, workspaceId, fileUri };
+      postMessage({ type: 'approvalAction', payload });
+    },
+    [postMessage]
+  );
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
@@ -419,6 +472,8 @@ export function useChat(options: UseChatOptions = {}) {
     scrollToBottom,
     messagesEndRef,
     postMessage,
+    pendingProposals,
+    handleApprovalAction,
     welcomePrompts: WELCOME_PROMPTS,
   };
 }

@@ -126,5 +126,8 @@ export {
   type EditAuthorizationBoundary,
   type EditAuthorizationRequest,
   type EditAuthorizationResult,
+  type ProposalCreationBoundary,
+  type ProposalCreationRequest,
+  type ProposalCreationResult,
 } from './adapters/index.js';
 export { ApplyEditInputSchema, ApplyEditOutputSchema } from './adapters/index.js';
