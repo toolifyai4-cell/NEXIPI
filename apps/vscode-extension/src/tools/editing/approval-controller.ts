@@ -96,6 +96,14 @@ export class ApprovalController {
   private readonly postMessage: (message: unknown) => void;
   private readonly logger: Logger;
   private readonly pending = new Map<string, PendingProposal>();
+  // Proposals currently being decided (native dialog open). Prevents concurrent
+  // Approve/Reject/Dismiss clicks for the same proposal from showing multiple
+  // dialogs or establishing duplicate decisions.
+  private readonly deciding = new Set<string>();
+  // Abort controllers for in-flight decisions. Aborted on dispose so that an
+  // unresolved dialog cannot establish or persist a trusted approval after the
+  // controller is disposed.
+  private readonly abortControllers = new Map<string, AbortController>();
   private _isDisposed = false;
 
   constructor(deps: ApprovalControllerDependencies) {
@@ -120,6 +128,12 @@ export class ApprovalController {
 
   dispose(): void {
     this._isDisposed = true;
+    // Abort all in-flight decisions so unresolved dialogs cannot establish or
+    // persist a trusted approval after disposal.
+    for (const [proposalId, controller] of this.abortControllers.entries()) {
+      controller.abort();
+      this.abortControllers.delete(proposalId);
+    }
     this.pending.clear();
   }
 
@@ -215,74 +229,127 @@ export class ApprovalController {
       return;
     }
 
+    // Prevent concurrent decisions for the same proposal: two rapid clicks must
+    // not show two native dialogs or establish duplicate decisions. The check
+    // and add run before the first await, so they are atomic with respect to
+    // other webview message handling on this single-threaded event loop.
+    if (this.deciding.has(action.proposalId)) {
+      void this.postMessage({
+        type: 'approvalDecision',
+        payload: {
+          proposalId: action.proposalId,
+          proposalVersion: action.proposalVersion,
+          decision: null,
+          status: 'failed',
+          reason: 'Decision already in progress for this proposal',
+        },
+      });
+      return;
+    }
+    this.deciding.add(action.proposalId);
+
+    // Per-request abort controller so dispose() can cancel an in-flight
+    // decision before it persists.
+    const abortController = new AbortController();
+    this.abortControllers.set(action.proposalId, abortController);
+
     // A dismissal/cancellation establishes no decision: fail closed without
     // involving the provider. Approve/reject go through the host-controlled
     // provider, which confirms the user's actual choice.
-    if (action.decision === 'dismiss') {
-      this.pending.delete(action.proposalId);
-      void this.postMessage({
-        type: 'approvalDecision',
-        payload: {
-          proposalId: pending.proposalId,
-          proposalVersion: pending.proposalVersion,
-          decision: null,
-          status: 'dismissed',
-          reason: 'Dismissed by user',
-        },
-      });
-      return;
-    }
-
-    // Approve/reject: establish the trusted decision through the service. The
-    // service invokes the host-controlled provider exactly once and persists the
-    // provider's confirmed decision. The webview request is only a hint; the
-    // provider's confirmed decision is what gets recorded. Fail closed on any
-    // error (provider cancelled, duplicate/terminal decision, or provider
-    // unavailable) -- no approval is established.
-    let result: { approvalId: string; approval: Approval };
     try {
-      result = await this.service.createApprovalDecision({
-        proposalId: pending.proposalId,
-        proposalVersion: pending.proposalVersion,
-        decision: action.decision,
-        approvedContentHash: pending.proposedContentHash,
-        provenance: { kind: 'trusted-boundary', boundary: 'vscode-host:confirm-dialog' },
-        decidedAt: Date.now(),
-        expiresAt: pending.expiresAt,
-        workspaceId: pending.workspaceId,
-        fileUri: pending.fileUri,
-      });
-    } catch (error) {
-      const err = error instanceof Error ? error : new Error(String(error));
-      this.logger.error('Failed to establish trusted approval decision', {
-        proposalId: pending.proposalId,
-        code: (error as { code?: string })?.code,
-        error: err.message,
-      });
+      if (action.decision === 'dismiss') {
+        this.pending.delete(action.proposalId);
+        void this.postMessage({
+          type: 'approvalDecision',
+          payload: {
+            proposalId: pending.proposalId,
+            proposalVersion: pending.proposalVersion,
+            decision: null,
+            status: 'dismissed',
+            reason: 'Dismissed by user',
+          },
+        });
+        return;
+      }
+
+      // Approve/reject: establish the trusted decision through the service. The
+      // service invokes the host-controlled provider exactly once and persists the
+      // provider's confirmed decision. The webview request is only a hint; the
+      // provider's confirmed decision is what gets recorded. Fail closed on any
+      // error (provider cancelled, duplicate/terminal decision, expiry, disposal,
+      // or provider unavailable) -- no approval is established.
+      let result: { approvalId: string; approval: Approval };
+      try {
+        result = await this.service.createApprovalDecision(
+          {
+            proposalId: pending.proposalId,
+            proposalVersion: pending.proposalVersion,
+            decision: action.decision,
+            approvedContentHash: pending.proposedContentHash,
+            provenance: { kind: 'trusted-boundary', boundary: 'vscode-host:confirm-dialog' },
+            decidedAt: Date.now(),
+            expiresAt: pending.expiresAt,
+            workspaceId: pending.workspaceId,
+            fileUri: pending.fileUri,
+          },
+          abortController.signal
+        );
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        this.logger.error('Failed to establish trusted approval decision', {
+          proposalId: pending.proposalId,
+          code: (error as { code?: string })?.code,
+          error: err.message,
+        });
+        this.pending.delete(action.proposalId);
+        void this.postMessage({
+          type: 'approvalDecision',
+          payload: {
+            proposalId: pending.proposalId,
+            proposalVersion: action.proposalVersion,
+            decision: null,
+            status: 'failed',
+            reason: 'No trusted approval decision established',
+          },
+        });
+        return;
+      }
+
+      // Defense in depth: if the controller was disposed while the dialog was
+      // open, do not act on the result even though the service guardrails
+      // already prevent persistence after disposal.
+      if (this._isDisposed) {
+        this.logger.warn('Ignoring approval result after controller disposal', {
+          proposalId: pending.proposalId,
+        });
+        this.pending.delete(action.proposalId);
+        void this.postMessage({
+          type: 'approvalDecision',
+          payload: {
+            proposalId: pending.proposalId,
+            proposalVersion: action.proposalVersion,
+            decision: null,
+            status: 'failed',
+            reason: 'Extension disposed before decision could be applied',
+          },
+        });
+        return;
+      }
+
+      const decision = result.approval.decision;
       this.pending.delete(action.proposalId);
       void this.postMessage({
         type: 'approvalDecision',
         payload: {
           proposalId: pending.proposalId,
           proposalVersion: pending.proposalVersion,
-          decision: null,
-          status: 'failed',
-          reason: 'No trusted approval decision established',
+          decision,
+          status: decision === 'approve' ? 'approved' : 'rejected',
         },
       });
-      return;
+    } finally {
+      this.deciding.delete(action.proposalId);
+      this.abortControllers.delete(action.proposalId);
     }
-
-    const decision = result.approval.decision;
-    this.pending.delete(action.proposalId);
-    void this.postMessage({
-      type: 'approvalDecision',
-      payload: {
-        proposalId: pending.proposalId,
-        proposalVersion: pending.proposalVersion,
-        decision,
-        status: decision === 'approve' ? 'approved' : 'rejected',
-      },
-    });
   }
 }

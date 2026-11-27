@@ -228,7 +228,10 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
    * established through the injected provider. Fails closed on any missing,
    * stale, mismatched, or untrusted input.
    */
-  async createApprovalDecision(request: ApprovalCreationRequest): Promise<ApprovalCreationResult> {
+  async createApprovalDecision(
+    request: ApprovalCreationRequest,
+    signal?: AbortSignal
+  ): Promise<ApprovalCreationResult> {
     // 1. Validate the caller's request shape (Zod, runtime enforcement).
     //    ApprovalCreationRequest carries no approvalId (the service generates
     //    one), so validate against the decision schema with approvalId omitted.
@@ -305,9 +308,30 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
       );
     }
 
-    // 8. Trusted-user boundary: the decision must be established by the
-    //    host-controlled provider. Fail closed when the provider is absent or
-    //    cannot establish a valid user decision.
+    // 8. Expiry gate before opening the native dialog. A proposal that has
+    //    already expired must not receive a trusted decision; fail closed
+    //    without showing the dialog.
+    const now = this.now();
+    if (request.expiresAt !== null && now > request.expiresAt) {
+      throw createApprovalError(
+        ApprovalErrorCode.NOT_AUTHORIZED,
+        `Proposal has expired and cannot be approved: ${request.proposalId}/${request.proposalVersion}`
+      );
+    }
+
+    // 9. Cancellation gate before opening the native dialog. If the requesting
+    //    controller was disposed while waiting, fail closed without showing
+    //    the dialog.
+    if (signal?.aborted) {
+      throw createApprovalError(
+        ApprovalErrorCode.TRUSTED_DECISION_NOT_ESTABLISHED,
+        'Approval request was cancelled before a user decision could be established'
+      );
+    }
+
+    // 10. Trusted-user boundary: the decision must be established by the
+    //     host-controlled provider. Fail closed when the provider is absent or
+    //     cannot establish a valid user decision.
     if (!this.trustedDecisionProvider) {
       throw createApprovalError(
         ApprovalErrorCode.TRUSTED_BOUNDARY_UNAVAILABLE,
@@ -331,9 +355,30 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
       );
     }
 
-    // 9. Build the approval record. Trust-relevant fields (decision, boundary,
-    //    decidedAt, expiresAt) come from the confirmed provider decision, not
-    //    the caller, so a caller cannot forge the user's decision or provenance.
+    // 11. Expiry gate after the dialog resolves. The proposal may have expired
+    //     while the user was considering the dialog; fail closed before
+    //     persisting any decision.
+    const decidedNow = this.now();
+    if (request.expiresAt !== null && decidedNow > request.expiresAt) {
+      throw createApprovalError(
+        ApprovalErrorCode.NOT_AUTHORIZED,
+        `Proposal expired before the trusted decision was persisted: ${request.proposalId}/${request.proposalVersion}`
+      );
+    }
+
+    // 12. Cancellation gate after the dialog resolves. If the requesting
+    //     controller was disposed while the dialog was open, fail closed
+    //     before persisting any decision.
+    if (signal?.aborted) {
+      throw createApprovalError(
+        ApprovalErrorCode.TRUSTED_DECISION_NOT_ESTABLISHED,
+        'Approval request was cancelled before the trusted decision could be persisted'
+      );
+    }
+
+    // 13. Build the approval record. Trust-relevant fields (decision, boundary,
+    //     decidedAt, expiresAt) come from the confirmed provider decision, not
+    //     the caller, so a caller cannot forge the user's decision or provenance.
     const createdAt = this.now();
     const approvalId = this.createApprovalId();
     const decision = confirmed.decision;
@@ -357,7 +402,7 @@ export class TrustedApprovalService implements ApprovalCreationBoundary {
 
     validateApproval(approval);
 
-    // 10. Persist through the repository abstraction. A duplicate approvalId
+    // 14. Persist through the repository abstraction. A duplicate approvalId
     //     fails deterministically (primary-key violation); no partial record is
     //     left on failure because each decision is its own row.
     const createResult = await this.approvals.createApproval({
