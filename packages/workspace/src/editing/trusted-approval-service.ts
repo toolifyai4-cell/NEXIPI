@@ -44,16 +44,18 @@ const APPROVABLE_PROPOSAL_STATUSES = new Set([
 ]);
 
 /**
- * View of a persisted proposal sufficient for approval binding checks. Kept
- * narrow so the workspace domain stays decoupled from the persistence package
- * and the SQL driver.
+ * View of a persisted proposal sufficient for approval binding checks and
+ * eventual authorized application. Kept narrow so the workspace domain stays
+ * decoupled from the persistence package and the SQL driver.
  */
 export interface ProposalView {
   readonly id: string;
   readonly proposalVersion: number;
   readonly workspaceId: string;
   readonly fileUri: string;
+  readonly relativePath: string;
   readonly proposedContentHash: string;
+  readonly proposedContent: string;
   readonly status: string;
 }
 

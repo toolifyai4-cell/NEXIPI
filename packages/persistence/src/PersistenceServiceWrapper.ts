@@ -27,7 +27,7 @@ import type {
   MessageListResult as RepoMessageListResult,
   DeleteResult as RepoDeleteResult,
 } from './repositories.js';
-import { PersistenceError, PersistenceService as FoundationPersistenceService, type PersistenceServiceOptions } from './PersistenceService.js';
+import { PersistenceError, PersistenceService as FoundationPersistenceService, type PersistenceServiceOptions, type SQLDatabase } from './PersistenceService.js';
 import type { ConversationId, MessageId } from '@nexipi/shared';
 
 function toRepoConversationInput(input: CreateConversationInput): RepoCreateConversationInput {
@@ -161,6 +161,20 @@ export class PersistenceService implements IPersistencePort {
       return false;
     }
     return this.foundationService.isInitialized();
+  }
+
+  /**
+   * Returns the underlying sql.js database handle.
+   *
+   * Exposed so infrastructure layers (for example the extension's editing
+   * repository adapters) can reuse the same database instance that backs this
+   * persistence service instead of opening a second one.
+   *
+   * Throws {@link PersistenceError} when the service is disposed or not yet
+   * initialized.
+   */
+  getRawDatabase(): SQLDatabase {
+    return this.foundationService.getRawDatabase();
   }
 
   dispose(): void {
