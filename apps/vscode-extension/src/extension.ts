@@ -210,6 +210,7 @@ export function registerWorkspaceAdapters(
     const boundary = new TrustedEditAuthorizationBoundary({
       trustedApprovalService: gTrustedApprovalService,
       proposalRepository: gProposalRepositoryPort,
+      fileSystem,
       workspaceId,
     });
     const writableFileSystem = new VSCodeWritableFileSystem({

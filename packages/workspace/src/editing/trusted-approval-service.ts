@@ -54,6 +54,12 @@ export interface ProposalView {
   readonly workspaceId: string;
   readonly fileUri: string;
   readonly relativePath: string;
+  /**
+   * Hash of the file content as it existed when the proposal was created
+   * (SHA-256 over UTF-8 bytes, same semantics as {@link sha256}). Used by the
+   * edit-authorization boundary to detect stale files at apply time.
+   */
+  readonly originalContentHash: string;
   readonly proposedContentHash: string;
   readonly proposedContent: string;
   readonly status: string;

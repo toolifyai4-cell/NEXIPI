@@ -62,6 +62,7 @@ function toProposalView(record: ProposalRecord): ProposalView {
     workspaceId: record.workspaceId,
     fileUri: record.fileUri,
     relativePath: record.relativePath,
+    originalContentHash: record.originalContentHash,
     proposedContentHash: record.proposedContentHash,
     proposedContent: record.proposedContent,
     status: record.status,

@@ -57,6 +57,13 @@ export interface EditAuthorizationResult {
   readonly authorizationToApply?: AuthorizationToApply;
   readonly reason?: string;
   /**
+   * Present and true only when the boundary denied authorization because the
+   * target file could not be verified as unchanged since the proposal was
+   * created (changed, missing, or unreadable). The adapter propagates this to
+   * the output's `staleDetected` field.
+   */
+  readonly staleDetected?: boolean;
+  /**
    * Present only when `authorized` is true. The exact file identity and
    * content to apply, as independently verified by the boundary from persisted
    * state. The adapter must apply exactly this content to this file and must
@@ -195,7 +202,8 @@ export function createApplyEditToolDefinition(deps: ApplyEditAdapterDependencies
           ToolErrorCode.TOOL_PERMISSION_DENIED,
           authorization.reason ?? 'Proposal is not approved or authorization is unavailable.',
           false,
-          false
+          false,
+          authorization.staleDetected === true
         );
       }
 
@@ -273,7 +281,8 @@ function failResult(
   code: ToolErrorCode,
   message: string,
   approvalVerified: boolean,
-  authorized: boolean
+  authorized: boolean,
+  staleDetected: boolean = false
 ): ApplyEditOutput {
   return {
     kind: 'apply-edit-result',
@@ -286,6 +295,6 @@ function failResult(
     finalContentHash: null,
     finalSize: null,
     error: { code, message },
-    staleDetected: false,
+    staleDetected,
   };
 }

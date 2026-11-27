@@ -7,6 +7,7 @@ import {
   type TrustedDecisionProvider,
   type TrustedUserDecision,
   type ApprovalRecordView,
+  type ProposalView,
 } from '../trusted-approval-service.js';
 import { ApprovalErrorCode, ApprovalDomainError } from '../approval-errors.js';
 import {
@@ -38,6 +39,7 @@ function makeProposal(
     workspaceId?: string;
     fileUri?: string;
     proposedContentHash?: string;
+    originalContentHash?: string;
     status?: string;
   } = {}
 ): ProposalView {
@@ -46,6 +48,7 @@ function makeProposal(
     proposalVersion: overrides.proposalVersion ?? PROPOSAL_VERSION,
     workspaceId: overrides.workspaceId ?? WORKSPACE_ID,
     fileUri: overrides.fileUri ?? FILE_URI,
+    originalContentHash: overrides.originalContentHash ?? '0'.repeat(64),
     proposedContentHash: overrides.proposedContentHash ?? PROPOSED_CONTENT_HASH,
     status: overrides.status ?? 'awaiting-approval',
   };

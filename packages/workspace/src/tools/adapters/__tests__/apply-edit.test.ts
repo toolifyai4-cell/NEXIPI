@@ -8,6 +8,7 @@ import {
 import { ToolDefinition, ToolExecutionContext, ToolErrorCode } from '@nexipi/models/tools';
 import type { WorkspaceFolder } from '../../../types.js';
 import type { Approval, WritableFileSystemProvider } from '../../../editing/index.js';
+import type { FileSystemProvider } from '../../../discovery/workspace-provider.js';
 
 function makeWorkspaceFolder(uri: string, name: string): WorkspaceFolder {
   return {
@@ -49,6 +50,7 @@ interface EditAuthorizationBoundary {
       proposedContentHash: string;
     };
     reason?: string;
+    staleDetected?: boolean;
   }>;
 }
 
@@ -58,6 +60,7 @@ function makeAuthorizationBoundary(overrides: {
   apply?: EditAuthorizationBoundary['apply'];
   reason?: string;
   fail?: boolean;
+  staleDetected?: boolean;
 }): EditAuthorizationBoundary {
   return {
     verifyAndAuthorizeApplication: async () => {
@@ -69,6 +72,7 @@ function makeAuthorizationBoundary(overrides: {
         approval: overrides.approval,
         apply: overrides.apply,
         reason: overrides.reason,
+        staleDetected: overrides.staleDetected,
       };
     },
   };
@@ -87,15 +91,27 @@ function makeWritableFileSystem(overrides: {
   };
 }
 
+function makeFileSystem(
+  overrides: {
+    readFile?: (uri: string) => Promise<string>;
+  } = {}
+): FileSystemProvider {
+  return {
+    readFile: overrides.readFile ?? (async () => ''),
+  };
+}
+
 function buildDeps(
   boundary?: EditAuthorizationBoundary,
-  writableFileSystem?: WritableFileSystemProvider
+  writableFileSystem?: WritableFileSystemProvider,
+  fileSystem?: FileSystemProvider
 ): ApplyEditAdapterDependencies {
   return {
     authorization:
       boundary ??
       makeAuthorizationBoundary({ authorized: false, reason: 'no authorization service' }),
     writableFileSystem: writableFileSystem ?? makeWritableFileSystem({}),
+    fileSystem: fileSystem ?? makeFileSystem(),
   };
 }
 
@@ -250,10 +266,7 @@ describe('apply_edit tool definition', () => {
       });
       const writeFile = vi.fn();
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({
-        authorization: boundary,
-        writableFileSystem: fs,
-      });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -296,10 +309,7 @@ describe('apply_edit tool definition', () => {
         apply: APPLY_PAYLOAD,
       });
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({
-        authorization: boundary,
-        writableFileSystem: fs,
-      });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -331,10 +341,7 @@ describe('apply_edit tool definition', () => {
         apply: APPLY_PAYLOAD,
       });
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({
-        authorization: boundary,
-        writableFileSystem: fs,
-      });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -357,10 +364,7 @@ describe('apply_edit tool definition', () => {
         },
       };
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({
-        authorization: boundary,
-        writableFileSystem: fs,
-      });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -382,10 +386,7 @@ describe('apply_edit tool definition', () => {
       });
       const writeFile = vi.fn();
       const fs = makeWritableFileSystem({ writeFile });
-      const tool = createApplyEditToolDefinition({
-        authorization: boundary,
-        writableFileSystem: fs,
-      });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
 
       const result = (await tool.execute(
         { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
@@ -394,6 +395,29 @@ describe('apply_edit tool definition', () => {
 
       expect(result.outcome).toBe('failed');
       expect(result.error?.message).toContain('Workspace identity mismatch');
+      expect(writeFile).not.toHaveBeenCalled();
+    });
+
+    it('propagates a stale-file denial from the boundary without writing', async () => {
+      const boundary = makeAuthorizationBoundary({
+        authorized: false,
+        staleDetected: true,
+        reason: 'Target file has changed since the proposal was created',
+      });
+      const writeFile = vi.fn();
+      const fs = makeWritableFileSystem({ writeFile });
+      const tool = createApplyEditToolDefinition(buildDeps(boundary, fs));
+
+      const result = (await tool.execute(
+        { proposalId: VALID_PROPOSAL_ID, proposalVersion: 1 },
+        createContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.approvalVerified).toBe(false);
+      expect(result.staleDetected).toBe(true);
+      expect(result.error?.message).toContain('changed since the proposal was created');
       expect(writeFile).not.toHaveBeenCalled();
     });
 

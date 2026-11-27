@@ -29,8 +29,10 @@ import {
   TrustedApprovalService,
   FailingTrustedDecisionProvider,
   WritableFileSystemError,
+  sha256,
   type TrustedDecisionProvider,
   type TrustedUserDecision,
+  type FileSystemProvider,
   type Approval,
 } from '@nexipi/workspace';
 import { TrustedEditAuthorizationBoundary } from '../editing/edit-authorization-boundary.js';
@@ -240,6 +242,9 @@ async function createProposal(
     workspaceId: string;
     fileUri: string;
     relativePath: string;
+    originalContentHash: string;
+    originalSize: number;
+    originalMtime: number;
     proposedContent: string;
     proposedContentHash: string;
     status: ProposalStatus;
@@ -254,9 +259,9 @@ async function createProposal(
     workspaceFolderUri: overrides.workspaceId === 'ws_b' ? ROOT_B_URI : ROOT_A_URI,
     fileUri: overrides.fileUri ?? FILE_URI_A,
     relativePath: overrides.relativePath ?? 'file.ts',
-    originalContentHash: '0'.repeat(64),
-    originalSize: 0,
-    originalMtime: 0,
+    originalContentHash: overrides.originalContentHash ?? '0'.repeat(64),
+    originalSize: overrides.originalSize ?? 0,
+    originalMtime: overrides.originalMtime ?? 0,
     operations: [{ kind: 'replace' }],
     proposedContent: overrides.proposedContent ?? PROPOSED_CONTENT,
     proposedContentHash: overrides.proposedContentHash ?? PROPOSED_CONTENT_HASH,
@@ -309,6 +314,7 @@ interface Harness {
   service: TrustedApprovalService;
   provider: TrustedDecisionProvider;
   boundaryA: TrustedEditAuthorizationBoundary;
+  fileSystem: FileSystemProvider;
   writableFS: VSCodeWritableFileSystem;
   applyEdit: ReturnType<typeof createApplyEditToolDefinition>;
   dispose: () => void;
@@ -342,10 +348,30 @@ async function createHarness(
     createApprovalId: () => crypto.randomUUID(),
   });
 
+  const fileSystem: FileSystemProvider = {
+    readFile: vi.fn(async (uri: string) => {
+      const s = store.current;
+      if (!s) {
+        const error = new Error('store not initialized') as Error & { code?: string };
+        error.code = 'ENOENT';
+        throw error;
+      }
+      const p = normalizeFsUri(uri);
+      const file = s.files.get(p);
+      if (!file) {
+        const error = new Error(`Not found: ${p}`) as Error & { code?: string };
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return file.content;
+    }),
+  };
+
   const workspaceIdA = overrides.workspaceIdA ?? 'ws_a';
   const boundaryA = new TrustedEditAuthorizationBoundary({
     trustedApprovalService: service,
     proposalRepository: proposalPort,
+    fileSystem,
     workspaceId: workspaceIdA,
     now,
   });
@@ -390,6 +416,7 @@ async function createHarness(
     service,
     provider,
     boundaryA,
+    fileSystem,
     writableFS,
     applyEdit,
     dispose: () => void foundation.close(),
@@ -412,7 +439,16 @@ describe('apply_edit end-to-end authorization integration', () => {
   describe('authorized path', () => {
     it('applies the exact approved content and reports success only after the write', async () => {
       const h = await createHarness();
-      await createProposal(h.proposalRepo);
+      const originalContent = 'original content\n';
+      store.current!.files.set('/rootA/file.ts', {
+        content: originalContent,
+        mtime: NOW,
+      });
+      await createProposal(h.proposalRepo, {
+        originalContentHash: sha256(originalContent),
+        originalSize: new TextEncoder().encode(originalContent).length,
+        originalMtime: NOW,
+      });
       await establishApproval(h.service, h.provider);
 
       const result = (await h.applyEdit.execute(
@@ -432,6 +468,135 @@ describe('apply_edit end-to-end authorization integration', () => {
       const stored = store.current!.files.get('/rootA/file.ts');
       expect(stored).toBeDefined();
       expect(stored!.content).toBe(PROPOSED_CONTENT);
+      h.dispose();
+    });
+  });
+
+  describe('stale-file protection', () => {
+    const ORIGINAL_CONTENT = 'const x = 1;\n';
+    const PROPOSED_CONTENT = 'const x = 2;\n';
+    const PROPOSED_CONTENT_HASH = sha256(PROPOSED_CONTENT);
+
+    async function seedApprovedProposal(h: Harness): Promise<void> {
+      store.current!.files.set('/rootA/file.ts', { content: ORIGINAL_CONTENT, mtime: NOW });
+      await createProposal(h.proposalRepo, {
+        originalContentHash: sha256(ORIGINAL_CONTENT),
+        originalSize: new TextEncoder().encode(ORIGINAL_CONTENT).length,
+        originalMtime: NOW,
+        proposedContent: PROPOSED_CONTENT,
+        proposedContentHash: PROPOSED_CONTENT_HASH,
+        proposedSize: new TextEncoder().encode(PROPOSED_CONTENT).length,
+      });
+      await establishApproval(h.service, h.provider, {
+        approvedContentHash: PROPOSED_CONTENT_HASH,
+      });
+    }
+
+    it('allows application when the file is unchanged since proposal creation', async () => {
+      const h = await createHarness();
+      await seedApprovedProposal(h);
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('applied');
+      expect(result.staleDetected).toBe(false);
+      expect(result.approvalVerified).toBe(true);
+      expect(store.current!.files.get('/rootA/file.ts')!.content).toBe(PROPOSED_CONTENT);
+      h.dispose();
+    });
+
+    it('denies application when the file is modified after proposal creation', async () => {
+      const h = await createHarness();
+      await seedApprovedProposal(h);
+      store.current!.files.set('/rootA/file.ts', { content: 'tampered\n', mtime: NOW + 1 });
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.staleDetected).toBe(true);
+      expect(result.error).not.toBeNull();
+      expect(store.current!.files.get('/rootA/file.ts')!.content).toBe('tampered\n');
+      h.dispose();
+    });
+
+    it('denies application when the file is modified after approval', async () => {
+      const h = await createHarness();
+      await seedApprovedProposal(h);
+      // Approval is already established; the external modification happens after.
+      store.current!.files.set('/rootA/file.ts', { content: 'tampered\n', mtime: NOW + 2 });
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.staleDetected).toBe(true);
+      h.dispose();
+    });
+
+    it('denies application when the file is deleted after approval', async () => {
+      const h = await createHarness();
+      await seedApprovedProposal(h);
+      store.current!.files.delete('/rootA/file.ts');
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.staleDetected).toBe(true);
+      expect(result.error?.message).toContain('Not found');
+      h.dispose();
+    });
+
+    it('denies application when the target file cannot be read', async () => {
+      const h = await createHarness();
+      await seedApprovedProposal(h);
+      vi.spyOn(h.fileSystem, 'readFile').mockRejectedValue(new Error('EACCES: permission denied'));
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.staleDetected).toBe(true);
+      h.dispose();
+    });
+
+    it('denies application when proposed content changed without a matching valid approval', async () => {
+      const h = await createHarness({ provider: makeTestProvider(null) });
+      store.current!.files.set('/rootA/file.ts', { content: ORIGINAL_CONTENT, mtime: NOW });
+      await createProposal(h.proposalRepo, {
+        originalContentHash: sha256(ORIGINAL_CONTENT),
+        originalSize: new TextEncoder().encode(ORIGINAL_CONTENT).length,
+        originalMtime: NOW,
+        proposedContent: 'forged content\n',
+        proposedContentHash: sha256('forged content\n'),
+        proposedSize: new TextEncoder().encode('forged content\n').length,
+      });
+
+      const result = (await h.applyEdit.execute(
+        { proposalId: PROPOSAL_ID, proposalVersion: 1 },
+        applyEditContext()
+      )) as ApplyEditOutput;
+
+      expect(result.outcome).toBe('failed');
+      expect(result.authorized).toBe(false);
+      expect(result.staleDetected).toBe(false);
+      expect(result.error).not.toBeNull();
       h.dispose();
     });
   });
@@ -625,7 +790,13 @@ describe('apply_edit end-to-end authorization integration', () => {
 
     it('reports cancellation when the writable filesystem reports WRITE_CANCELLED, not success', async () => {
       const h = await createHarness();
-      await createProposal(h.proposalRepo);
+      const seedContent = 'seed content\n';
+      store.current!.files.set('/rootA/file.ts', { content: seedContent, mtime: NOW });
+      await createProposal(h.proposalRepo, {
+        originalContentHash: sha256(seedContent),
+        originalSize: new TextEncoder().encode(seedContent).length,
+        originalMtime: NOW,
+      });
       await establishApproval(h.service, h.provider);
       vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValueOnce(
         new WritableFileSystemError('WRITE_CANCELLED', 'write cancelled')
@@ -646,7 +817,13 @@ describe('apply_edit end-to-end authorization integration', () => {
 
     it('does not apply when the write fails', async () => {
       const h = await createHarness();
-      await createProposal(h.proposalRepo);
+      const seedContent = 'seed content\n';
+      store.current!.files.set('/rootA/file.ts', { content: seedContent, mtime: NOW });
+      await createProposal(h.proposalRepo, {
+        originalContentHash: sha256(seedContent),
+        originalSize: new TextEncoder().encode(seedContent).length,
+        originalMtime: NOW,
+      });
       await establishApproval(h.service, h.provider);
       vi.mocked(vscode.workspace.fs.writeFile).mockRejectedValueOnce(new Error('ENOSPC'));
 
@@ -704,13 +881,21 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
       workspaceId: 'ws_a',
       fileUri: FILE_URI_A,
       relativePath: 'file.ts',
+      originalContentHash: sha256('contentA\n'),
+      originalSize: new TextEncoder().encode('contentA\n').length,
+      originalMtime: NOW,
     });
+    store.current!.files.set('/rootA/file.ts', { content: 'contentA\n', mtime: NOW });
     await createProposal(h.proposalRepo, {
       id: '66666666-6666-6666-6666-666666666666',
       workspaceId: 'ws_b',
       fileUri: FILE_URI_B,
       relativePath: 'file.ts',
+      originalContentHash: sha256('contentB\n'),
+      originalSize: new TextEncoder().encode('contentB\n').length,
+      originalMtime: NOW,
     });
+    store.current!.files.set('/rootB/file.ts', { content: 'contentB\n', mtime: NOW });
     await establishApproval(h.service, h.provider, {
       proposalId: PROPOSAL_ID,
       workspaceId: 'ws_a',
@@ -722,14 +907,35 @@ describe('apply_edit authorization boundary — multi-root isolation', () => {
       fileUri: FILE_URI_B,
     });
 
+    const fileSystem: FileSystemProvider = {
+      readFile: vi.fn(async (uri: string) => {
+        const p = normalizeFsUri(uri);
+        const s = store.current;
+        if (!s) {
+          const error = new Error('store not initialized') as Error & { code?: string };
+          error.code = 'ENOENT';
+          throw error;
+        }
+        const file = s.files.get(p);
+        if (!file) {
+          const error = new Error(`Not found: ${p}`) as Error & { code?: string };
+          error.code = 'ENOENT';
+          throw error;
+        }
+        return file.content;
+      }),
+    };
+
     const boundaryA = new TrustedEditAuthorizationBoundary({
       trustedApprovalService: h.service,
       proposalRepository: new ProposalRepositoryAdapter(new SqlJsProposalRepository(h.db)),
+      fileSystem,
       workspaceId: 'ws_a',
     });
     const boundaryB = new TrustedEditAuthorizationBoundary({
       trustedApprovalService: h.service,
       proposalRepository: new ProposalRepositoryAdapter(new SqlJsProposalRepository(h.db)),
+      fileSystem,
       workspaceId: 'ws_b',
     });
 
