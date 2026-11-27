@@ -26,10 +26,7 @@ import { constants } from 'node:fs';
 import * as nodePath from 'node:path';
 
 const posixJoin = nodePath.posix.join.bind(nodePath.posix);
-import type {
-  ExecutablePlatform,
-  ExecutableResolutionResult,
-} from './executable-policy.js';
+import type { ExecutablePlatform, ExecutableResolutionResult } from './executable-policy.js';
 
 /**
  * Options for executable resolution.
@@ -141,7 +138,8 @@ export async function resolveExecutable(
 
   // --- Case 2: Relative path containing a separator ---
   if (trimmed.includes('/') || trimmed.includes('\\')) {
-    const resolved = platform === 'win32' ? nodePath.win32.join(cwd, trimmed) : posixJoin(cwd, trimmed);
+    const resolved =
+      platform === 'win32' ? nodePath.win32.join(cwd, trimmed) : posixJoin(cwd, trimmed);
     const normalized = normalizePath(resolved, platform);
     const exists = await statFile(normalized);
     if (!exists) {

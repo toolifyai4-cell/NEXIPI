@@ -96,10 +96,7 @@ export function defaultKillProcessTree(pid: number, signal?: string): boolean {
   const termSignal = signal ?? 'SIGTERM';
   if (process.platform === 'win32') {
     try {
-      execSync(
-        `taskkill /T /F /PID ${pid}`,
-        { stdio: 'ignore', windowsHide: true }
-      );
+      execSync(`taskkill /T /F /PID ${pid}`, { stdio: 'ignore', windowsHide: true });
       return true;
     } catch {
       return false;
@@ -126,7 +123,10 @@ export function defaultKillProcessTree(pid: number, signal?: string): boolean {
  * a multibyte character. Returns the truncated string and a flag
  * indicating whether truncation occurred.
  */
-export function truncateUtf8Safe(value: string, maxBytes: number): { value: string; truncated: boolean } {
+export function truncateUtf8Safe(
+  value: string,
+  maxBytes: number
+): { value: string; truncated: boolean } {
   const bytes = Buffer.from(value, 'utf8');
   if (bytes.length <= maxBytes) {
     return { value, truncated: false };
@@ -256,7 +256,7 @@ export function buildSanitizedEnvironment(
  */
 export interface SpawnResult {
   readonly handle: ProcessHandle;
-  readonly result: Promise<ProcessExecutionResult>;
+  readonly result: ProcessExecutionResult;
 }
 
 /**
@@ -268,12 +268,12 @@ export interface SpawnResult {
  * @param spawnFn - Injected spawn function (defaults to child_process.spawn).
  * @returns A SpawnResult with the process handle and result promise.
  */
-export function spawnControlledProcess(
+export async function spawnControlledProcess(
   executable: string,
   args: readonly string[],
   options: ProcessSpawnOptions,
   spawnFn: SpawnFunction = spawn
-): SpawnResult {
+): Promise<SpawnResult> {
   const { cwd, env, signal, maxOutputBytes, windowsHide = true } = options;
 
   const startedAt = Date.now();
@@ -339,7 +339,7 @@ export function spawnControlledProcess(
     waitForExit: () => exitPromise,
   };
 
-  const result = new Promise<ProcessExecutionResult>((resolve, reject) => {
+  const resultPromise = new Promise<ProcessExecutionResult>((resolve, reject) => {
     const cleanup = (): void => {
       if (signal) {
         signal.removeEventListener('abort', abortHandler);
@@ -413,10 +413,7 @@ export function spawnControlledProcess(
         stdoutTruncated = stdoutTruncated || stdoutTrunc;
         stderrTruncated = stderrTruncated || stderrTrunc;
 
-        const outputSizeBytes = Math.min(
-          stdoutRaw.length + stderrRaw.length,
-          maxOutputBytes * 2
-        );
+        const outputSizeBytes = Math.min(stdoutRaw.length + stderrRaw.length, maxOutputBytes * 2);
 
         resolve({
           exitCode,
@@ -446,7 +443,7 @@ export function spawnControlledProcess(
     // Ensure cleanup runs even on rejection.
   });
 
-  return { handle, result };
+  return { handle, result: await resultPromise };
 }
 
 /**

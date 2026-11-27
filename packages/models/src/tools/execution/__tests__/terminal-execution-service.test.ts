@@ -32,14 +32,16 @@ function makeCommand(overrides: Partial<TerminalCommand> = {}): TerminalCommand 
 }
 
 function makeRequest(overrides: Partial<TerminalExecutionRequest> = {}): TerminalExecutionRequest {
-  const binding = overrides.approvalBinding ?? createApprovalBinding({
-    bindingId: 'bind-1',
-    executable: '/usr/bin/ls',
-    arguments: ['-la'],
-    workingDirectory: '/workspace',
-    workspaceId: 'ws_1',
-    createdAt: 1700000000000,
-  });
+  const binding =
+    overrides.approvalBinding ??
+    createApprovalBinding({
+      bindingId: 'bind-1',
+      executable: '/usr/bin/ls',
+      arguments: ['-la'],
+      workingDirectory: '/workspace',
+      workspaceId: 'ws_1',
+      createdAt: 1700000000000,
+    });
   return {
     kind: 'terminal-execution-request',
     requestId: 'req-1',
@@ -54,9 +56,10 @@ function makeMockResolver(platform: 'posix' | 'win32' = 'posix') {
     resolve: vi.fn((executable: string, cwd: string) => ({
       kind: 'resolved' as const,
       executable: {
-        resolvedPath: executable.startsWith('/') || executable.includes('\\') || executable.startsWith('C:')
-          ? executable
-          : `/workspace/${executable}`,
+        resolvedPath:
+          executable.startsWith('/') || executable.includes('\\') || executable.startsWith('C:')
+            ? executable
+            : `/workspace/${executable}`,
         displayName: executable,
         platform,
       },
@@ -135,7 +138,39 @@ function makeMockSpawnFn(resultOverrides: any = {}): any {
   };
 }
 
-function makeOptions(overrides: Partial<TerminalExecutionServiceOptions> = {}): TerminalExecutionServiceOptions {
+// Creates a spawn function that returns a ChildProcess mock whose 'close'
+// event is delayed until release() is called. This simulates a long-running
+// process for cancellation/timeout tests.
+function makeBlockingSpawnFn(resultOverrides: any = {}): { fn: any; release: () => void } {
+  let releaseSpawn: (() => void) | null = null;
+  const fn = (_executable: string, _args: readonly string[], _options: any) => {
+    const { mock } = createMockChildProcess({
+      stdoutData: [Buffer.from('output\n')],
+      ...resultOverrides,
+    });
+    // Override the close handler to wait for release
+    const originalOn = mock.on;
+    mock.on = (event: string, handler: any) => {
+      if (event === 'close') {
+        releaseSpawn = () => handler(0, null);
+      } else {
+        originalOn(event, handler);
+      }
+    };
+    return mock;
+  };
+  const release = () => {
+    if (releaseSpawn) {
+      releaseSpawn();
+      releaseSpawn = null;
+    }
+  };
+  return { fn, release };
+}
+
+function makeOptions(
+  overrides: Partial<TerminalExecutionServiceOptions> = {}
+): TerminalExecutionServiceOptions {
   return {
     executableResolver: makeMockResolver(),
     executablePolicy: makeMockPolicy(),
@@ -179,39 +214,21 @@ describe('TerminalExecutionService — submission', () => {
 
 describe('TerminalExecutionService — concurrency limits', () => {
   it('limits concurrent executions', async () => {
-    // Create a spawn fn that holds the process open
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0,
-        exitSignal: null,
-        stdout: '',
-        stderr: '',
-        stdoutTruncated: false,
-        stderrTruncated: false,
-        outputSizeBytes: 0,
-        startedAt: Date.now(),
-        completedAt: Date.now(),
-        executionMs: 0,
-        killed: false,
-        timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({
-      spawnFn: makeMockSpawnFn(),
-      limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxConcurrentExecutions: 1 },
-    }));
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: makeMockSpawnFn(),
+        limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxConcurrentExecutions: 1 },
+      })
+    );
 
     // Start first execution
     const sub1 = service.submit(makeRequest({ requestId: 'req-1' }));
     await new Promise(resolve => setTimeout(resolve, 10));
 
     // Second execution
-    const sub2 = service.submit(makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) }));
+    const sub2 = service.submit(
+      makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) })
+    );
     await new Promise(resolve => setTimeout(resolve, 10));
 
     // Both should complete
@@ -225,56 +242,42 @@ describe('TerminalExecutionService — concurrency limits', () => {
   });
 
   it('rejects when queue is full', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({
-      spawnFn,
-      limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxConcurrentExecutions: 1, maxQueuedExecutions: 1 },
-    }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: fn,
+        limits: {
+          ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
+          maxConcurrentExecutions: 1,
+          maxQueuedExecutions: 1,
+        },
+      })
+    );
 
     // Fill the concurrent slot
     service.submit(makeRequest({ requestId: 'req-1' }));
     await new Promise(resolve => setTimeout(resolve, 10));
     // Fill the queue
-    service.submit(makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) }));
+    service.submit(
+      makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) })
+    );
     await new Promise(resolve => setTimeout(resolve, 10));
     // Third should fail
     await expect(
-      service.submit(makeRequest({ requestId: 'req-3', command: makeCommand({ commandId: 'cmd-3' }) })).promise
+      service.submit(
+        makeRequest({ requestId: 'req-3', command: makeCommand({ commandId: 'cmd-3' }) })
+      ).promise
     ).rejects.toThrow();
 
-    releaseSpawn!();
+    release();
     await service.dispose();
   });
 });
 
 describe('TerminalExecutionService — cancellation', () => {
   it('cancels an in-flight execution', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
     const submission = service.submit(makeRequest({ requestId: 'req-1' }));
 
     // Wait for execution to start
@@ -283,7 +286,7 @@ describe('TerminalExecutionService — cancellation', () => {
     const cancelled = service.cancel(submission.terminalId, 'user');
     expect(cancelled).toBe(true);
 
-    releaseSpawn!();
+    release();
 
     await expect(submission.promise).rejects.toThrow();
 
@@ -309,59 +312,39 @@ describe('TerminalExecutionService — cancellation', () => {
 
 describe('TerminalExecutionService — disposal', () => {
   it('cancels active executions on dispose', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
     const submission = service.submit(makeRequest({ requestId: 'req-1' }));
 
     await new Promise(resolve => setTimeout(resolve, 10));
 
     service.dispose();
-    releaseSpawn!();
+    release();
 
     // The submission should be cancelled (rejected)
     await expect(submission.promise).rejects.toThrow();
   });
 
   it('rejects queued executions on dispose', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({
-      spawnFn,
-      limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxConcurrentExecutions: 1 },
-    }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: fn,
+        limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxConcurrentExecutions: 1 },
+      })
+    );
 
     // Fill concurrent slot
     service.submit(makeRequest({ requestId: 'req-1' }));
     await new Promise(resolve => setTimeout(resolve, 10));
     // Queue second
-    const sub2 = service.submit(makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) }));
+    const sub2 = service.submit(
+      makeRequest({ requestId: 'req-2', command: makeCommand({ commandId: 'cmd-2' }) })
+    );
     await new Promise(resolve => setTimeout(resolve, 10));
 
     service.dispose();
-    releaseSpawn!();
+    release();
 
     await expect(sub2.promise).rejects.toThrow();
   });
@@ -379,9 +362,11 @@ describe('TerminalExecutionService — validation failures', () => {
     const service = new TerminalExecutionService(makeOptions());
 
     await expect(
-      service.submit(makeRequest({
-        command: makeCommand({ executable: '' }),
-      })).promise
+      service.submit(
+        makeRequest({
+          command: makeCommand({ executable: '' }),
+        })
+      ).promise
     ).rejects.toThrow();
 
     service.dispose();
@@ -403,10 +388,12 @@ describe('TerminalExecutionService — validation failures', () => {
 
     // Submit a request with a different command (ls vs cat)
     await expect(
-      service.submit(makeRequest({
-        command: makeCommand({ executable: '/usr/bin/ls' }),
-        approvalBinding: binding,
-      })).promise
+      service.submit(
+        makeRequest({
+          command: makeCommand({ executable: '/usr/bin/ls' }),
+          approvalBinding: binding,
+        })
+      ).promise
     ).rejects.toThrow();
 
     service.dispose();
@@ -418,9 +405,7 @@ describe('TerminalExecutionService — executable policy', () => {
     const policy = makeMockPolicy(false);
     const service = new TerminalExecutionService(makeOptions({ executablePolicy: policy }));
 
-    await expect(
-      service.submit(makeRequest()).promise
-    ).rejects.toThrow();
+    await expect(service.submit(makeRequest()).promise).rejects.toThrow();
 
     service.dispose();
   });
@@ -428,9 +413,12 @@ describe('TerminalExecutionService — executable policy', () => {
   it('resolves executable before spawn', async () => {
     const resolver = makeMockResolver();
     const spawnFn = makeMockSpawnFn();
-    const service = new TerminalExecutionService(makeOptions({ executableResolver: resolver, spawnFn }));
+    const service = new TerminalExecutionService(
+      makeOptions({ executableResolver: resolver, spawnFn })
+    );
 
-    await service.submit(makeRequest({ command: makeCommand({ executable: '/usr/bin/ls' }) })).promise;
+    await service.submit(makeRequest({ command: makeCommand({ executable: '/usr/bin/ls' }) }))
+      .promise;
 
     expect(resolver.resolve).toHaveBeenCalled();
 
@@ -507,20 +495,8 @@ describe('TerminalExecutionService — execution authorization boundary', () => 
 
 describe('TerminalExecutionService — cancellation/timeout accuracy', () => {
   it('rejects with cancellation error when cancelled during execution', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
     const submission = service.submit(makeRequest({ requestId: 'req-1' }));
 
     await new Promise(resolve => setTimeout(resolve, 10));
@@ -528,7 +504,7 @@ describe('TerminalExecutionService — cancellation/timeout accuracy', () => {
     const cancelled = service.cancel(submission.terminalId, 'user');
     expect(cancelled).toBe(true);
 
-    releaseSpawn!();
+    release();
 
     await expect(submission.promise).rejects.toThrow();
 
@@ -536,94 +512,67 @@ describe('TerminalExecutionService — cancellation/timeout accuracy', () => {
   });
 
   it('rejects with cancellation error when cancelled during timeout', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({
-      spawnFn,
-      limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxExecutionMs: 50 },
-    }));
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: fn,
+        limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxExecutionMs: 50 },
+      })
+    );
     const submission = service.submit(makeRequest({ requestId: 'req-timeout' }));
 
     await new Promise(resolve => setTimeout(resolve, 100));
 
     await expect(submission.promise).rejects.toThrow();
 
-    releaseSpawn!();
+    release();
     service.dispose();
   });
 });
 
 describe('TerminalExecutionService — late event handling', () => {
-  it('does not overwrite terminal state with late completion after cancellation', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 0, exitSignal: null, stdout: '', stderr: '',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
-    });
-
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+  it('does not overwrite cancelled state with late completion', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
     const submission = service.submit(makeRequest({ requestId: 'req-1' }));
 
     await new Promise(resolve => setTimeout(resolve, 10));
 
     service.cancel(submission.terminalId, 'user');
 
-    releaseSpawn!();
+    release();
 
-    const result = await submission.promise;
-    // Should be cancelled, not completed, even though the process later exits
-    expect(result.state).toBe('cancelled');
-    expect(result.cancelled).toBe(true);
+    await expect(submission.promise).rejects.toThrow();
+
+    // Verify the entry state is still cancelled, not overwritten by late completion
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.state).toBe('cancelled');
+    expect(entry?.result?.state).toBe('cancelled');
 
     service.dispose();
   });
 
   it('does not overwrite cancelled state with late failure', async () => {
-    let releaseSpawn: (() => void) | null = null;
-    const spawnFn = vi.fn(async () => {
-      await new Promise<void>(resolve => {
-        releaseSpawn = resolve;
-      });
-      return {
-        exitCode: 1, exitSignal: null, stdout: '', stderr: 'error',
-        stdoutTruncated: false, stderrTruncated: false, outputSizeBytes: 0,
-        startedAt: Date.now(), completedAt: Date.now(), executionMs: 0,
-        killed: false, timedOut: false,
-      };
+    const { fn, release } = makeBlockingSpawnFn({
+      exitCode: 1,
+      stderrData: [Buffer.from('error')],
     });
-
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
     const submission = service.submit(makeRequest({ requestId: 'req-1' }));
 
     await new Promise(resolve => setTimeout(resolve, 10));
 
     service.cancel(submission.terminalId, 'user');
 
-    releaseSpawn!();
+    release();
 
-    const result = await submission.promise;
-    expect(result.state).toBe('cancelled');
-    expect(result.cancelled).toBe(true);
+    await expect(submission.promise).rejects.toThrow();
+
+    // Verify the entry state is still cancelled, not overwritten by late failure
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.state).toBe('cancelled');
+    expect(entry?.result?.state).toBe('cancelled');
 
     service.dispose();
   });
 });
-

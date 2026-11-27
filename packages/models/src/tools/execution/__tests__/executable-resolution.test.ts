@@ -4,7 +4,9 @@ import { resolveExecutable, type ExecutableResolutionOptions } from '../executab
 const POSIX_CWD = '/workspace';
 const WIN_CWD = 'C:\\workspace';
 
-function makeOptions(overrides: Partial<ExecutableResolutionOptions> = {}): ExecutableResolutionOptions {
+function makeOptions(
+  overrides: Partial<ExecutableResolutionOptions> = {}
+): ExecutableResolutionOptions {
   return {
     platform: 'posix',
     cwd: POSIX_CWD,
@@ -58,10 +60,13 @@ describe('resolveExecutable — posix relative paths with separator', () => {
 describe('resolveExecutable — posix bare name PATH search', () => {
   it('resolves a bare name found in PATH', async () => {
     const statFile = vi.fn(async (path: string) => path === '/usr/local/bin/ls');
-    const result = await resolveExecutable('ls', makeOptions({
-      statFile,
-      pathEnv: '/usr/local/bin:/usr/bin',
-    }));
+    const result = await resolveExecutable(
+      'ls',
+      makeOptions({
+        statFile,
+        pathEnv: '/usr/local/bin:/usr/bin',
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('/usr/local/bin/ls');
@@ -73,10 +78,13 @@ describe('resolveExecutable — posix bare name PATH search', () => {
       // Only the second directory has the executable.
       return path === '/usr/bin/ls';
     });
-    const result = await resolveExecutable('ls', makeOptions({
-      statFile,
-      pathEnv: '/usr/local/bin:/usr/bin',
-    }));
+    const result = await resolveExecutable(
+      'ls',
+      makeOptions({
+        statFile,
+        pathEnv: '/usr/local/bin:/usr/bin',
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('/usr/bin/ls');
@@ -85,10 +93,13 @@ describe('resolveExecutable — posix bare name PATH search', () => {
 
   it('rejects a bare name not found in any PATH directory', async () => {
     const statFile = vi.fn(async () => false);
-    const result = await resolveExecutable('nonexistent', makeOptions({
-      statFile,
-      pathEnv: '/usr/bin:/bin',
-    }));
+    const result = await resolveExecutable(
+      'nonexistent',
+      makeOptions({
+        statFile,
+        pathEnv: '/usr/bin:/bin',
+      })
+    );
     expect(result.kind).toBe('rejected');
     expect(result.reason).toContain('not found in PATH');
   });
@@ -109,11 +120,14 @@ describe('resolveExecutable — posix bare name PATH search', () => {
 describe('resolveExecutable — win32', () => {
   it('resolves an absolute Windows path', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\System32\\where.exe');
-    const result = await resolveExecutable('C:\\Windows\\System32\\where.exe', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-    }));
+    const result = await resolveExecutable(
+      'C:\\Windows\\System32\\where.exe',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\Windows\\System32\\where.exe');
@@ -123,11 +137,14 @@ describe('resolveExecutable — win32', () => {
 
   it('resolves a UNC path', async () => {
     const statFile = vi.fn(async (path: string) => path === '\\\\server\\share\\tool.exe');
-    const result = await resolveExecutable('\\\\server\\share\\tool.exe', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-    }));
+    const result = await resolveExecutable(
+      '\\\\server\\share\\tool.exe',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('\\\\server\\share\\tool.exe');
@@ -136,11 +153,14 @@ describe('resolveExecutable — win32', () => {
 
   it('resolves a relative name against Windows cwd', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\workspace\\sub\\tool.exe');
-    const result = await resolveExecutable('sub\\tool.exe', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-    }));
+    const result = await resolveExecutable(
+      'sub\\tool.exe',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\workspace\\sub\\tool.exe');
@@ -149,13 +169,16 @@ describe('resolveExecutable — win32', () => {
 
   it('tries PATHEXT extensions on Windows', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.cmd');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: 'C:\\Windows',
-      statFile,
-      pathEnv: 'C:\\Windows',
-      pathextEnv: '.com;.exe;.bat;.cmd',
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: 'C:\\Windows',
+        statFile,
+        pathEnv: 'C:\\Windows',
+        pathextEnv: '.com;.exe;.bat;.cmd',
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.cmd');
@@ -164,11 +187,14 @@ describe('resolveExecutable — win32', () => {
 
   it('normalizes forward slashes to backslashes on Windows', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.exe');
-    const result = await resolveExecutable('C:/Windows/tool.exe', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-    }));
+    const result = await resolveExecutable(
+      'C:/Windows/tool.exe',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.exe');
@@ -195,10 +221,13 @@ describe('resolveExecutable — TOCTOU considerations', () => {
   it('resolves to exact identity, not just name', async () => {
     const statFile = vi.fn(async (path: string) => path === '/usr/bin/ls');
     const result1 = await resolveExecutable('/usr/bin/ls', makeOptions({ statFile }));
-    const result2 = await resolveExecutable('ls', makeOptions({
-      statFile,
-      pathEnv: '/usr/bin',
-    }));
+    const result2 = await resolveExecutable(
+      'ls',
+      makeOptions({
+        statFile,
+        pathEnv: '/usr/bin',
+      })
+    );
 
     expect(result1.kind).toBe('resolved');
     expect(result2.kind).toBe('resolved');
@@ -212,13 +241,16 @@ describe('resolveExecutable — TOCTOU considerations', () => {
 describe('resolveExecutable — Windows executable extensions', () => {
   it('resolves .exe executables on Windows', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.exe');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-      pathEnv: 'C:\\Windows',
-      pathextEnv: '.exe;.com',
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+        pathEnv: 'C:\\Windows',
+        pathextEnv: '.exe;.com',
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.exe');
@@ -227,13 +259,16 @@ describe('resolveExecutable — Windows executable extensions', () => {
 
   it('resolves .com executables on Windows', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.com');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-      pathEnv: 'C:\\Windows',
-      pathextEnv: '.exe;.com',
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+        pathEnv: 'C:\\Windows',
+        pathextEnv: '.exe;.com',
+      })
+    );
     expect(result.kind).toBe('resolved');
     if (result.kind === 'resolved') {
       expect(result.executable!.resolvedPath).toBe('C:\\Windows\\tool.com');
@@ -242,11 +277,14 @@ describe('resolveExecutable — Windows executable extensions', () => {
 
   it('does not resolve .cmd executables (incompatible with shell:false)', async () => {
     const statFile = vi.fn(async () => true);
-    const result = await resolveExecutable('tool.cmd', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-    }));
+    const result = await resolveExecutable(
+      'tool.cmd',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+      })
+    );
     // .cmd is an absolute path with .cmd extension, but it's still a valid
     // path resolution. The point is .cmd/.bat are NOT in the default PATHEXT
     // list, so bare names won't resolve to them.
@@ -255,26 +293,32 @@ describe('resolveExecutable — Windows executable extensions', () => {
 
   it('does not resolve bare name to .cmd via default PATHEXT', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.cmd');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-      pathEnv: 'C:\\Windows',
-      // No pathextEnv means defaults are used: ['.exe', '.com']
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+        pathEnv: 'C:\\Windows',
+        // No pathextEnv means defaults are used: ['.exe', '.com']
+      })
+    );
     expect(result.kind).toBe('rejected');
     expect(result.reason).toContain('not found in PATH');
   });
 
   it('does not resolve bare name to .bat via default PATHEXT', async () => {
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.bat');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-      pathEnv: 'C:\\Windows',
-      // No pathextEnv means defaults are used: ['.exe', '.com']
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+        pathEnv: 'C:\\Windows',
+        // No pathextEnv means defaults are used: ['.exe', '.com']
+      })
+    );
     expect(result.kind).toBe('rejected');
     expect(result.reason).toContain('not found in PATH');
   });
@@ -284,13 +328,16 @@ describe('resolveExecutable — Windows executable extensions', () => {
     // (['.exe', '.com']) does not include .cmd, so it won't be resolved
     // as a bare name. This prevents shell-script execution via shell:false.
     const statFile = vi.fn(async (path: string) => path === 'C:\\Windows\\tool.cmd');
-    const result = await resolveExecutable('tool', makeOptions({
-      platform: 'win32',
-      cwd: WIN_CWD,
-      statFile,
-      pathEnv: 'C:\\Windows',
-      pathextEnv: undefined, // Uses defaults: ['.exe', '.com']
-    }));
+    const result = await resolveExecutable(
+      'tool',
+      makeOptions({
+        platform: 'win32',
+        cwd: WIN_CWD,
+        statFile,
+        pathEnv: 'C:\\Windows',
+        pathextEnv: undefined, // Uses defaults: ['.exe', '.com']
+      })
+    );
     expect(result.kind).toBe('rejected');
   });
 });
