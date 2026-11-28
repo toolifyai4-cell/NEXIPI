@@ -25,6 +25,8 @@ import type {
   TerminalExecutionResult,
   TerminalId,
   TerminalLifecycleState,
+  TerminalAuthorizationBinding,
+  TrustedAuthorizationVerifier,
 } from './contracts.js';
 import { createTerminalId, DEFAULT_TERMINAL_EXECUTION_LIMITS } from './contracts.js';
 import { validateTerminalCommandSecurity } from './command-validation.js';
@@ -34,6 +36,7 @@ import {
   type ExecutablePolicy,
   type ExecutableResolver,
 } from './executable-policy.js';
+import { computeContentHash } from './approval-binding.js';
 import {
   spawnControlledProcess,
   buildSanitizedEnvironment,
@@ -78,6 +81,12 @@ export interface TerminalExecutionServiceOptions {
   readonly spawnFn?: SpawnFunction;
   readonly killProcessTreeFn?: KillProcessTreeFunction;
   readonly platform?: 'win32' | 'posix';
+  /**
+   * Trusted authorization verifier. Required for any execution to proceed.
+   * Stage E implements this using TrustedApprovalService. When omitted, all
+   * submissions fail closed.
+   */
+  readonly trustedAuthorizationVerifier?: TrustedAuthorizationVerifier;
 }
 
 /**
@@ -156,6 +165,7 @@ export class TerminalExecutionService {
   private readonly spawnFn: SpawnFunction;
   private readonly killProcessTreeFn: KillProcessTreeFunction;
   private readonly platform: 'win32' | 'posix';
+  private readonly trustedAuthorizationVerifier: TrustedAuthorizationVerifier | undefined;
 
   private readonly executions: Map<string, TerminalExecutionEntry> = new Map();
   private readonly queue: string[] = [];
@@ -171,6 +181,7 @@ export class TerminalExecutionService {
     this.spawnFn = options.spawnFn ?? (spawnControlledProcess as unknown as SpawnFunction);
     this.killProcessTreeFn = options.killProcessTreeFn ?? defaultKillProcessTree;
     this.platform = options.platform ?? (process.platform === 'win32' ? 'win32' : 'posix');
+    this.trustedAuthorizationVerifier = options.trustedAuthorizationVerifier;
   }
 
   /**
@@ -273,21 +284,46 @@ export class TerminalExecutionService {
           return;
         }
 
-        // --- Require trusted approval decision ---
+        // --- Require trusted authorization ---
         // An ApprovalBinding only proves parameter matching; it does NOT
-        // prove trusted user approval. Stage E must supply a
-        // TrustedApprovalDecision with decision === 'approved' before any
-        // process may start. Fail closed when missing or not approved.
-        const trustedDecision = request.trustedApprovalDecision;
-        if (
-          !trustedDecision ||
-          trustedDecision.kind !== 'trusted-approval-decision' ||
-          trustedDecision.decision !== 'approved'
-        ) {
+        // prove trusted user approval. Stage D never trusts a caller-supplied
+        // object. Authorization must be verified through the injected
+        // TrustedAuthorizationVerifier, which Stage E implements using
+        // TrustedApprovalService. Fail closed when the verifier is absent
+        // or when verification fails.
+        if (!this.trustedAuthorizationVerifier) {
           this.failEntry(
             entry,
             TerminalErrorCode.TERMINAL_INVALID_REQUEST,
-            'Execution requires a trusted approval decision'
+            'Terminal execution requires a trusted authorization verifier',
+          );
+          return;
+        }
+
+        const binding: TerminalAuthorizationBinding = {
+          executable: validated.command.executable,
+          arguments: validated.command.arguments,
+          workingDirectory: validated.command.workingDirectory,
+          workspaceId: validated.command.workspaceId,
+          environmentConfigId: validated.command.environmentConfig?.id ?? undefined,
+          contentHash: computeContentHash({
+            executable: validated.command.executable,
+            arguments: validated.command.arguments,
+            workingDirectory: validated.command.workingDirectory,
+            workspaceId: validated.command.workspaceId,
+            environmentConfigId: validated.command.environmentConfig?.id,
+          }),
+        };
+
+        const authorized = await this.trustedAuthorizationVerifier.verify(
+          request.trustedAuthorization,
+          binding,
+        );
+        if (!authorized) {
+          this.failEntry(
+            entry,
+            TerminalErrorCode.TERMINAL_INVALID_REQUEST,
+            'Execution is not authorized by a trusted user decision',
           );
           return;
         }
@@ -413,7 +449,7 @@ export class TerminalExecutionService {
         code: TerminalErrorCode.TERMINAL_CANCELLED,
         message: `Execution cancelled: ${reason}`,
       },
-      trustedApprovalDecision: entry.request.trustedApprovalDecision,
+      trustedAuthorization: entry.request.trustedAuthorization,
     };
     entry.result = cancelledResult;
     if (entry.reject) {
@@ -632,7 +668,7 @@ export class TerminalExecutionService {
                       message: `Process exited with code ${processResult.exitCode}`,
                     }
                   : null,
-              trustedApprovalDecision: request.trustedApprovalDecision,
+              trustedAuthorization: request.trustedAuthorization,
             };
 
             this.completeEntry(entry, executionResult);
@@ -725,7 +761,7 @@ export class TerminalExecutionService {
         cancelled: false,
         timedOut: false,
         error: { code, message },
-        trustedApprovalDecision: entry.request.trustedApprovalDecision,
+        trustedAuthorization: entry.request.trustedAuthorization,
       };
     }
     if (entry.reject) {

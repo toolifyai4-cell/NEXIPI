@@ -139,11 +139,14 @@ export interface TerminalExecutionRequest {
   readonly command: TerminalCommand;
   readonly approvalBinding?: ApprovalBinding | undefined;
   /**
-   * Trusted user authorization decision from Stage E. Must be present with
-   * `decision === 'approved'` before execution may proceed. Stage D fails
-   * closed when this is missing or not approved.
+   * Trusted authorization capability from Stage E's trusted approval
+   * boundary. Must be present and verified through the injected
+   * TrustedAuthorizationVerifier before execution may proceed. A plain
+   * object with `decision: 'approved'` is never sufficient proof of
+   * trusted user approval; only an opaque capability created exclusively
+   * by the trusted boundary can authorize execution.
    */
-  readonly trustedApprovalDecision?: TrustedApprovalDecision | undefined;
+  readonly trustedAuthorization?: TerminalAuthorizationCapability | undefined;
 }
 
 /**
@@ -172,18 +175,62 @@ export interface ApprovalBinding {
 }
 
 /**
- * Trusted user authorization decision produced by Stage E's
- * `TrustedApprovalService`. A matching `ApprovalBinding` hash alone does
- * NOT constitute authorization; only a `TrustedApprovalDecision` with
- * `decision === 'approved'` from the trusted boundary grants permission to
- * execute.
+ * An opaque authorization capability produced exclusively by the trusted
+ * approval boundary (Stage E via TrustedApprovalService).
+ *
+ * This is NOT a plain decision object. A caller cannot forge a valid
+ * capability by constructing `{ decision: 'approved' }`. The capability
+ * carries an unforgeable identifier and is bound to the exact execution
+ * parameters via its content hash. Only the injected
+ * TrustedAuthorizationVerifier can validate it.
+ *
+ * Stage D defines this contract and the verifier seam; Stage E implements
+ * the verifier using TrustedApprovalService.createAuthorizationToApply().
  */
-export interface TrustedApprovalDecision {
-  readonly kind: 'trusted-approval-decision';
-  readonly decision: 'approved' | 'rejected' | 'expired';
-  readonly boundary: string;
-  readonly decidedAt: number;
-  readonly expiresAt?: number | undefined;
+export interface TerminalAuthorizationCapability {
+  readonly kind: 'terminal-authorization-capability';
+  readonly capabilityId: string;
+  readonly boundContentHash: string;
+  readonly expiresAt: number | undefined;
+}
+
+/**
+ * The execution binding that an authorization capability must match.
+ *
+ * The verifier checks that the capability's boundContentHash equals the
+ * SHA-256 of this exact binding, and that the capability is not expired.
+ */
+export interface TerminalAuthorizationBinding {
+  readonly executable: string;
+  readonly arguments: readonly string[];
+  readonly workingDirectory: string;
+  readonly workspaceId: string;
+  readonly environmentConfigId: string | undefined;
+  readonly contentHash: string;
+}
+
+/**
+ * Trusted authorization verifier seam.
+ *
+ * Stage D defines this interface; Stage E implements it using the existing
+ * TrustedApprovalService from Phase 10. The verifier is the sole authority
+ * on whether a capability was created through the trusted boundary. Stage D
+ * never creates capabilities and never trusts a caller-supplied object.
+ */
+export interface TrustedAuthorizationVerifier {
+  /**
+   * Verifies that an authorization capability is valid for the given
+   * execution binding.
+   *
+   * @returns true only when the capability was created exclusively by the
+   *          trusted approval boundary, is not expired, revoked, or
+   *          mismatched, and binds to the exact execution parameters.
+   * @throws when the verifier itself is unavailable or misconfigured.
+   */
+  verify(
+    capability: TerminalAuthorizationCapability | undefined,
+    binding: TerminalAuthorizationBinding
+  ): Promise<boolean>;
 }
 
 /**
@@ -211,10 +258,10 @@ export interface TerminalExecutionResult {
   readonly timedOut: boolean;
   readonly error: { readonly code: string; readonly message: string } | null;
   /**
-   * Trusted approval decision that authorized this execution, if any.
+   * Trusted authorization capability that authorized this execution, if any.
    * Absent when execution was not approved or was cancelled before approval.
    */
-  readonly trustedApprovalDecision?: TrustedApprovalDecision | undefined;
+  readonly trustedAuthorization?: TerminalAuthorizationCapability | undefined;
 }
 
 /**
