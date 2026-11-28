@@ -13,7 +13,6 @@
 
 import * as vscode from 'vscode';
 import type {
-  TerminalCommandApprovalDetails,
   TrustedDecisionProvider,
   TrustedUserDecision,
   TrustedUserDecisionRequest,
@@ -52,10 +51,14 @@ export class VSCodeTrustedDecisionProvider implements TrustedDecisionProvider {
 
     let message: string;
     if (terminalCommand !== undefined) {
-      const { executable, arguments: args, workingDirectory, environmentConfigId } = terminalCommand;
-      const envLine = environmentConfigId !== undefined
-        ? `\nEnvironment config: ${environmentConfigId}`
-        : '';
+      const {
+        executable,
+        arguments: args,
+        workingDirectory,
+        environmentConfigId,
+      } = terminalCommand;
+      const envLine =
+        environmentConfigId !== undefined ? `\nEnvironment config: ${environmentConfigId}` : '';
       message =
         `Run terminal command?\n` +
         `Executable: ${executable}\n` +

@@ -29,15 +29,12 @@ import {
 } from '@nexipi/models/tools';
 import { ToolExecutor } from '@nexipi/models/tools';
 import { ToolExecutionService, type ToolExecutionServiceConfig } from '@nexipi/models/tools';
-import type {
-  TerminalCommand,
-  TerminalExecutionRequest,
-} from '@nexipi/models/tools';
-import { TerminalExecutionService, DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS } from '@nexipi/models/tools';
+import type { TerminalCommand } from '@nexipi/models/tools';
 import {
-  DefaultExecutableResolver,
-  DefaultExecutablePolicy,
+  TerminalExecutionService,
+  DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
 } from '@nexipi/models/tools';
+import { DefaultExecutableResolver, DefaultExecutablePolicy } from '@nexipi/models/tools';
 import {
   TerminalApprovalOrchestrator,
   TerminalTrustedAuthorizationVerifier,
@@ -56,7 +53,11 @@ import {
   isChildOf,
   normalizePath,
 } from '@nexipi/workspace/tools';
-import { createTrustedApprovalService, type TrustedApprovalService, defaultNow } from '@nexipi/workspace';
+import {
+  createTrustedApprovalService,
+  type TrustedApprovalService,
+  defaultNow,
+} from '@nexipi/workspace';
 import type {
   ProposalRepositoryPort,
   ApprovalRepositoryPort,
@@ -1478,9 +1479,7 @@ function registerCommands(
           terminationStatus: result.terminationStatus,
         });
         if (result.error) {
-          void vscode.window.showErrorMessage(
-            `Terminal command failed: ${result.error.message}`
-          );
+          void vscode.window.showErrorMessage(`Terminal command failed: ${result.error.message}`);
         } else if (result.state === 'completed') {
           void vscode.window.showInformationMessage(
             `Terminal command completed (exit code ${result.exitCode})`
@@ -1866,7 +1865,6 @@ export async function deactivate(): Promise<void> {
   const toolExecutionService = gToolExecutionService;
   const approvalController = gApprovalController;
   const terminalApprovalOrchestrator = gTerminalApprovalOrchestrator;
-  const terminalExecutionService = gTerminalExecutionService;
 
   if (!logger || !chatService || !persistenceService) {
     logger?.warn('deactivate() called but services not initialized');

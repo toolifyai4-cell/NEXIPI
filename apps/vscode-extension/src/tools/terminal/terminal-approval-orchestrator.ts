@@ -40,13 +40,11 @@
  */
 
 import type {
-  TerminalAuthorizationBinding,
   TerminalAuthorizationCapability,
   TerminalCommand,
   TerminalExecutionRequest,
   TerminalExecutionResult,
   TerminalExecutionService,
-  TrustedAuthorizationVerifier,
   ValidatedTerminalCommand,
   WorkspaceBoundaryValidator,
   ExecutableResolver,
@@ -63,11 +61,7 @@ import type {
 import { defaultNow } from '@nexipi/workspace';
 import type { Logger } from '@nexipi/core';
 import { createNoopLogger } from '@nexipi/core';
-import {
-  computeContentHash,
-  createApprovalBinding,
-  validateTerminalCommandSecurity,
-} from '@nexipi/models/tools';
+import { createApprovalBinding, validateTerminalCommandSecurity } from '@nexipi/models/tools';
 
 /**
  * Options for {@link TerminalApprovalOrchestrator}.
@@ -204,7 +198,11 @@ export class TerminalApprovalOrchestrator {
     const cmd = validated.command;
 
     // --- Step 3: Resolve and validate the executable ---
-    let resolution: { kind: 'resolved' | 'rejected'; executable?: { resolvedPath: string; displayName: string; platform: string }; reason?: string };
+    let resolution: {
+      kind: 'resolved' | 'rejected';
+      executable?: { resolvedPath: string; displayName: string; platform: string };
+      reason?: string;
+    };
     try {
       resolution = await this.executableResolver.resolve(cmd.executable, cmd.workingDirectory);
     } catch (error) {
@@ -387,7 +385,7 @@ export class TerminalApprovalOrchestrator {
 
     // Cancel all pending approvals so no trusted decision can be established
     // after disposal.
-    for (const [bindingId, pending] of this.pendingApprovals.entries()) {
+    for (const pending of this.pendingApprovals.values()) {
       pending.abortController.abort();
     }
     this.pendingApprovals.clear();
@@ -444,7 +442,8 @@ export class TerminalApprovalOrchestrator {
     const combinedSignal = this.combineSignals(abortSignal, abortController.signal);
 
     try {
-      const confirmed: TrustedUserDecision | null = await this.provider.establishUserDecision(decisionRequest);
+      const confirmed: TrustedUserDecision | null =
+        await this.provider.establishUserDecision(decisionRequest);
 
       if (confirmed === null) {
         // User cancelled, dismissed, or provider unavailable -> fail closed.
@@ -488,7 +487,10 @@ export class TerminalApprovalOrchestrator {
           approvalId,
           error: createResult.error?.message ?? 'unknown error',
         });
-        return { kind: 'failed', error: createResult.error ?? new Error('Failed to persist approval decision') };
+        return {
+          kind: 'failed',
+          error: createResult.error ?? new Error('Failed to persist approval decision'),
+        };
       }
 
       // Obtain the authorization capability from the trusted boundary. This
