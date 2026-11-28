@@ -191,6 +191,7 @@ describe('TerminalExecutionResultSchema', () => {
     executionMs: 1000,
     cancelled: false,
     timedOut: false,
+    terminationStatus: 'confirmed',
     error: null,
   };
 

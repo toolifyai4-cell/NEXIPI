@@ -43,6 +43,7 @@ import {
   terminateProcessTree,
   defaultKillProcessTree,
   type ProcessHandle,
+  type ProcessTerminationResult,
   type KillProcessTreeFunction,
   type SpawnFunction,
 } from './process-adapter.js';
@@ -67,6 +68,17 @@ interface TerminalExecutionEntry {
    * final result, since the abort signal alone cannot carry that reason.
    */
   cancelReason: 'user' | 'shutdown' | 'timeout' | undefined;
+  /**
+   * Set while an asynchronous cancellation/termination is in flight.
+   * Prevents cancel() from being re-entered for the same entry.
+   */
+  cancelling: boolean;
+  /**
+   * Promise that resolves when cancellation termination (terminateProcessTree)
+   * has completed. Awaited by dispose() to avoid abandoning active child
+   * processes.
+   */
+  terminationPromise: Promise<ProcessTerminationResult> | null;
 }
 
 /**
@@ -218,6 +230,8 @@ export class TerminalExecutionService {
       resolve: null,
       reject: null,
       cancelReason: undefined,
+      cancelling: false,
+      terminationPromise: null,
     };
 
     const promise = new Promise<TerminalExecutionResult>((resolve, reject) => {
@@ -385,6 +399,16 @@ export class TerminalExecutionService {
       return false;
     }
 
+    // Prevent re-entrant cancellation for the same entry.
+    if (entry.cancelling) {
+      return false;
+    }
+    entry.cancelling = true;
+
+    // Record the cancellation reason so the final result can distinguish
+    // user cancellation, timeout, and disposal.
+    entry.cancelReason = reason;
+
     // Signal abort so the spawn adapter kills the child process. This is
     // required even when the process handle is not yet stored (e.g. cancel
     // racing with spawn startup).
@@ -396,43 +420,57 @@ export class TerminalExecutionService {
       // AbortController may already be aborted; safe to ignore.
     }
 
-    // Record the cancellation reason so the final result can distinguish
-    // user cancellation, timeout, and disposal.
-    entry.cancelReason = reason;
-
-    // Kill the process tree if a handle is available.
-    if (entry.processHandle !== null) {
-      void terminateProcessTree(entry.processHandle, this.killProcessTreeFn);
-    }
-
     // Clear timeout timer.
     if (entry.timeoutTimer !== null) {
       clearTimeout(entry.timeoutTimer);
       entry.timeoutTimer = null;
     }
 
-    // Transition to cancelled. `cancelled` is only valid from `running`;
-    // for pre-execution states (approved, awaiting-approval, validating,
-    // proposed) fall back to `disposed` which is reachable from any active
-    // state.
-    try {
-      entry.state = applyTransition(entry.state, 'cancelled');
-    } catch {
-      try {
-        entry.state = applyTransition(entry.state, 'disposed');
-      } catch {
-        // Leave state as-is if all transitions fail.
-      }
+    // Settle the result synchronously. Termination cannot be confirmed at
+    // this point (the process may still be running), so terminationStatus
+    // is 'unconfirmed'. If the process later exits, completeEntry() is a
+    // late event and is ignored because the state is already terminal.
+    this.settleCancellation(entry, reason, 'unconfirmed');
+
+    // Initiate asynchronous process-tree termination for actual cleanup.
+    // The promise is tracked so dispose() can await outstanding terminations.
+    if (entry.processHandle !== null) {
+      entry.terminationPromise = terminateProcessTree(
+        entry.processHandle,
+        this.killProcessTreeFn
+      );
+      void entry.terminationPromise;
     }
+
+    return true;
+  }
+
+  /**
+   * Settles a cancelled/timed-out/disposed entry result. Guards against
+   * late settlement (e.g. the process exited naturally between cancel()
+   * and termination completion) by checking isTerminalState first.
+   */
+  private settleCancellation(
+    entry: TerminalExecutionEntry,
+    reason: 'user' | 'shutdown' | 'timeout',
+    terminationStatus: 'confirmed' | 'unconfirmed' | 'not-applicable'
+  ): void {
+    if (isTerminalState(entry.state)) {
+      // A late process exit or another settlement won the race; keep it.
+      return;
+    }
+
+    const state: TerminalLifecycleState =
+      reason === 'timeout' ? 'timed-out' : 'cancelled';
+    entry.state = state;
 
     const startedAt = entry.processHandle !== null ? Date.now() : null;
 
-    // Record result and reject the promise with a cancellation error.
     const cancelledResult: TerminalExecutionResult = {
       kind: 'terminal-execution-result',
       requestId: entry.request.requestId,
-      terminalId,
-      state: entry.state,
+      terminalId: entry.terminalId,
+      state,
       exitCode: null,
       exitSignal: null,
       stdout: '',
@@ -445,6 +483,7 @@ export class TerminalExecutionService {
       executionMs: startedAt !== null ? Date.now() - startedAt : null,
       cancelled: true,
       timedOut: reason === 'timeout',
+      terminationStatus,
       error: {
         code: TerminalErrorCode.TERMINAL_CANCELLED,
         message: `Execution cancelled: ${reason}`,
@@ -457,14 +496,12 @@ export class TerminalExecutionService {
         createTerminalError(
           TerminalErrorCode.TERMINAL_CANCELLED,
           `Execution cancelled: ${reason}`,
-          { terminalId }
+          { terminalId: entry.terminalId }
         )
       );
       entry.reject = null;
     }
     entry.resolve = null;
-
-    return true;
   }
 
   /**
@@ -490,21 +527,46 @@ export class TerminalExecutionService {
    * Disposes the service, cancelling all active and queued executions.
    *
    * After disposal, no new submissions are accepted. Active executions are
-   * cancelled with reason 'shutdown'. The queue is cleared with all queued
-   * executions rejected.
+   * cancelled with reason 'shutdown' and this method awaits their bounded
+   * termination-confirmation period so active child processes are not
+   * silently abandoned. If termination cannot be confirmed within the
+   * bound, the outcome is reported as 'unconfirmed' rather than silently
+   * treating the process as terminated.
+   *
+   * The queue is cleared with all queued executions rejected
+   * (terminationStatus 'not-applicable' — no process was started).
    */
-  dispose(): void {
+  async dispose(): Promise<void> {
     if (this.disposed) {
       return;
     }
     this.disposed = true;
 
-    // Cancel all active executions.
+    // Cancel all active executions and collect their termination promises.
+    const terminationPromises: Array<Promise<ProcessTerminationResult>> = [];
     for (const entry of this.executions.values()) {
       if (isActiveState(entry.state)) {
         this.cancel(entry.terminalId, 'shutdown');
+        if (entry.terminationPromise) {
+          terminationPromises.push(entry.terminationPromise);
+        }
       }
     }
+
+    // Wait for all terminations with a bounded confirmation period so
+    // shutdown does not block indefinitely. Termination outcomes are
+    // reported accurately (confirmed or unconfirmed) within each entry's
+    // result; the bound only limits how long dispose() waits.
+    const shutdownBoundMs = this.limits.maxExecutionMs;
+    const timeout = new Promise<void>(resolve => {
+      setTimeout(resolve, shutdownBoundMs);
+    });
+    await Promise.race([
+      Promise.allSettled(terminationPromises).then(() => {
+        // Individual outcomes are already recorded in each entry result.
+      }),
+      timeout,
+    ]);
 
     // Reject all queued executions.
     while (this.queue.length > 0) {
@@ -617,7 +679,6 @@ export class TerminalExecutionService {
             entry.processHandle = handle;
 
             const processResult = result;
-            entry.processHandle = null;
 
             // Determine final state and timedOut. If the execution was
             // cancelled (user, timeout, or disposal), the cancel reason
@@ -661,6 +722,7 @@ export class TerminalExecutionService {
               executionMs: processResult.executionMs,
               cancelled: state === 'cancelled' || state === 'timed-out',
               timedOut,
+              terminationStatus: 'confirmed',
               error:
                 processResult.exitCode !== 0 && !processResult.killed && !timedOut
                   ? {
@@ -716,6 +778,14 @@ export class TerminalExecutionService {
   }
 
   private completeEntry(entry: TerminalExecutionEntry, result: TerminalExecutionResult): void {
+    // Late event: if the entry is already terminal (e.g. cancelled during
+    // execution), do not overwrite the settled outcome. Process exit
+    // observed after cancellation must not change terminationStatus or
+    // state.
+    if (isTerminalState(entry.state)) {
+      return;
+    }
+
     let transitioned = false;
     try {
       entry.state = applyTransition(entry.state, result.state as TerminalLifecycleState);
@@ -723,6 +793,7 @@ export class TerminalExecutionService {
     } catch {
       // If already terminal (e.g. disposed during cancellation), keep current
       // state and result — late events must not overwrite a settled outcome.
+      return;
     }
     if (transitioned) {
       entry.result = result;
@@ -760,6 +831,7 @@ export class TerminalExecutionService {
         executionMs: null,
         cancelled: false,
         timedOut: false,
+        terminationStatus: 'not-applicable',
         error: { code, message },
         trustedAuthorization: entry.request.trustedAuthorization,
       };

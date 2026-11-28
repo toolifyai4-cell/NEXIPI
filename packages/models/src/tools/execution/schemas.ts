@@ -211,6 +211,7 @@ export const TerminalExecutionResultSchema = z.object({
   executionMs: z.number().int().nonnegative().nullable(),
   cancelled: z.boolean(),
   timedOut: z.boolean(),
+  terminationStatus: z.enum(['confirmed', 'unconfirmed', 'not-applicable']),
   error: z.object({ code: z.string().min(1), message: z.string() }).nullable(),
 });
 

@@ -84,6 +84,35 @@ export type SpawnFunction = (
 export type KillProcessTreeFunction = (pid: number, signal?: string) => boolean;
 
 /**
+ * Outcome of terminating a process tree.
+ *
+ * `confirmed` is true only when process exit was actually observed (via
+ * waitForExit resolving). Sending SIGTERM/SIGKILL/taskkill is NOT treated
+ * as confirmation. When waitForExit is unavailable, confirmed is false.
+ */
+export interface ProcessTerminationResult {
+  readonly confirmed: boolean;
+  readonly forceKilled: boolean;
+}
+
+/**
+ * Waits for handle.waitForExit() to resolve, bounded by timeoutMs.
+ *
+ * Returns true only when waitForExit resolves (exit observed) before the
+ * timeout elapses. Returns false on timeout or rejection. Does not treat
+ * the timeout itself as exit confirmation.
+ */
+async function waitForExitWithTimeout(
+  handle: ProcessHandle,
+  timeoutMs: number
+): Promise<boolean> {
+  return Promise.race([
+    handle.waitForExit!().then(() => true).catch(() => false),
+    new Promise<boolean>(resolve => setTimeout(() => resolve(false), timeoutMs)),
+  ]);
+}
+
+/**
  * Default process-tree termination.
  *
  * POSIX: Sends the signal to the process group (negative PID) so that
@@ -449,46 +478,52 @@ export async function spawnControlledProcess(
  * Terminates a process tree with bounded graceful shutdown followed by
  * forced termination.
  *
- * Sends SIGTERM, waits `graceMs`, then sends SIGKILL if the process
- * is still alive.
+ * Sends SIGTERM, waits up to `graceMs` for exit confirmation, then sends
+ * SIGKILL if the process is still alive. Waits up to another `graceMs` for
+ * forced-termination confirmation when waitForExit is available.
+ *
+ * Sending SIGTERM, SIGKILL, or invoking taskkill is NOT treated as proof of
+ * process termination. `confirmed` is true only when exit was actually
+ * observed (via waitForExit resolving). When waitForExit is unavailable,
+ * `confirmed` is false — the grace-period delay is never used as an
+ * exit-confirmation substitute.
  *
  * @param handle - Process handle to terminate.
  * @param killTree - Injected process-tree termination function.
  * @param graceMs - Grace period in milliseconds before forced termination.
- * @returns A promise that resolves when the process has been terminated
- *         or the grace period has elapsed.
+ * @returns A promise that resolves with the termination outcome.
  */
 export async function terminateProcessTree(
   handle: ProcessHandle,
   killTree: KillProcessTreeFunction = defaultKillProcessTree,
   graceMs: number = 5_000
-): Promise<void> {
+): Promise<ProcessTerminationResult> {
+  // Send graceful termination signal. If the process is already gone,
+  // there is nothing to confirm.
   if (!killTree(handle.pid, 'SIGTERM')) {
-    return;
+    return { confirmed: false, forceKilled: false };
   }
 
-  // Wait for graceful termination, polling if waitForExit is available.
+  // Wait for graceful termination with a bounded confirmation period.
+  let gracefulConfirmed = false;
   if (handle.waitForExit) {
-    try {
-      await handle.waitForExit();
-      return;
-    } catch {
-      // Process did not exit gracefully; fall through to forced termination.
-    }
-  } else {
-    // Fallback: wait the grace period without exit confirmation.
-    await new Promise(resolve => setTimeout(resolve, graceMs));
+    gracefulConfirmed = await waitForExitWithTimeout(handle, graceMs);
+  }
+  // If waitForExit is unavailable, we deliberately do NOT treat the
+  // grace-period delay as exit confirmation.
+
+  if (gracefulConfirmed) {
+    return { confirmed: true, forceKilled: false };
   }
 
   // Force kill if still alive.
-  handle.kill('SIGKILL');
+  const forceKilled = handle.kill('SIGKILL');
 
   // Wait briefly for forced termination if waitForExit is available.
+  let forceConfirmed = false;
   if (handle.waitForExit) {
-    try {
-      await handle.waitForExit();
-    } catch {
-      // Process may not have exited; orphan risk remains.
-    }
+    forceConfirmed = await waitForExitWithTimeout(handle, graceMs);
   }
+
+  return { confirmed: forceConfirmed, forceKilled };
 }

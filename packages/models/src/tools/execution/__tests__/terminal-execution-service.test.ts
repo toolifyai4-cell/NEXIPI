@@ -1136,3 +1136,118 @@ describe('TerminalExecutionService — cancel/timeout/disposal distinction', () 
     service.dispose();
   });
 });
+
+describe('TerminalExecutionService — termination lifecycle', () => {
+  it('cancellation reports terminationStatus unconfirmed (exit not yet observed)', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-term-1' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const cancelled = service.cancel(submission.terminalId, 'user');
+    expect(cancelled).toBe(true);
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.result?.terminationStatus).toBe('unconfirmed');
+    expect(entry?.result?.cancelled).toBe(true);
+
+    release();
+    await expect(submission.promise).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('timeout reports terminationStatus unconfirmed (exit not yet observed)', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({
+        spawnFn: fn,
+        limits: { ...DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS, maxExecutionMs: 30 },
+      })
+    );
+    const submission = service.submit(makeRequest({ requestId: 'req-term-2' }));
+
+    await new Promise(resolve => setTimeout(resolve, 100));
+
+    const entry = service.getExecution(submission.terminalId);
+    expect(entry?.result?.terminationStatus).toBe('unconfirmed');
+    expect(entry?.result?.timedOut).toBe(true);
+    expect(entry?.result?.cancelled).toBe(true);
+
+    release();
+    await expect(submission.promise).rejects.toThrow();
+
+    service.dispose();
+  });
+
+  it('natural completion reports terminationStatus confirmed', async () => {
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-term-3' }));
+
+    const result = await submission.promise;
+
+    expect(result.state).toBe('completed');
+    expect(result.terminationStatus).toBe('confirmed');
+
+    service.dispose();
+  });
+
+  it('disposal reports terminationStatus unconfirmed for active execution', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-term-4' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const entry = service.getExecution(submission.terminalId);
+
+    await service.dispose();
+    release();
+
+    await expect(submission.promise).rejects.toThrow();
+
+    expect(entry?.result?.terminationStatus).toBe('unconfirmed');
+    expect(entry?.result?.cancelled).toBe(true);
+    expect(entry?.result?.timedOut).toBe(false);
+  });
+
+  it('dispose returns a promise that resolves after bounded termination wait', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    service.submit(makeRequest({ requestId: 'req-term-5' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    const disposePromise = service.dispose();
+    expect(disposePromise).toBeInstanceOf(Promise);
+
+    release();
+    await disposePromise;
+
+    expect(service.isDisposed).toBe(true);
+  });
+
+  it('late exit event does not change terminationStatus after cancellation', async () => {
+    const { fn, release } = makeBlockingSpawnFn();
+    const service = new TerminalExecutionService(makeOptions({ spawnFn: fn }));
+    const submission = service.submit(makeRequest({ requestId: 'req-term-6' }));
+
+    await new Promise(resolve => setTimeout(resolve, 10));
+
+    service.cancel(submission.terminalId, 'user');
+
+    const entryBefore = service.getExecution(submission.terminalId);
+    expect(entryBefore?.result?.terminationStatus).toBe('unconfirmed');
+
+    release();
+    await expect(submission.promise).rejects.toThrow();
+
+    const entryAfter = service.getExecution(submission.terminalId);
+    expect(entryAfter?.result?.terminationStatus).toBe('unconfirmed');
+    expect(entryAfter?.result?.state).toBe('cancelled');
+
+    service.dispose();
+  });
+});

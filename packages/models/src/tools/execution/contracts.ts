@@ -322,6 +322,19 @@ export interface TerminalExecutionResult {
   readonly executionMs: number | null;
   readonly cancelled: boolean;
   readonly timedOut: boolean;
+  /**
+   * Termination status of the observed process exit.
+   *
+   * - 'confirmed': process exit was actually observed (via the child's
+   *   'close' event or a resolved waitForExit promise).
+   * - 'unconfirmed': termination was requested (cancel/timeout/dispose)
+   *   but process exit was not confirmed — for example when waitForExit is
+   *   unavailable or did not resolve within the bounded grace period.
+   *   Sending SIGTERM/SIGKILL/taskkill is NOT treated as confirmation.
+   * - 'not-applicable': no process was started (validation or authorization
+   *   failure, disposed before start, queued disposal).
+   */
+  readonly terminationStatus: 'confirmed' | 'unconfirmed' | 'not-applicable';
   readonly error: { readonly code: string; readonly message: string } | null;
   /**
    * Trusted authorization capability that authorized this execution, if any.
