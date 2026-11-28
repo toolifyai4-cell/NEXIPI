@@ -60,12 +60,12 @@ import type {
   TrustedUserDecision,
   TrustedUserDecisionRequest,
 } from '@nexipi/workspace';
+import { defaultNow } from '@nexipi/workspace';
 import type { Logger } from '@nexipi/core';
 import { createNoopLogger } from '@nexipi/core';
 import {
   computeContentHash,
   createApprovalBinding,
-  defaultNow,
   validateTerminalCommandSecurity,
 } from '@nexipi/models/tools';
 
@@ -104,7 +104,6 @@ export class TerminalApprovalOrchestrator {
   private readonly approvals: ApprovalRepositoryPort;
   private readonly executionService: TerminalExecutionService;
   private readonly executableResolver: ExecutableResolver;
-  private readonly executablePolicy: ExecutablePolicy;
   private readonly limits: TerminalExecutionServiceLimits;
   private readonly workspaceBoundaryValidator: WorkspaceBoundaryValidator | undefined;
   private readonly now: () => number;
@@ -507,7 +506,7 @@ export class TerminalApprovalOrchestrator {
         kind: 'terminal-authorization-capability',
         capabilityId: authorization.approvalId,
         boundContentHash: authorization.contentHash,
-        expiresAt: approval.expiresAt,
+        expiresAt: approval.expiresAt ?? undefined,
       };
 
       return { kind: 'approved', capability };

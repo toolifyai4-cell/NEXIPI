@@ -29,6 +29,19 @@ import {
 } from '@nexipi/models/tools';
 import { ToolExecutor } from '@nexipi/models/tools';
 import { ToolExecutionService, type ToolExecutionServiceConfig } from '@nexipi/models/tools';
+import type {
+  TerminalCommand,
+  TerminalExecutionRequest,
+} from '@nexipi/models/tools';
+import { TerminalExecutionService, DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS } from '@nexipi/models/tools';
+import {
+  DefaultExecutableResolver,
+  DefaultExecutablePolicy,
+} from '@nexipi/models/tools';
+import {
+  TerminalApprovalOrchestrator,
+  TerminalTrustedAuthorizationVerifier,
+} from './tools/terminal/index.js';
 import {
   createReadFileToolDefinition,
   createListDirectoryToolDefinition,
@@ -43,7 +56,7 @@ import {
   isChildOf,
   normalizePath,
 } from '@nexipi/workspace/tools';
-import { createTrustedApprovalService, type TrustedApprovalService } from '@nexipi/workspace';
+import { createTrustedApprovalService, type TrustedApprovalService, defaultNow } from '@nexipi/workspace';
 import type {
   ProposalRepositoryPort,
   ApprovalRepositoryPort,
@@ -73,6 +86,8 @@ interface NexiPiContext {
   persistenceService?: PersistencePortService;
   toolRegistry: ToolRegistry;
   toolExecutionService: ToolExecutionService;
+  terminalApprovalOrchestrator?: TerminalApprovalOrchestrator;
+  terminalExecutionService?: TerminalExecutionService;
 }
 
 // Module-level variables for access in deactivate()
@@ -86,6 +101,9 @@ let gTrustedApprovalService: TrustedApprovalService | undefined;
 let gFileSystem: VSCodeFileSystemProvider | undefined;
 let gProposalRepository: SqlJsProposalRepository | undefined;
 let gApprovalController: ApprovalController | undefined;
+let gTerminalExecutionService: TerminalExecutionService | undefined;
+let gTerminalApprovalOrchestrator: TerminalApprovalOrchestrator | undefined;
+let gTerminalTrustedAuthorizationVerifier: TerminalTrustedAuthorizationVerifier | undefined;
 
 /**
  * Per-workspace editing services, bound to a single workspace identity each.
@@ -1438,11 +1456,54 @@ function registerCommands(
     void vscode.commands.executeCommand('workbench.view.extension.nexipi');
   });
 
+  // Phase 11 Stage E: Run a terminal command through the trusted approval
+  // and execution lifecycle. The command argument is a TerminalCommand
+  // serialized from the caller (tool or UI). The orchestrator handles
+  // approval, authorization, execution, and result delivery.
+  const runTerminalDisposable = vscode.commands.registerCommand(
+    'nexipi.runTerminal',
+    async (command: unknown) => {
+      const orchestrator = gTerminalApprovalOrchestrator;
+      if (!orchestrator) {
+        void vscode.window.showErrorMessage('Terminal execution is not available.');
+        return;
+      }
+      try {
+        const terminalCommand = command as TerminalCommand;
+        const result = await orchestrator.executeTerminalCommand(terminalCommand);
+        logger.info('Terminal command executed', {
+          commandId: terminalCommand.commandId,
+          state: result.state,
+          exitCode: result.exitCode,
+          terminationStatus: result.terminationStatus,
+        });
+        if (result.error) {
+          void vscode.window.showErrorMessage(
+            `Terminal command failed: ${result.error.message}`
+          );
+        } else if (result.state === 'completed') {
+          void vscode.window.showInformationMessage(
+            `Terminal command completed (exit code ${result.exitCode})`
+          );
+        } else {
+          void vscode.window.showWarningMessage(
+            `Terminal command ${result.state}${result.terminationStatus !== 'not-applicable' ? ` (${result.terminationStatus})` : ''}`
+          );
+        }
+      } catch (error) {
+        const err = error instanceof Error ? error : new Error(String(error));
+        logger.error('Failed to run terminal command', { error: err.message });
+        void vscode.window.showErrorMessage(`Failed to run terminal command: ${err.message}`);
+      }
+    }
+  );
+
   disposables.push(
     startDisposable,
     showOutputDisposable,
     showInformationDisposable,
-    focusSidebarDisposable
+    focusSidebarDisposable,
+    runTerminalDisposable
   );
   return disposables;
 }
@@ -1662,6 +1723,38 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     trustedDecisionProvider: new VSCodeTrustedDecisionProvider(),
   });
 
+  // --- Phase 11 Stage E: Terminal approval and execution lifecycle ---
+  // Create the trusted authorization verifier backed by the Phase 10
+  // TrustedApprovalService, then the TerminalExecutionService guarded by it,
+  // then the orchestrator that ties approval to execution. All composition is
+  // extension-side; model input never selects or configures the verifier.
+  const terminalPlatform = process.platform === 'win32' ? 'win32' : 'posix';
+  gTerminalTrustedAuthorizationVerifier = new TerminalTrustedAuthorizationVerifier({
+    trustedApprovalService: gTrustedApprovalService,
+    approvals: gApprovalRepositoryPort,
+    now: defaultNow,
+    logger,
+  });
+  gTerminalExecutionService = new TerminalExecutionService({
+    executableResolver: new DefaultExecutableResolver(terminalPlatform),
+    executablePolicy: new DefaultExecutablePolicy(terminalPlatform),
+    limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
+    logger,
+    trustedAuthorizationVerifier: gTerminalTrustedAuthorizationVerifier,
+  });
+  trackResource('terminalExecutionService', () => gTerminalExecutionService!.dispose());
+
+  gTerminalApprovalOrchestrator = new TerminalApprovalOrchestrator({
+    trustedApprovalService: gTrustedApprovalService,
+    trustedDecisionProvider: new VSCodeTrustedDecisionProvider(),
+    approvals: gApprovalRepositoryPort,
+    terminalExecutionService: gTerminalExecutionService,
+    executableResolver: new DefaultExecutableResolver(terminalPlatform),
+    limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
+    now: defaultNow,
+    logger,
+  });
+
   // Create persistence adapter
   const persistenceAdapter = createPersistenceAdapter({
     persistencePort: persistenceService,
@@ -1712,6 +1805,8 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     persistenceService,
     toolRegistry,
     toolExecutionService,
+    terminalApprovalOrchestrator: gTerminalApprovalOrchestrator,
+    terminalExecutionService: gTerminalExecutionService,
   };
 
   const sidebarDisposable = vscode.window.registerWebviewViewProvider(
@@ -1770,6 +1865,8 @@ export async function deactivate(): Promise<void> {
   const persistenceService = gPersistenceService;
   const toolExecutionService = gToolExecutionService;
   const approvalController = gApprovalController;
+  const terminalApprovalOrchestrator = gTerminalApprovalOrchestrator;
+  const terminalExecutionService = gTerminalExecutionService;
 
   if (!logger || !chatService || !persistenceService) {
     logger?.warn('deactivate() called but services not initialized');
@@ -1817,6 +1914,17 @@ export async function deactivate(): Promise<void> {
   // Stage F: dispose the approval controller so pending proposals are cleared
   // and no approval action can be acted on after deactivation.
   approvalController?.dispose();
+
+  // Stage E: dispose the terminal approval orchestrator, which cancels pending
+  // approvals and disposes the terminal execution service (cancelling active
+  // and queued executions with bounded termination confirmation).
+  try {
+    await terminalApprovalOrchestrator?.dispose();
+    logger.info('Terminal approval orchestrator disposed');
+  } catch (error) {
+    const err = error instanceof Error ? error : new Error(String(error));
+    logger.error('Failed to dispose terminal approval orchestrator', { error: err.message });
+  }
 
   // 3. Wait for any remaining underlying execution promises to settle.
   //    This provides a safety net for uncooperative tools that ignore cancellation.
