@@ -240,11 +240,35 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
       expiresAt: null,
     } as TrustedUserDecision);
 
+    vi.spyOn(h.orchestrator['executionService'], 'submit').mockImplementation(() => ({
+      promise: Promise.resolve({
+        kind: 'terminal-execution-result',
+        requestId: 'exec-test-1',
+        terminalId: 'term-test-1',
+        state: 'completed',
+        exitCode: 0,
+        exitSignal: null,
+        stdout: '',
+        stderr: '',
+        stdoutTruncated: false,
+        stderrTruncated: false,
+        outputSizeBytes: 0,
+        startedAt: NOW,
+        completedAt: NOW + 1000,
+        executionMs: 1000,
+        cancelled: false,
+        timedOut: false,
+        terminationStatus: 'confirmed',
+        error: null,
+      }),
+    }));
+
     const command = makeCommand();
     const result = await h.orchestrator.executeTerminalCommand(command);
 
     expect(result.state).toBe('completed');
     expect(result.exitCode).toBe(0);
+    expect(h.orchestrator['executionService'].submit).toHaveBeenCalledTimes(1);
   });
 
   it('fails when orchestrator is disposed', async () => {
@@ -363,7 +387,10 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
     });
 
     const command = makeCommand();
-    const result = await orchestratorWithEarlyExpiry.executeTerminalCommand(command);
+    const result = await orchestratorWithEarlyExpiry.executeTerminalCommand(command, { expiresAt: NOW - 20000000 });
+
+    expect(result.state).toBe('rejected');
+    expect(result.error?.code).toBe('TERMINAL_INVALID_REQUEST');
 
     expect(result.state).toBe('rejected');
     expect(result.error?.code).toBe('TERMINAL_INVALID_REQUEST');
