@@ -13,6 +13,7 @@
 
 import * as vscode from 'vscode';
 import type {
+  TerminalCommandApprovalDetails,
   TrustedDecisionProvider,
   TrustedUserDecision,
   TrustedUserDecisionRequest,
@@ -46,15 +47,31 @@ export class VSCodeTrustedDecisionProvider implements TrustedDecisionProvider {
       proposalVersion,
       workspaceId,
       fileUri,
+      terminalCommand,
     } = request;
 
-    const fileName =
-      fileUri
-        .replace(/^file:\/\//, '')
-        .split('/')
-        .pop() ?? fileUri;
-
-    const message = `Approve edit to '${fileName}'?\nWorkspace: ${workspaceId}\nProposal: ${proposalId} v${proposalVersion}\nRequested: ${requestedDecision}`;
+    let message: string;
+    if (terminalCommand !== undefined) {
+      const { executable, arguments: args, workingDirectory, environmentConfigId } = terminalCommand;
+      const envLine = environmentConfigId !== undefined
+        ? `\nEnvironment config: ${environmentConfigId}`
+        : '';
+      message =
+        `Run terminal command?\n` +
+        `Executable: ${executable}\n` +
+        `Arguments: ${args.join(' ')}\n` +
+        `Working directory: ${workingDirectory}\n` +
+        `Workspace: ${workspaceId}` +
+        envLine +
+        `\nRequested: ${requestedDecision}`;
+    } else {
+      const fileName =
+        fileUri
+          .replace(/^file:\/\//, '')
+          .split('/')
+          .pop() ?? fileUri;
+      message = `Approve edit to '${fileName}'?\nWorkspace: ${workspaceId}\nProposal: ${proposalId} v${proposalVersion}\nRequested: ${requestedDecision}`;
+    }
 
     const result = await vscode.window.showWarningMessage(
       message,

@@ -126,6 +126,7 @@ export {
   TrustedDecisionProvider,
   TrustedUserDecisionRequest,
   TrustedUserDecision,
+  TerminalCommandApprovalDetails,
   FailingTrustedDecisionProvider,
   ProposalView,
   ProposalRepositoryPort,

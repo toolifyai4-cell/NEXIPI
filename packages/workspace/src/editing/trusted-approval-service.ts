@@ -132,6 +132,19 @@ export interface ApprovalRepositoryPort {
 }
 
 /**
+ * Details of a terminal command presented for user approval.
+ *
+ * Environment configuration is referenced by identity only; secret values
+ * are never included in the approval request.
+ */
+export interface TerminalCommandApprovalDetails {
+  readonly executable: string;
+  readonly arguments: readonly string[];
+  readonly workingDirectory: string;
+  readonly environmentConfigId?: string | undefined;
+}
+
+/**
  * A request to establish a trusted user decision. The provider is
  * host-controlled (for example a VS Code dialog wired in Stage F). It is the
  * sole authority on whether a real user made a decision.
@@ -143,6 +156,13 @@ export interface TrustedUserDecisionRequest {
   readonly workspaceId: string;
   readonly fileUri: string;
   readonly expiresAt: number | null;
+  /**
+   * Optional terminal command details (Stage E). When present, the decision
+   * provider should present the terminal command to the user for review
+   * instead of an edit proposal. These fields are display-only and are not
+   * used to authorize execution.
+   */
+  readonly terminalCommand?: TerminalCommandApprovalDetails | undefined;
 }
 
 /**
