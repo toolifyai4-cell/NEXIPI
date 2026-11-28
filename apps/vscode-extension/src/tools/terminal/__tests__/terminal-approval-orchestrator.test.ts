@@ -8,6 +8,7 @@ import {
 import {
   createTrustedApprovalService,
   defaultNow,
+  sha256,
   TrustedDecisionProvider,
   type TrustedUserDecision,
   type TrustedUserDecisionRequest,
@@ -30,13 +31,17 @@ import type {
   TerminalAuthorizationCapability,
   TerminalAuthorizationBinding,
 } from '@nexipi/models/tools';
+import {
+  DefaultExecutableResolver,
+  DefaultExecutablePolicy,
+  DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
+  TerminalExecutionService,
+  computeContentHash,
+} from '@nexipi/models/tools';
 import type { Logger } from '@nexipi/core';
-import { DefaultExecutableResolver, DefaultExecutablePolicy } from '@nexipi/models/tools';
-import { DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS } from '@nexipi/models/tools';
-import { TerminalExecutionService } from '@nexipi/models/tools';
 
 const WORKSPACE_ID = 'ws_a';
-const COMMAND_ID = 'cmd_test_1';
+const COMMAND_ID = '550e8400-e29b-41d4-a716-446655440000';
 const EXECUTABLE = '/usr/bin/ls';
 const ARGUMENTS = ['-la'];
 const WORKING_DIRECTORY = '/workspace';
@@ -95,6 +100,47 @@ function makeGate(): {
   };
 }
 
+async function createProposalInRepo(
+  repo: SqlJsProposalRepository,
+  overrides: Partial<{
+    id: string;
+    proposalVersion: number;
+    workspaceId: string;
+    fileUri: string;
+    proposedContentHash: string;
+    status: 'approved' | 'awaiting-approval' | 'validated' | 'pending-validation';
+  }> = {}
+): Promise<void> {
+  const input = {
+    id: overrides.id ?? COMMAND_ID,
+    proposalVersion: overrides.proposalVersion ?? 1,
+    workspaceId: overrides.workspaceId ?? WORKSPACE_ID,
+    workspaceFolderUri: 'file:///rootA',
+    fileUri: overrides.fileUri ?? `terminal://command/${COMMAND_ID}`,
+    relativePath: `terminal-command-${COMMAND_ID}.txt`,
+    originalContentHash: sha256(''),
+    originalSize: 0,
+    originalMtime: NOW,
+    operations: [{ kind: 'replace-lines' as const, startLine: 1, endLine: 1, newContent: '' }],
+    proposedContent: '',
+    proposedContentHash: overrides.proposedContentHash ?? computeContentHash({
+      executable: EXECUTABLE,
+      arguments: ARGUMENTS,
+      workingDirectory: WORKING_DIRECTORY,
+      workspaceId: WORKSPACE_ID,
+      environmentConfigId: 'env_1',
+    }),
+    proposedSize: 0,
+    status: overrides.status ?? 'approved',
+    createdAt: NOW,
+    expiresAt: NOW + 1_000_000,
+  };
+  const result = await repo.createProposal(input);
+  if (result.error !== null) {
+    throw new Error(`createProposal failed: ${result.error.message}`);
+  }
+}
+
 async function createOrchestratorHarness(
   overrides: Partial<TerminalApprovalOrchestratorOptions> = {}
 ): Promise<OrchestratorHarness> {
@@ -105,6 +151,11 @@ async function createOrchestratorHarness(
   const approvalRepo = new SqlJsApprovalRepository(db);
   const proposalPort = new ProposalRepositoryAdapter(proposalRepo);
   const approvalPort = new ApprovalRepositoryAdapter(approvalRepo);
+
+  // Pre-create a proposal that matches the default command's binding content hash
+  // so the orchestrator can persist its approval decision against a real proposal.
+  await createProposalInRepo(proposalRepo);
+
   const gate = makeGate();
   const provider = overrides.provider ?? gate.provider;
   const now = overrides.now ?? defaultNow;
