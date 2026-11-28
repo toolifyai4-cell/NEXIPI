@@ -191,7 +191,7 @@ export interface TerminalAuthorizationCapability {
   readonly kind: 'terminal-authorization-capability';
   readonly capabilityId: string;
   readonly boundContentHash: string;
-  readonly expiresAt: number | undefined;
+  readonly expiresAt?: number | undefined;
 }
 
 /**
@@ -232,6 +232,72 @@ export interface TrustedAuthorizationVerifier {
     binding: TerminalAuthorizationBinding
   ): Promise<boolean>;
 }
+
+/**
+ * Stage E integration contract for trusted terminal authorization.
+ *
+ * Stage D defines the `TerminalAuthorizationCapability` contract and the
+ * `TrustedAuthorizationVerifier` seam above; Stage E implements the verifier
+ * using the existing Phase 10 `TrustedApprovalService`. Stage D never
+ * creates capabilities and never trusts a caller-supplied object.
+ *
+ * Stage E flow:
+ *   1. Present the command to the user.
+ *      Stage E renders the exact terminal command (executable, ordered
+ *      arguments, working directory, workspace identity, and environment
+ *      configuration identity) for the user to review. Nothing is executed
+ *      yet.
+ *   2. Obtain the trusted decision through the existing approval service.
+ *      Stage E asks the host-controlled trusted decision provider (the
+ *      Phase 10 `TrustedDecisionProvider`, wired to a real confirmation UI
+ *      in Stage F) to establish a genuine user decision. The provider's
+ *      confirmed decision, boundary, and timestamps come from the provider,
+   *      never from the model or caller, so a caller cannot forge a user
+ *      decision. A cancelled, timed-out, or unavailable provider yields no
+ *      decision and Stage E fails closed (no capability is created).
+ *   3. Produce or retrieve the verified authorization capability.
+ *      Only when the user decision is `approve` does Stage E call
+ *      `TrustedApprovalService.createAuthorizationToApply(approvalId)`,
+ *      which returns an `AuthorizationToApply` only when the approval is
+ *      currently valid (approved state, trusted provenance, content hash
+ *      match, not expired). Stage E converts that into a
+ *      `TerminalAuthorizationCapability` (`kind`, `capabilityId`,
+ *      `boundContentHash` = SHA-256 of the exact execution binding,
+ *      `expiresAt`) and returns `null` when the decision was not `approve`
+ *      or the approval cannot authorize. A rejected decision yields no
+ *      capability at all.
+ *   4. Pass it to the terminal execution service.
+ *      Stage E builds a `TerminalExecutionRequest` whose `command` matches
+ *      the capability's bound content hash exactly and whose
+ *      `trustedAuthorization` is the capability from step 3, then calls
+ *      `TerminalExecutionService.submit(request)`. Stage D verifies the
+ *      capability through the injected `TrustedAuthorizationVerifier`
+ *      before any process is created; a plain `{ decision: 'approved' }`
+ *      object, a model-supplied object, or a missing capability fails
+ *      closed.
+ *   5. Ensure it cannot be reused for another command or modified request.
+ *      The capability's `boundContentHash` is the SHA-256 of the exact
+ *      execution binding (executable, ordered arguments, working directory,
+ *      workspaceId, environmentConfigId). Stage D recomputes that hash from
+ *      the submitted request and the verifier compares it to the
+ *      capability's `boundContentHash`; any change to executable,
+ *      arguments, working directory, workspace, or environment configuration
+ *      produces a different hash and fails verification. Expiry is enforced
+ *      via `expiresAt`. Single-use rejection (when the approval contract is
+ *      single-use) is enforced by the verifier, which rejects a capability
+ *      whose `capabilityId` has already been consumed. Stage E must not
+ *      hand the same capability to two different submissions or two
+ *      different commands.
+ *
+ * Security properties preserved from Phase 10:
+ *   - Trusted provenance only: `model-tool-input`, `proposal-creation`, and
+ *     `untrusted` provenance never authorize.
+ *   - Retrieval alone never grants permission; only a verified, non-expired,
+ *     non-revoked authorization bound to the exact execution parameters
+ *     authorizes.
+ *   - Fail closed: missing, expired, revoked, mismatched, or untrusted
+ *     authorization rejects execution.
+ */
 
 /**
  * The observed outcome of a terminal command execution.

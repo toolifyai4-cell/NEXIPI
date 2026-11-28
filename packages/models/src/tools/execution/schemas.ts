@@ -173,11 +173,21 @@ export const ApprovalBindingSchema = z.object({
   createdAt: z.number().int().positive('createdAt must be a positive millisecond timestamp'),
 });
 
+export const TerminalAuthorizationCapabilitySchema = z.object({
+  kind: z.literal('terminal-authorization-capability'),
+  capabilityId: z.string().min(1, 'capabilityId is required').max(256, 'capabilityId too long'),
+  boundContentHash: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/, 'boundContentHash must be a lowercase SHA-256 hex string (64 hex chars)'),
+  expiresAt: z.number().int().nonnegative('expiresAt must be a non-negative millisecond timestamp').optional(),
+});
+
 export const TerminalExecutionRequestSchema = z.object({
   kind: z.literal('terminal-execution-request'),
   requestId: z.string().min(1, 'requestId is required').max(256, 'requestId too long'),
   command: TerminalCommandSchema,
   approvalBinding: ApprovalBindingSchema.optional(),
+  trustedAuthorization: TerminalAuthorizationCapabilitySchema.optional(),
 });
 
 export const TerminalExecutionResultSchema = z.object({

@@ -11,10 +11,13 @@ import {
   createTerminalId,
   type TerminalCommand,
   type TerminalExecutionRequest,
+  type TerminalAuthorizationCapability,
+  type TerminalAuthorizationBinding,
+  type TrustedAuthorizationVerifier,
 } from '../contracts.js';
 import { DefaultExecutableResolver, DefaultExecutablePolicy } from '../executable-policy.js';
 import { resolveExecutable } from '../executable-resolution.js';
-import { createApprovalBinding } from '../approval-binding.js';
+import { createApprovalBinding, computeContentHash } from '../approval-binding.js';
 
 // --- Test doubles ---
 
@@ -31,32 +34,157 @@ function makeCommand(overrides: Partial<TerminalCommand> = {}): TerminalCommand 
   };
 }
 
-function makeRequest(overrides: Partial<TerminalExecutionRequest> = {}): TerminalExecutionRequest {
-  const binding =
-    overrides.approvalBinding ??
-    createApprovalBinding({
-      bindingId: 'bind-1',
-      executable: '/usr/bin/ls',
-      arguments: ['-la'],
-      workingDirectory: '/workspace',
-      workspaceId: 'ws_1',
-      createdAt: 1700000000000,
-    });
-  const trustedDecision = overrides.trustedApprovalDecision ?? {
-    kind: 'trusted-approval-decision',
-    decision: 'approved' as const,
-    boundary: 'vscode-host:confirm-dialog',
-    decidedAt: 1700000000000,
+// --- Trusted authorization verifier test double (models the Stage E boundary) ---
+//
+// Capabilities are created exclusively through createCapability, mirroring how
+// TrustedApprovalService.createAuthorizationToApply() is the sole producer. The
+// verifier rejects anything not produced there: plain objects, forged ids,
+// mismatched bindings, expired capabilities, and consumed single-use
+// capabilities. This tests the real trust-boundary seam, not just object fields.
+
+interface AuthorizationFixture {
+  verifier: TrustedAuthorizationVerifier;
+  createCapability: (
+    binding: TerminalAuthorizationBinding,
+    opts?: { expiresAt?: number; singleUse?: boolean; capabilityId?: string }
+  ) => TerminalAuthorizationCapability;
+  verifyCalls: Array<{
+    capability: TerminalAuthorizationCapability | undefined;
+    binding: TerminalAuthorizationBinding;
+  }>;
+}
+
+function makeAuthorizationFixture(now: () => number = Date.now): AuthorizationFixture {
+  const store = new Map<
+    string,
+    { binding: TerminalAuthorizationBinding; singleUse: boolean; used: boolean }
+  >();
+  const verifyCalls: Array<{
+    capability: TerminalAuthorizationCapability | undefined;
+    binding: TerminalAuthorizationBinding;
+  }> = [];
+
+  const verifier: TrustedAuthorizationVerifier = {
+    async verify(capability, binding) {
+      verifyCalls.push({ capability, binding });
+      if (!capability || capability.kind !== 'terminal-authorization-capability') {
+        return false; // plain object or missing: not a boundary-created capability
+      }
+      const record = store.get(capability.capabilityId);
+      if (!record) {
+        return false; // forged / unknown capability id
+      }
+      if (capability.boundContentHash !== binding.contentHash) {
+        return false; // bound to a different execution
+      }
+      if (capability.expiresAt !== undefined && now() > capability.expiresAt) {
+        return false; // expired
+      }
+      if (record.singleUse && record.used) {
+        return false; // single-use already consumed
+      }
+      if (record.singleUse) {
+        record.used = true;
+      }
+      return true;
+    },
   };
+
+  function createCapability(
+    binding: TerminalAuthorizationBinding,
+    opts: { expiresAt?: number; singleUse?: boolean; capabilityId?: string } = {}
+  ): TerminalAuthorizationCapability {
+    const capability: TerminalAuthorizationCapability = {
+      kind: 'terminal-authorization-capability',
+      capabilityId: opts.capabilityId ?? `cap-${store.size + 1}`,
+      boundContentHash: binding.contentHash,
+      expiresAt: opts.expiresAt ?? undefined,
+    };
+    store.set(capability.capabilityId, { binding, singleUse: opts.singleUse ?? true, used: false });
+    return capability;
+  }
+
+  return { verifier, createCapability, verifyCalls };
+}
+
+// Shared default fixture used by makeOptions/makeRequest defaults. Tests that
+// require isolated authorization state (expiry, reuse, mismatch) build their
+// own fixture and pass it explicitly.
+
+function authorizationBindingFromCommand(command: TerminalCommand): TerminalAuthorizationBinding {
   return {
-    kind: 'terminal-execution-request',
-    requestId: 'req-1',
-    command: makeCommand(),
-    approvalBinding: binding,
-    trustedApprovalDecision: trustedDecision,
-    ...overrides,
+    executable: command.executable,
+    arguments: command.arguments,
+    workingDirectory: command.workingDirectory,
+    workspaceId: command.workspaceId,
+    environmentConfigId: command.environmentConfig?.id,
+    contentHash: computeContentHash({
+      executable: command.executable,
+      arguments: command.arguments,
+      workingDirectory: command.workingDirectory,
+      workspaceId: command.workspaceId,
+      environmentConfigId: command.environmentConfig?.id,
+    }),
   };
 }
+
+// Fresh authorization fixture reset before every test so single-use
+// capabilities and verification-call history do not leak between tests.
+let defaultAuthorizationFixture = makeAuthorizationFixture();
+beforeEach(() => {
+  defaultAuthorizationFixture = makeAuthorizationFixture();
+});
+
+function makeOptions(
+  overrides: Partial<TerminalExecutionServiceOptions> = {}
+): TerminalExecutionServiceOptions {
+  const options: TerminalExecutionServiceOptions = {
+    executableResolver: makeMockResolver(),
+    executablePolicy: makeMockPolicy(),
+    ...overrides,
+  };
+  if (options.trustedAuthorizationVerifier === undefined) {
+    options.trustedAuthorizationVerifier = defaultAuthorizationFixture.verifier;
+  }
+  return options;
+}
+
+function makeRequest(
+  overrides: Partial<TerminalExecutionRequest> & { fixture?: AuthorizationFixture } = {}
+): TerminalExecutionRequest {
+  const { fixture = defaultAuthorizationFixture, ...rest } = overrides;
+  const command: TerminalCommand = rest.command ?? makeCommand();
+  const resolvedApprovalBinding =
+    'approvalBinding' in rest
+      ? rest.approvalBinding
+      : createApprovalBinding({
+          bindingId: 'bind-1',
+          executable: command.executable,
+          arguments: command.arguments,
+          workingDirectory: command.workingDirectory,
+          workspaceId: command.workspaceId,
+          environmentConfigId: command.environmentConfig?.id,
+          createdAt: 1700000000000,
+        });
+  const resolvedTrustedAuthorization =
+    'trustedAuthorization' in rest
+      ? rest.trustedAuthorization
+      : fixture.createCapability(authorizationBindingFromCommand(command));
+
+  return {
+    kind: 'terminal-execution-request',
+    requestId: rest.requestId ?? 'req-1',
+    command,
+    approvalBinding: resolvedApprovalBinding,
+    trustedAuthorization: resolvedTrustedAuthorization,
+  };
+}
+
+// Fresh authorization fixture before every test so single-use capabilities and
+// verification-call history do not leak between tests.
+beforeEach(() => {
+  defaultAuthorizationFixture = makeAuthorizationFixture();
+});
 
 function makeMockResolver(platform: 'posix' | 'win32' = 'posix') {
   return {
@@ -136,13 +264,13 @@ function makeMockPolicy(permitted: boolean = true) {
 }
 
 function makeMockSpawnFn(resultOverrides: any = {}): any {
-  return (_executable: string, _args: readonly string[], _options: any) => {
+  return vi.fn((_executable: string, _args: readonly string[], _options: any) => {
     const { mock } = createMockChildProcess({
       stdoutData: [Buffer.from('output\n')],
       ...resultOverrides,
     });
     return mock;
-  };
+  });
 }
 
 // Creates a spawn function that returns a ChildProcess mock whose 'close'
@@ -173,16 +301,6 @@ function makeBlockingSpawnFn(resultOverrides: any = {}): { fn: any; release: () 
     }
   };
   return { fn, release };
-}
-
-function makeOptions(
-  overrides: Partial<TerminalExecutionServiceOptions> = {}
-): TerminalExecutionServiceOptions {
-  return {
-    executableResolver: makeMockResolver(),
-    executablePolicy: makeMockPolicy(),
-    ...overrides,
-  };
 }
 
 describe('TerminalExecutionService — submission', () => {
@@ -487,7 +605,7 @@ describe('TerminalExecutionService — execution authorization boundary', () => 
     service.dispose();
   });
 
-  it('accepts submission with a valid approval binding', async () => {
+  it('accepts submission with a valid approval binding and a boundary-verified capability', async () => {
     const spawnFn = makeMockSpawnFn();
     const service = new TerminalExecutionService(makeOptions({ spawnFn }));
 
@@ -495,6 +613,7 @@ describe('TerminalExecutionService — execution authorization boundary', () => 
     const result = await submission.promise;
 
     expect(result.state).toBe('completed');
+    expect(spawnFn).toHaveBeenCalledTimes(1);
 
     service.dispose();
   });
@@ -585,94 +704,325 @@ describe('TerminalExecutionService — late event handling', () => {
 });
 
 describe('TerminalExecutionService — trusted authorization boundary', () => {
-  it('rejects submission without trusted approval decision', async () => {
+  it('rejects submission when no trusted authorization verifier is configured', async () => {
+    const service = new TerminalExecutionService({
+      ...makeOptions(),
+      trustedAuthorizationVerifier: undefined,
+    });
+
+    await expect(service.submit(makeRequest()).promise).rejects.toThrow(
+      /trusted authorization verifier/
+    );
+
+    service.dispose();
+  });
+
+  it('rejects submission without a trusted authorization capability', async () => {
     const service = new TerminalExecutionService(makeOptions());
 
     await expect(
-      service.submit({
-        kind: 'terminal-execution-request',
-        requestId: 'req-no-trusted',
-        command: makeCommand(),
-        approvalBinding: createApprovalBinding({
-          bindingId: 'bind-1',
-          executable: '/usr/bin/ls',
-          arguments: ['-la'],
-          workingDirectory: '/workspace',
-          workspaceId: 'ws_1',
-          createdAt: 1700000000000,
-        }),
-      } as TerminalExecutionRequest).promise
+      service.submit(makeRequest({ trustedAuthorization: undefined })).promise
     ).rejects.toThrow();
 
     service.dispose();
   });
 
-  it('rejects submission with rejected trusted approval decision', async () => {
-    const service = new TerminalExecutionService(makeOptions());
-
-    await expect(
-      service.submit(
-        makeRequest({
-          trustedApprovalDecision: {
-            kind: 'trusted-approval-decision',
-            decision: 'rejected',
-            boundary: 'vscode-host:confirm-dialog',
-            decidedAt: 1700000000000,
-          },
-        })
-      ).promise
-    ).rejects.toThrow();
-
-    service.dispose();
-  });
-
-  it('rejects submission with expired trusted approval decision', async () => {
-    const service = new TerminalExecutionService(makeOptions());
-
-    await expect(
-      service.submit(
-        makeRequest({
-          trustedApprovalDecision: {
-            kind: 'trusted-approval-decision',
-            decision: 'expired',
-            boundary: 'vscode-host:confirm-dialog',
-            decidedAt: 1700000000000,
-            expiresAt: 1700000000000,
-          },
-        })
-      ).promise
-    ).rejects.toThrow();
-
-    service.dispose();
-  });
-
-  it('accepts submission with approved trusted approval decision', async () => {
+  it('rejects a plain approved decision object — the boundary is unforgeable', async () => {
     const spawnFn = makeMockSpawnFn();
     const service = new TerminalExecutionService(makeOptions({ spawnFn }));
 
-    const submission = service.submit(makeRequest());
+    await expect(
+      service.submit(
+        makeRequest({
+          trustedAuthorization: {
+            kind: 'trusted-approval-decision',
+            decision: 'approved',
+          } as unknown as TerminalAuthorizationCapability,
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    // No process may be created for a forged/plain decision object.
+    expect(spawnFn).not.toHaveBeenCalled();
+
+    service.dispose();
+  });
+
+  it('rejects a model/caller-created capability not produced by the trusted boundary', async () => {
+    const fixture = makeAuthorizationFixture();
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier })
+    );
+    const spawnFn = makeMockSpawnFn();
+    // The service was built without spawnFn; use a fresh service with spawn.
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+
+    const capability: TerminalAuthorizationCapability = {
+      kind: 'terminal-authorization-capability',
+      capabilityId: 'cap-forged-by-caller',
+      boundContentHash: computeContentHash({
+        executable: '/usr/bin/ls',
+        arguments: ['-la'],
+        workingDirectory: '/workspace',
+        workspaceId: 'ws_1',
+        environmentConfigId: undefined,
+      }),
+      expiresAt: undefined,
+    };
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({ trustedAuthorization: capability, requestId: 'req-forged' })
+      ).promise
+    ).rejects.toThrow();
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    expect(fixture.verifyCalls.length).toBe(1);
+    expect(fixture.verifyCalls[0]!.capability).toBe(capability);
+
+    service.dispose();
+    serviceWithSpawn.dispose();
+  });
+
+  it('rejects an expired authorization capability', async () => {
+    let now = 1700000000000;
+    const fixture = makeAuthorizationFixture(() => now);
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier })
+    );
+    const spawnFn = makeMockSpawnFn();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+
+    const capability = fixture.createCapability(
+      authorizationBindingFromCommand(makeCommand()),
+      { expiresAt: 1700000000000 }
+    );
+    now = 1700000000001; // move past expiry
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({ trustedAuthorization: capability, requestId: 'req-expired' })
+      ).promise
+    ).rejects.toThrow();
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    service.dispose();
+    serviceWithSpawn.dispose();
+  });
+
+  it('rejects reuse of a single-use authorization capability', async () => {
+    const fixture = makeAuthorizationFixture();
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+
+    const command = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(command));
+
+    // First submission is authorized and executes.
+    const first = service.submit(
+      makeRequest({ command, trustedAuthorization: capability, requestId: 'req-reuse-1' })
+    );
+    expect(await first.promise).toMatchObject({ state: 'completed' });
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    // Reusing the same capability for a new request must fail closed.
+    await expect(
+      service.submit(
+        makeRequest({ command, trustedAuthorization: capability, requestId: 'req-reuse-2' })
+      ).promise
+    ).rejects.toThrow();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    service.dispose();
+  });
+
+  it('invalidates authorization when the executable changes', async () => {
+    const fixture = makeAuthorizationFixture();
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier })
+    );
+    const spawnFn = makeMockSpawnFn();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+
+    const baseCommand = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({ executable: '/usr/bin/cat' }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-exe',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    expect(spawnFn).not.toHaveBeenCalled();
+    service.dispose();
+    serviceWithSpawn.dispose();
+  });
+
+  it('invalidates authorization when the arguments change', async () => {
+    const fixture = makeAuthorizationFixture();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn: makeMockSpawnFn() })
+    );
+
+    const baseCommand = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({ arguments: ['--help'] }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-args',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    expect(serviceWithSpawn.activeExecutions).toBe(0);
+    serviceWithSpawn.dispose();
+  });
+
+  it('invalidates authorization when argument order changes', async () => {
+    const fixture = makeAuthorizationFixture();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn: makeMockSpawnFn() })
+    );
+
+    const baseCommand = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({ arguments: ['--la', '-l'] }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-order',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    serviceWithSpawn.dispose();
+  });
+
+  it('invalidates authorization when the working directory changes', async () => {
+    const fixture = makeAuthorizationFixture();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn: makeMockSpawnFn() })
+    );
+
+    const baseCommand = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({ workingDirectory: '/other' }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-cwd',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    serviceWithSpawn.dispose();
+  });
+
+  it('invalidates authorization when the workspace changes', async () => {
+    const fixture = makeAuthorizationFixture();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn: makeMockSpawnFn() })
+    );
+
+    const baseCommand = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({ workspaceId: 'ws_2' }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-workspace',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    serviceWithSpawn.dispose();
+  });
+
+  it('invalidates authorization when the environment config identity changes', async () => {
+    const fixture = makeAuthorizationFixture();
+    const serviceWithSpawn = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn: makeMockSpawnFn() })
+    );
+
+    const baseCommand = makeCommand({
+      environmentConfig: { kind: 'environment-config-reference', id: 'env-1' },
+    });
+    const capability = fixture.createCapability(authorizationBindingFromCommand(baseCommand));
+
+    await expect(
+      serviceWithSpawn.submit(
+        makeRequest({
+          command: makeCommand({
+            environmentConfig: { kind: 'environment-config-reference', id: 'env-2' },
+          }),
+          trustedAuthorization: capability,
+          requestId: 'req-mismatch-env',
+        })
+      ).promise
+    ).rejects.toThrow();
+
+    serviceWithSpawn.dispose();
+  });
+
+  it('executes only when authorization is verified through the trusted boundary', async () => {
+    const fixture = makeAuthorizationFixture();
+    const spawnFn = makeMockSpawnFn();
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+
+    const command = makeCommand();
+    const capability = fixture.createCapability(authorizationBindingFromCommand(command));
+
+    const submission = service.submit(
+      makeRequest({ command, trustedAuthorization: capability, requestId: 'req-boundary' })
+    );
     const result = await submission.promise;
 
     expect(result.state).toBe('completed');
-    expect(result.trustedApprovalDecision?.decision).toBe('approved');
+    expect(result.trustedAuthorization).toBe(capability);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(fixture.verifyCalls.length).toBe(1);
 
     service.dispose();
   });
 
-  it('passes trusted approval decision through to result', async () => {
+  it('passes the verified authorization capability through to the result', async () => {
+    const fixture = makeAuthorizationFixture();
     const spawnFn = makeMockSpawnFn();
-    const service = new TerminalExecutionService(makeOptions({ spawnFn }));
-    const decision = {
-      kind: 'trusted-approval-decision',
-      decision: 'approved',
-      boundary: 'vscode-host:confirm-dialog',
-      decidedAt: 1700000000000,
-    };
+    const service = new TerminalExecutionService(
+      makeOptions({ trustedAuthorizationVerifier: fixture.verifier, spawnFn })
+    );
+    const capability = fixture.createCapability(authorizationBindingFromCommand(makeCommand()));
 
-    const submission = service.submit(makeRequest({ trustedApprovalDecision: decision }));
+    const submission = service.submit(
+      makeRequest({ trustedAuthorization: capability, requestId: 'req-passthrough' })
+    );
     const result = await submission.promise;
 
-    expect(result.trustedApprovalDecision).toBe(decision);
+    expect(result.state).toBe('completed');
+    expect(result.trustedAuthorization).toBe(capability);
 
     service.dispose();
   });
