@@ -20,6 +20,7 @@ import { createPersistenceAdapter } from '@nexipi/models';
 import { WorkspaceManager } from './workspace/workspace-manager.js';
 import { VSCodeWorkspaceProvider } from './workspace/vscode-workspace-provider.js';
 import { VSCodeFileSystemProvider } from './workspace/vscode-file-system-provider.js';
+import { VSCodeWorkspaceBoundaryValidator } from './workspace/vscode-workspace-boundary-validator.js';
 import { VSCodeWritableFileSystem } from './workspace/vscode-writable-file-system.js';
 import {
   createToolRegistry,
@@ -1602,6 +1603,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   gWorkspaceManager = workspaceManager;
   trackResource('workspaceManager', () => workspaceManager.dispose());
 
+  // --- Workspace boundary validator (Stage E) ---
+  // Maps workspace ID -> adapter set, captured from workspace registration.
+  // The validator uses workspaceAdapters to resolve the workspace root URI
+  // and the injected VSCodeFileSystemProvider to enforce symlink-free paths.
+  const workspaceBoundaryValidator = new VSCodeWorkspaceBoundaryValidator(
+    workspaceAdapters,
+    fileSystem
+  );
+
   workspaceManager.onStatusChange(status => {
     if (status.disposed) {
       updateStatusBar(statusBarItem, 'error', 'Workspace disposed');
@@ -1740,6 +1750,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
     logger,
     trustedAuthorizationVerifier: gTerminalTrustedAuthorizationVerifier,
+    workspaceBoundaryValidator,
   });
   trackResource('terminalExecutionService', () => gTerminalExecutionService!.dispose());
 
@@ -1752,6 +1763,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
     now: defaultNow,
     logger,
+    workspaceBoundaryValidator,
   });
 
   // Create persistence adapter

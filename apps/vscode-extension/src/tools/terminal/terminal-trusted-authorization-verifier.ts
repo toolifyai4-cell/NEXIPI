@@ -143,7 +143,21 @@ export class TerminalTrustedAuthorizationVerifier implements TrustedAuthorizatio
       return false;
     }
 
-    // --- 6. Mark as used (single-use) ---
+    // --- 6. Durable single-use consumption (persists across restarts) ---
+    // Atomically transitions the approval 'approved' -> 'revoked'. Only the
+    // first concurrent call can succeed; any replay finds the state no longer
+    // 'approved' and fails closed. This is durable because revocation is
+    // persisted, so a consumed capability cannot be replayed after restart.
+    const consumeResult = await this.approvals.recordRevocation(capability.capabilityId);
+    if (consumeResult.error !== null || consumeResult.approval === null) {
+      this.logger.debug('Authorization verification failed: durable single-use consumption failed', {
+        capabilityId: capability.capabilityId,
+        error: consumeResult.error?.message ?? 'unknown error',
+      });
+      return false;
+    }
+
+    // --- 7. Mark as used (single-use, in-memory fast path) ---
     this.usedCapabilityIds.add(capability.capabilityId);
 
     this.logger.debug('Authorization verification succeeded', {

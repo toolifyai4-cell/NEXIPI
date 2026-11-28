@@ -463,9 +463,22 @@ export class SqlJsApprovalRepository implements ApprovalRepository {
         };
       }
 
-      this.db.exec(`UPDATE approval_decisions SET lifecycle_state = 'revoked' WHERE id = ?`, [
-        approvalId,
-      ] as SqlValue[]);
+      this.db.exec(
+        `UPDATE approval_decisions SET lifecycle_state = 'revoked' WHERE id = ? AND lifecycle_state = 'approved'`,
+        [approvalId] as SqlValue[]
+      );
+
+      // Atomic compare-and-set: only one concurrent call can transition
+      // 'approved' -> 'revoked'. The loser finds 0 rows affected and fails
+      // closed instead of overwriting the transition.
+      if (this.db.getRowsModified() === 0) {
+        return {
+          approval: null,
+          error: new PersistenceError(
+            `Approval was already revoked or transitioned before this revocation`
+          ),
+        };
+      }
 
       return this.getApproval(approvalId);
     } catch (error) {

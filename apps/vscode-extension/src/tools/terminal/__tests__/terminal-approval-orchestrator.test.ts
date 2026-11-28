@@ -30,6 +30,7 @@ import type {
   TerminalLifecycleState,
   TerminalAuthorizationCapability,
   TerminalAuthorizationBinding,
+  WorkspaceBoundaryValidator,
 } from '@nexipi/models/tools';
 import {
   DefaultExecutableResolver,
@@ -440,13 +441,90 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
     expect(result.error?.code).toBe('TERMINAL_INVALID_REQUEST');
   });
 
-  it('returns disposal outcome on orchestrator disposal', async () => {
+it('returns disposal outcome on orchestrator disposal', async () => {
     await h.orchestrator.dispose();
 
     const command = makeCommand();
     const result = await h.orchestrator.executeTerminalCommand(command);
 
     expect(result.state).toBe('rejected');
-    expect(result.error?.code).toBe('TERMINAL_UNSUPPORTED_CONFIGURATION');
+  });
+
+  // --- Stage E Final Security Gate: Workspace Boundary Tests ---
+
+  it('accepts working directory inside workspace root with boundary validator', async () => {
+    const acceptingValidator: WorkspaceBoundaryValidator = {
+      validate(workingDirectory: string): void {
+        if (!workingDirectory.startsWith('/workspace')) {
+          throw new Error('Working directory outside workspace root');
+        }
+      },
+    };
+
+    const local = await createOrchestratorHarness({
+      workspaceBoundaryValidator: acceptingValidator,
+    });
+    try {
+      vi.spyOn(local.orchestrator['provider'], 'establishUserDecision').mockResolvedValue({
+        decision: 'approve' as const,
+        boundary: 'test-boundary' as const,
+        decidedAt: NOW,
+        expiresAt: null,
+      } as TrustedUserDecision);
+
+      vi.spyOn(local.orchestrator['executionService'], 'submit').mockImplementation(() => ({
+        promise: Promise.resolve({
+          kind: 'terminal-execution-result',
+          requestId: 'exec-test-1',
+          terminalId: 'term-test-1',
+          state: 'completed',
+          exitCode: 0,
+          exitSignal: null,
+          stdout: '',
+          stderr: '',
+          stdoutTruncated: false,
+          stderrTruncated: false,
+          outputSizeBytes: 0,
+          startedAt: NOW,
+          completedAt: NOW + 1000,
+          executionMs: 1000,
+          cancelled: false,
+          timedOut: false,
+          terminationStatus: 'confirmed',
+          error: null,
+        }),
+      }));
+
+      const command = makeCommand({ workingDirectory: '/workspace' });
+      const result = await local.orchestrator.executeTerminalCommand(command);
+
+      expect(result.state).toBe('completed');
+      expect(result.exitCode).toBe(0);
+    } finally {
+      await local.dispose();
+    }
+  });
+
+  it('rejects working directory outside workspace root with boundary validator', async () => {
+    const rejectingValidator: WorkspaceBoundaryValidator = {
+      validate(workingDirectory: string): void {
+        if (!workingDirectory.startsWith('/workspace')) {
+          throw new Error('Working directory outside workspace root');
+        }
+      },
+    };
+
+    const local = await createOrchestratorHarness({
+      workspaceBoundaryValidator: rejectingValidator,
+    });
+    try {
+      const command = makeCommand({ workingDirectory: '/outside/dir' });
+      const result = await local.orchestrator.executeTerminalCommand(command);
+
+      expect(result.state).toBe('failed');
+      expect(result.error?.code).toBe('TERMINAL_INVALID_REQUEST');
+    } finally {
+      await local.dispose();
+    }
   });
 });

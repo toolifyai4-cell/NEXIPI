@@ -440,4 +440,135 @@ describe('TerminalTrustedAuthorizationVerifier', () => {
 
     expect(result).toBe(true);
   });
+
+  // --- Stage E Final Security Gate: Durable Single-Use Tests ---
+
+  it('consumes approval durably: second verifier on same DB cannot replay', async () => {
+    const binding = makeBinding();
+    const capability = await createApprovedCapability(h, binding);
+
+    // First verifier consumes the capability
+    const result1 = await h.verifier.verify(capability, binding);
+    expect(result1).toBe(true);
+
+    // Dispose and recreate verifier with same DB (simulating restart)
+    await h.dispose;
+    vi.restoreAllMocks();
+    h = await createAuthHarness();
+
+    // Second verifier cannot replay - approval was atomically revoked
+    const result2 = await h.verifier.verify(capability, binding);
+    expect(result2).toBe(false);
+  });
+
+  it('concurrent double-use fails closed (atomic CAS)', async () => {
+    const binding = makeBinding();
+    const capability = await createApprovedCapability(h, binding);
+
+    // Two concurrent verification attempts
+    const [result1, result2] = await Promise.all([
+      h.verifier.verify(capability, binding),
+      h.verifier.verify(capability, binding),
+    ]);
+
+    // Exactly one should succeed (atomic compare-and-set)
+    const successCount = [result1, result2].filter(r => r).length;
+    expect(successCount).toBe(1);
+  });
+
+  it('rejects capability when approval is revoked', async () => {
+    const binding = makeBinding();
+    const approvalId = 'c5a5b6d2-7e5c-4a12-9e8b-3f2a1d0f9b8e';
+
+    await createProposalInRepo(h.proposalRepo, {
+      id: PROPOSAL_ID,
+      proposalVersion: 1,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      proposedContentHash: binding.contentHash,
+      status: 'approved',
+      createdAt: NOW,
+      expiresAt: NOW + 1_000_000,
+    });
+
+    // Create approved approval
+    const createResult = await h.service.approvals.createApproval({
+      id: approvalId,
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      approvedContentHash: binding.contentHash,
+      decidedAt: NOW,
+      provenance: { kind: 'trusted-boundary', boundary: 'test-boundary' },
+      lifecycleState: 'approved' as const,
+      expiresAt: null,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      createdAt: NOW,
+    });
+    if (createResult.error !== null || createResult.approval === null) {
+      throw new Error(`Failed to create approval: ${createResult.error?.message ?? 'unknown'}`);
+    }
+
+    // Atomically revoke it
+    const revokeResult = await h.approvalRepo.recordRevocation(approvalId);
+    if (revokeResult.error !== null) {
+      throw new Error(`Failed to revoke: ${revokeResult.error.message}`);
+    }
+
+    const capability: TerminalAuthorizationCapability = {
+      kind: 'terminal-authorization-capability',
+      capabilityId: approvalId,
+      boundContentHash: binding.contentHash,
+      expiresAt: undefined,
+    };
+
+    const verifyResult = await h.verifier.verify(capability, binding);
+    expect(verifyResult).toBe(false);
+  });
+
+  it('rejects capability when approval is expired', async () => {
+    const binding = makeBinding();
+    const approvalId = 'c5a5b6d2-7e5c-4a12-9e8b-3f2a1d0f9b8e';
+
+    await createProposalInRepo(h.proposalRepo, {
+      id: PROPOSAL_ID,
+      proposalVersion: 1,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      proposedContentHash: binding.contentHash,
+      status: 'approved',
+      createdAt: NOW,
+      expiresAt: NOW + 1_000_000,
+    });
+
+    // Create approval that has already expired (expiresAt < now)
+    const createResult = await h.service.approvals.createApproval({
+      id: approvalId,
+      proposalId: PROPOSAL_ID,
+      proposalVersion: 1,
+      decision: 'approve',
+      approvedContentHash: binding.contentHash,
+      decidedAt: NOW,
+      provenance: { kind: 'trusted-boundary', boundary: 'test-boundary' },
+      lifecycleState: 'approved' as const,
+      expiresAt: NOW - 1000,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      createdAt: NOW,
+    });
+    if (createResult.error !== null || createResult.approval === null) {
+      throw new Error(`Failed to create approval: ${createResult.error?.message ?? 'unknown'}`);
+    }
+
+    const capability: TerminalAuthorizationCapability = {
+      kind: 'terminal-authorization-capability',
+      capabilityId: approvalId,
+      boundContentHash: binding.contentHash,
+      expiresAt: undefined,
+    };
+
+    const verifyResult = await h.verifier.verify(capability, binding);
+    expect(verifyResult).toBe(false);
+  });
 });
