@@ -4,6 +4,7 @@ import {
   SqlJsProposalRepository,
   SqlJsApprovalRepository,
   type SQLDatabase,
+  type ProposalStatus,
 } from '@nexipi/persistence';
 import {
   createTrustedApprovalService,
@@ -12,8 +13,6 @@ import {
   type TrustedDecisionProvider,
   type TrustedUserDecision,
   type TrustedUserDecisionRequest,
-  type ProposalRepositoryPort,
-  type ApprovalRepositoryPort,
 } from '@nexipi/workspace';
 import {
   ProposalRepositoryAdapter,
@@ -23,21 +22,19 @@ import {
   TerminalTrustedAuthorizationVerifier,
   type TerminalTrustedAuthorizationVerifierOptions,
 } from '../terminal-trusted-authorization-verifier.js';
-import type {
-  TerminalAuthorizationBinding,
-  TerminalAuthorizationCapability,
-} from '@nexipi/models/tools';
+import type { TerminalAuthorizationCapability } from '@nexipi/models/tools';
 import { computeContentHash } from '@nexipi/models/tools';
 
 const NOW = 1_700_000_000_000;
 const WORKSPACE_ID = 'ws_a';
 
+const PROPOSAL_ID = '550e8400-e29b-41d4-a716-446655440000';
+const PROPOSED_CONTENT = 'const x = 1;';
+const PROPOSED_HASH = sha256(PROPOSED_CONTENT);
+
 const EXECUTABLE = '/usr/bin/ls';
 const ARGUMENTS = ['-la'];
 const WORKING_DIRECTORY = '/workspace';
-
-const PROPOSED_CONTENT = 'const x = 1;';
-const PROPOSED_HASH = sha256(PROPOSED_CONTENT);
 
 interface AuthHarness {
   db: SQLDatabase;
@@ -137,11 +134,69 @@ function makeBinding(executable = EXECUTABLE, args = ARGUMENTS, wd = WORKING_DIR
   return { executable, arguments: args, workingDirectory: wd, workspaceId: wsId, environmentConfigId: envId, contentHash };
 }
 
+async function createProposalInRepo(
+  repo: SqlJsProposalRepository,
+  overrides: Partial<{
+    id: string;
+    proposalVersion: number;
+    workspaceId: string;
+    workspaceFolderUri: string;
+    fileUri: string;
+    relativePath: string;
+    originalContentHash: string;
+    originalSize: number;
+    originalMtime: number;
+    operations: readonly unknown[];
+    proposedContent: string;
+    proposedContentHash: string;
+    proposedSize: number;
+    status: ProposalStatus;
+    createdAt: number;
+    expiresAt: number;
+  }> = {}
+): Promise<void> {
+  const input = {
+    id: overrides.id ?? PROPOSAL_ID,
+    proposalVersion: overrides.proposalVersion ?? 1,
+    workspaceId: overrides.workspaceId ?? WORKSPACE_ID,
+    workspaceFolderUri: 'file:///rootA',
+    fileUri: overrides.fileUri ?? 'terminal://command/cmd_test_1',
+    relativePath: overrides.relativePath ?? 'cmd_test_1.ts',
+    originalContentHash: overrides.originalContentHash ?? PROPOSED_HASH,
+    originalSize: overrides.originalSize ?? Buffer.byteLength('const x = 0;', 'utf8'),
+    originalMtime: overrides.originalMtime ?? NOW,
+    operations: overrides.operations ?? [{ kind: 'replace-lines' as const, startLine: 1, endLine: 1, newContent: PROPOSED_CONTENT }],
+    proposedContent: overrides.proposedContent ?? PROPOSED_CONTENT,
+    proposedContentHash: overrides.proposedContentHash ?? PROPOSED_HASH,
+    proposedSize: overrides.proposedSize ?? Buffer.byteLength(PROPOSED_CONTENT, 'utf8'),
+    status: overrides.status ?? 'approved',
+    createdAt: overrides.createdAt ?? NOW,
+    expiresAt: overrides.expiresAt ?? NOW + 1_000_000,
+  };
+  const result = await repo.createProposal(input);
+  if (result.error !== null) {
+    throw new Error(`createProposal failed: ${result.error.message}`);
+  }
+}
+
 async function createApprovedCapability(harness: AuthHarness, binding: ReturnType<typeof makeBinding>): Promise<TerminalAuthorizationCapability> {
-  const approvalId = 'cap_test_1';
+  const approvalId = 'c5a5b6d2-7e5c-4a12-9e8b-3f2a1d0f9b8e';
+
+  // Ensure proposal exists before creating approval (approval repo validates proposal existence)
+  await createProposalInRepo(harness.proposalRepo, {
+    id: PROPOSAL_ID,
+    proposalVersion: 1,
+    workspaceId: binding.workspaceId,
+    fileUri: `terminal://command/cmd_test_1`,
+    proposedContentHash: binding.contentHash,
+    status: 'approved',
+    createdAt: NOW,
+    expiresAt: NOW + 1_000_000,
+  });
+
   const approval = {
     id: approvalId,
-    proposalId: 'cmd_test_1',
+    proposalId: PROPOSAL_ID,
     proposalVersion: 1,
     decision: 'approve' as const,
     approvedContentHash: binding.contentHash,
@@ -284,12 +339,24 @@ describe('TerminalTrustedAuthorizationVerifier', () => {
 
   it('rejects capability when approval is in wrong state', async () => {
     const binding = makeBinding();
-    const approvalId = 'cap_wrong_state';
+    const approvalId = 'c5a5b6d2-7e5c-4a12-9e8b-3f2a1d0f9b8e';
+
+    // Create proposal first (approval repo validates proposal existence)
+    await createProposalInRepo(h.proposalRepo, {
+      id: PROPOSAL_ID,
+      proposalVersion: 1,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      proposedContentHash: binding.contentHash,
+      status: 'approved',
+      createdAt: NOW,
+      expiresAt: NOW + 1_000_000,
+    });
 
     // Create approval but in rejected state
-    const createResult = await harness.service.approvals.createApproval({
+    const createResult = await h.service.approvals.createApproval({
       id: approvalId,
-      proposalId: 'cmd_test_1',
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'reject',
       approvedContentHash: binding.contentHash,
@@ -314,17 +381,30 @@ describe('TerminalTrustedAuthorizationVerifier', () => {
 
     const verifyResult = await h.verifier.verify(capability, binding);
 
-    expect(result).toBe(false);
+    expect(verifyResult).toBe(false);
   });
 
   it('rejects capability when approval has wrong content hash', async () => {
     const binding = makeBinding();
-    const approvalId = 'cap_wrong_hash';
+    const approvalId = 'c5a5b6d2-7e5c-4a12-9e8b-3f2a1d0f9b8e';
 
+    // Create proposal with wrong content hash, approval with same wrong hash
+    // This tests that verifier rejects when approval hash differs from binding hash
     const wrongHash = sha256('different content');
-    const createResult = await harness.service.approvals.createApproval({
+    await createProposalInRepo(h.proposalRepo, {
+      id: PROPOSAL_ID,
+      proposalVersion: 1,
+      workspaceId: binding.workspaceId,
+      fileUri: `terminal://command/cmd_test_1`,
+      proposedContentHash: wrongHash,
+      status: 'approved',
+      createdAt: NOW,
+      expiresAt: NOW + 1_000_000,
+    });
+
+    const createResult = await h.service.approvals.createApproval({
       id: approvalId,
-      proposalId: 'cmd_test_1',
+      proposalId: PROPOSAL_ID,
       proposalVersion: 1,
       decision: 'approve',
       approvedContentHash: wrongHash,
@@ -349,7 +429,7 @@ describe('TerminalTrustedAuthorizationVerifier', () => {
 
     const verifyResult = await h.verifier.verify(capability, binding);
 
-    expect(result).toBe(false);
+    expect(verifyResult).toBe(false);
   });
 
   it('allows verification with capability that has no expiry', async () => {

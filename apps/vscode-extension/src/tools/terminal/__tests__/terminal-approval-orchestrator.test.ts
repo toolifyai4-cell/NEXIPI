@@ -219,7 +219,7 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
   it('rejects invalid executable resolution', async () => {
     const orchestratorWithBadResolver = new TerminalApprovalOrchestrator({
       trustedApprovalService: h.service,
-      trustedDecisionProvider: gate.provider,
+      trustedDecisionProvider: h.gate.provider,
       approvals: h.approvalRepo,
       terminalExecutionService: new TerminalExecutionService({
         executableResolver: {
@@ -244,7 +244,7 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
         }),
       } as any,
       limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
-      now,
+      now: defaultNow,
       createApprovalId: () => 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
       logger: makeLogger(),
     });
@@ -290,7 +290,7 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
   it('processes expiration outcome', async () => {
     const orchestratorWithEarlyExpiry = new TerminalApprovalOrchestrator({
       trustedApprovalService: h.service,
-      trustedDecisionProvider: gate.provider,
+      trustedDecisionProvider: h.gate.provider,
       approvals: h.approvalRepo,
       terminalExecutionService: new TerminalExecutionService({
         executableResolver: new DefaultExecutableResolver('posix'),
@@ -350,7 +350,7 @@ describe('TerminalApprovalOrchestrator — execution lifecycle', () => {
       }),
       executableResolver: new DefaultExecutableResolver('posix'),
       limits: DEFAULT_TERMINAL_EXECUTION_SERVICE_LIMITS,
-      now,
+      now: defaultNow,
       createApprovalId: () => 'bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb',
       logger: makeLogger(),
     });
